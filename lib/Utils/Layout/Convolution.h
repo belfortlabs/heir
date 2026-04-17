@@ -20,6 +20,12 @@ presburger::IntegerRelation get2dConvFilterRelation(RankedTensorType filterType,
                                                     ArrayRef<int64_t> strides,
                                                     int64_t padding);
 
+// FIXME add comment
+presburger::IntegerRelation get1dConvFilterRelation(RankedTensorType filterType,
+                                                    RankedTensorType dataType,
+                                                    ArrayRef<int64_t> strides,
+                                                    int64_t padding);
+
 RankedTensorType get2dConvFilterExpandedType(
     RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
     ArrayRef<int64_t> strides = {1, 1});
@@ -29,6 +35,10 @@ RankedTensorType get2dConvFilterExpandedType(
 // equivalent a matrix product with the flattened input vector. Each row
 // corresponds to one filter multiplication.
 FailureOr<presburger::IntegerRelation> get2dConvFilterDiagonalizedRelation(
+    RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
+    int64_t ciphertextSize);
+
+FailureOr<presburger::IntegerRelation> get1dConvFilterDiagonalizedRelation(
     RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
     int64_t ciphertextSize);
 
@@ -78,6 +88,10 @@ presburger::IntegerRelation getRowInterchangeRelation(int64_t c, int64_t h,
                                                       int64_t w, int64_t g);
 
 bool isRelation2dConvFilterDiagonalized(
+    RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
+    int64_t ciphertextSize, const presburger::IntegerRelation& relation);
+
+bool isRelation1dConvFilterDiagonalized(
     RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
     int64_t ciphertextSize, const presburger::IntegerRelation& relation);
 

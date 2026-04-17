@@ -131,6 +131,118 @@ presburger::IntegerRelation get2dConvFilterRelation(RankedTensorType filterType,
   return result;
 }
 
+
+presburger::IntegerRelation get1dConvFilterRelation(RankedTensorType filterType,
+                                                    RankedTensorType dataType,
+                                                    // FIXME only 1 needed, no array
+                                                    int64_t stride,
+                                                    int64_t padding) {
+  auto domainSize = filterType.getRank();
+  assert(domainSize == 1 && "expected 1-D filter matrix");
+
+  IntegerRelation result(PresburgerSpace::getRelationSpace(
+      domainSize, /*numRange=*/2, /*numSymbol=*/0, /*numLocals=*/1));
+
+  // Filter row and column indices
+  auto filterRow = result.getVarKindOffset(VarKind::Domain);
+  // auto filterCol = result.getVarKindOffset(VarKind::Domain) + 1;
+
+  // Matrix row and column indices
+  auto matRow = result.getVarKindOffset(VarKind::Range);
+  auto matCol = result.getVarKindOffset(VarKind::Range) + 1;
+
+  // Constant coefficient
+  auto constCoeff = result.getNumCols() - 1;
+
+  // Filter, datasize, and strides.
+  auto filterRowSize = filterType.getDimSize(0);
+  // auto filterColSize = filterType.getDimSize(1);
+  auto dataRowSize = dataType.getDimSize(0);
+  // auto dataColSize = dataType.getDimSize(1);
+  // auto strideCol = strides[1];
+
+  // These are the indices that represent the valid positions that the filter
+  // can move over the data. (0, 0) is the first position of (slidingRow,
+  // slidingCol).
+  auto slidingRow = result.getVarKindOffset(VarKind::Local);
+  // auto slidingCol = result.getVarKindOffset(VarKind::Local) + 1;
+
+  // The maximum values for the sliding window indices.
+  auto slidingRowSize =
+      (dataRowSize + 2 * padding - filterRowSize) / stride + 1;
+  // auto slidingColSize =
+  //     (dataColSize + 2 * padding - filterColSize) / strideCol + 1;
+
+  // Add bounds for the filter matrix dimensions.
+  addBounds(result, filterRow, 0, filterRowSize - 1);
+  // addBounds(result, filterCol, 0, filterColSize - 1);
+
+  // Add bounds for the sliding window indices.
+  addBounds(result, slidingRow, 0, slidingRowSize - 1);
+  // addBounds(result, slidingCol, 0, slidingColSize - 1);
+
+  // Define (dataRow, dataCol) to be the position on the data tensor for a given
+  // filter position (slidingRow, slidingCol) and a given filter index
+  // (filterRow, filterCol). E.g. the top left corner of the filter is at
+  // (filterRow, filterCol) = (0, 0) and the first position of the filter is at
+  // (slidingRow, slidingCol) = (0, 0). This corresponds to (-padding, -padding)
+  // on the data indices (dataRow, dataCol).
+  //   dataRow = (slidingRow * strideRow - padding) + filterRow
+  //   dataCol = (slidingCol * strideCol - padding) + filterCol
+
+  // Add constraints for when the filter sliding window index is at a valid
+  // data position. Require:
+  //    0 <= dataRow < dataRowSize and 0 <= dataCol < dataColSize.
+  //  Substituting the expressions gives:
+  //    0 <= slidingRow * strideRow - padding + filterRow < dataRowSize
+  addConstraint(
+      result, {{slidingRow, stride}, {filterRow, 1}, {constCoeff, -padding}},
+      /*equality=*/false);
+  addConstraint(result,
+                {{constCoeff, dataRowSize + padding - 1},
+                 {slidingRow, -stride},
+                 {filterRow, -1}},
+                /*equality=*/false);
+
+  // 0 <= slidingCol * strideCol - padding + filterCol < dataColSize
+  // addConstraint(
+  //     result, {{slidingCol, strideCol}, {filterCol, 1}, {constCoeff, -padding}},
+  //     /*equality=*/false);
+  // addConstraint(result,
+  //               {{constCoeff, dataColSize + padding - 1},
+  //                {slidingCol, -strideCol},
+  //                {filterCol, -1}},
+  //               /*equality=*/false);
+
+  // Add equalities for the resulting matrix row and column. Each matrix row
+  // corresponds to one sliding window of the filter over the data. So flatten
+  // the filter sliding window indices (slidingRow, slidingCol):
+  // matRow = slidingRow * slidingColSize + slidingCol
+  addConstraint(result,
+                {{matRow, -1}, {slidingRow, 1}},
+                /*equality=*/true);
+
+  // The matrix column is the flattened data indices:
+  // matCol = dataRow * dataColSize + dataCol
+  // matCol = (slidingRow * strideRow - padding + filterRow) * dataColSize +
+  //          (slidingCol * strideCol - padding + filterCol)
+  // matCol = slidingRow * strideRow * dataColSize - padding * dataColSize +
+  //          filterRow * dataColSize + slidingCol * strideCol - padding +
+  //          filterCol
+  addConstraint(result,
+                {{matCol, -1},
+                 {slidingRow, stride},
+                 // {slidingCol, strideCol},
+                 {filterRow, 1},
+             
+                 {constCoeff, -padding}
+             },
+                 // {filterCol, 1},
+                 // {constCoeff, -padding * dataColSize - padding}},
+                /*equality=*/true);
+  return result;
+}
+
 RankedTensorType get2dConvFilterExpandedType(RankedTensorType filterType,
                                              RankedTensorType dataType,
                                              int64_t padding,
@@ -244,6 +356,16 @@ presburger::IntegerRelation get2dConvChwFchwFilterRelation(
   return singleFilterRelation;
 }
 
+FailureOr<presburger::IntegerRelation> get1dConvFilterDiagonalizedRelation(
+    RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
+    int64_t ciphertextSize) {
+  int64_t stride = 1;
+  auto expandedFilterRelation =
+      get1dConvFilterRelation(filterType, dataType, stride, padding);
+  return diagonalize2dMatrix(expandedFilterRelation, filterType,
+                             ciphertextSize);
+}
+
 FailureOr<presburger::IntegerRelation> get2dConvFilterDiagonalizedRelation(
     RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
     int64_t ciphertextSize) {
@@ -290,6 +412,17 @@ bool isRelation2dConvFilterDiagonalized(
     RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
     int64_t ciphertextSize, const presburger::IntegerRelation& relation) {
   auto diagonalizedRelation = get2dConvFilterDiagonalizedRelation(
+      filterType, dataType, padding, ciphertextSize);
+  if (failed(diagonalizedRelation)) {
+    return false;
+  }
+  return isRelationEqual(relation, diagonalizedRelation.value());
+}
+
+bool isRelation1dConvFilterDiagonalized(
+    RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
+    int64_t ciphertextSize, const presburger::IntegerRelation& relation) {
+  auto diagonalizedRelation = get1dConvFilterDiagonalizedRelation(
       filterType, dataType, padding, ciphertextSize);
   if (failed(diagonalizedRelation)) {
     return false;
