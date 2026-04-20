@@ -26,6 +26,10 @@ presburger::IntegerRelation get1dConvFilterRelation(RankedTensorType filterType,
                                                     ArrayRef<int64_t> strides,
                                                     int64_t padding);
 
+RankedTensorType get1dConvFilterExpandedType(
+    RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
+    int64_t stride = 1);
+
 RankedTensorType get2dConvFilterExpandedType(
     RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
     ArrayRef<int64_t> strides = {1, 1});

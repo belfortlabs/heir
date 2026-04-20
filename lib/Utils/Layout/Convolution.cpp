@@ -243,6 +243,23 @@ presburger::IntegerRelation get1dConvFilterRelation(RankedTensorType filterType,
   return result;
 }
 
+RankedTensorType get1dConvFilterExpandedType(RankedTensorType filterType,
+                                             RankedTensorType dataType,
+                                             int64_t padding,
+                                             int64_t stride) {
+  auto filterRowSize = filterType.getDimSize(0);
+  auto dataRowSize = dataType.getDimSize(0);
+
+  // Number of rows will be the filter sliding rows * filter sliding columns.
+  // FIXME this looks like it is off by 1
+  int64_t rows = (dataRowSize + 2 * padding - filterRowSize) / stride;
+
+  // Number of columns will be the number of data elements.
+  int64_t cols = dataType.getNumElements();
+
+  return RankedTensorType::get({rows, cols}, filterType.getElementType());
+}
+
 RankedTensorType get2dConvFilterExpandedType(RankedTensorType filterType,
                                              RankedTensorType dataType,
                                              int64_t padding,
