@@ -200,9 +200,7 @@ class LevelAnalysis
     : public dataflow::SparseForwardDataFlowAnalysis<LevelLattice>,
       public SecretnessAnalysisDependent<LevelAnalysis> {
  public:
-  LevelAnalysis(DataFlowSolver& solver, int levelBudget = 40)
-      : dataflow::SparseForwardDataFlowAnalysis<LevelLattice>(solver),
-        levelBudget(levelBudget) {}
+  using SparseForwardDataFlowAnalysis::SparseForwardDataFlowAnalysis;
   friend class SecretnessAnalysisDependent<LevelAnalysis>;
 
   void setToEntryState(LevelLattice* lattice) override {
@@ -220,9 +218,6 @@ class LevelAnalysis
   void propagateIfChangedWrapper(AnalysisState* state, ChangeResult changed) {
     propagateIfChanged(state, changed);
   }
-
- private:
-  int levelBudget;
 };
 
 LevelState deriveResultLevel(Operation* op,

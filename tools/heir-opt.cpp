@@ -69,7 +69,6 @@
 #include "lib/Target/SCIFRBool/SCIFRBoolEmitter.h"
 #include "lib/Transforms/ActivationCanonicalizations/ActivationCanonicalizations.h"
 #include "lib/Transforms/AddClientInterface/AddClientInterface.h"
-#include "lib/Transforms/AnnotateLevel/AnnotateLevel.h"
 #include "lib/Transforms/AnnotateModule/AnnotateModule.h"
 #include "lib/Transforms/AnnotateMulDepth/AnnotateMulDepth.h"
 #include "lib/Transforms/AnnotateSecretness/AnnotateSecretness.h"
@@ -324,7 +323,6 @@ int main(int argc, char** argv) {
   registerDropUnitDims();
   registerAnnotateModulePasses();
   registerAnnotateSecretnessPasses();
-  registerAnnotateLevelPasses();
   registerAnnotateMulDepthPasses();
   registerApplyFoldersPasses();
   registerBooleanVectorizerPasses();
