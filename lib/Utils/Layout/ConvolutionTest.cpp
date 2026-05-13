@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -685,6 +686,46 @@ TEST(ConvolutionTest, TestConv1dMultiChannelMultiRow) {
   EXPECT_TRUE(containsPoint({0, 1, 0}, {0, 28}));
 }
 
+TEST(ConvolutionTest, TestConv1dMultiChannelMultiRow) {
+  // Pools a 1x4x28 into a 1x4x14
+  // The filter is 4x4x2
+  MLIRContext context;
+
+  RankedTensorType filterType =
+      RankedTensorType::get({4, 4, 2}, IndexType::get(&context));
+  RankedTensorType dataType =
+      RankedTensorType::get({1, 4, 28}, IndexType::get(&context));
+  int64_t stride = 2;
+  int64_t padding = 0;
+
+  auto rel =
+      get1dConvCwFcwFilterRelation(filterType, dataType, stride, padding);
+
+  // Number of ciphertexts is number of elements of a single result (14) *
+  // num channels = 14 * 4 = 56.
+  auto ctOffset = rel.getVarKindOffset(VarKind::Range);
+  auto ctBound = rel.getConstantBound64(BoundType::UB, ctOffset);
+  ASSERT_TRUE(ctBound.has_value());
+  EXPECT_EQ(ctBound.value(), 55);
+
+  PointPairCollector collector(
+      3, 2);  // 3 domain dims (f, c,  fw), 2 range dims (ct, slot)
+  enumeratePoints(rel, collector);
+
+  // Check a few specific expected points: (f, c, fw) -> (ct, slot)
+  auto containsPoint = [&](std::vector<int64_t> domain,
+                           std::vector<int64_t> range) {
+    for (const auto& p : collector.points) {
+      if (p.first == domain && p.second == range) return true;
+    }
+    return false;
+  };
+
+  EXPECT_TRUE(containsPoint({0, 0, 0}, {0, 0}));
+  EXPECT_TRUE(containsPoint({0, 0, 1}, {0, 1}));
+  EXPECT_TRUE(containsPoint({0, 1, 0}, {0, 28}));
+}
+
 TEST(ConvolutionTest, TestMultiChannelMultiRowDiagonalized) {
   // Pools a 1x4x28x28 into a 1x4x14x14
   // The filter is 4x4x2x2
@@ -727,6 +768,37 @@ TEST(ConvolutionTest, TestMultiChannelMultiRowDiagonalized) {
   EXPECT_TRUE(containsPoint({0, 0, 0, 0}, {0, 0}));
   EXPECT_TRUE(containsPoint({0, 0, 0, 1}, {1, 0}));
   EXPECT_TRUE(containsPoint({0, 1, 0, 0}, {784, 0}));
+}
+
+TEST(ConvolutionTest, TestConv1dCwFcwDiagonalizedRowInterchange) {
+  // Without the interchange, we first iterate over the kernel positions and hit
+  // all diagonals With the interchange, we first iterate over the filters, and
+  // hit only 3 diagonals
+  MLIRContext context;
+  RankedTensorType filterType =
+      RankedTensorType::get({2, 1, 2}, IndexType::get(&context));
+  RankedTensorType dataType =
+      RankedTensorType::get({1, 1, 8}, IndexType::get(&context));
+  int64_t stride = 2;
+  int64_t padding = 0;
+  int64_t ciphertextSize = 8;
+
+  auto distinctDiagonals = [&](bool interchangeRows) {
+    auto maybeRel = get1dConvCwFcwFilterDiagonalizedRelation(
+        filterType, dataType, stride, padding, ciphertextSize, interchangeRows);
+    EXPECT_TRUE(succeeded(maybeRel));
+    PointPairCollector collector(/*domainDims=*/3, /*rangeDims=*/2);
+    enumeratePoints(maybeRel.value(), collector);
+    std::set<int64_t> cts;
+    for (const auto& p : collector.points) cts.insert(p.second[0]);
+    return cts;
+  };
+
+  auto withoutInterchange = distinctDiagonals(/*interchangeRows=*/false);
+  EXPECT_EQ(withoutInterchange.size(), 8);
+
+  auto withInterchange = distinctDiagonals(/*interchangeRows=*/true);
+  EXPECT_EQ(withInterchange.size(), 3);
 }
 
 }  // namespace
