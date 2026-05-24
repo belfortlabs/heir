@@ -72,6 +72,15 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "DecomposeRescale",
+    srcs = ["DecomposeRescale.cpp"],
+    hdrs = ["DecomposeRescale.h"],
+    deps = [
+        # TODO(bence): DecomposeRescale dependencies
+    ]
+)
+
 add_heir_transforms(
     header_filename = "Passes.h.inc",
     pass_name = "CKKS",

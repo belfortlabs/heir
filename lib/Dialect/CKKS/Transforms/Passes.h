@@ -6,6 +6,7 @@
 #include "lib/Dialect/CKKS/Transforms/CKKSToLWE.h"
 #include "lib/Dialect/CKKS/Transforms/DecomposeKeySwitch.h"
 #include "lib/Dialect/CKKS/Transforms/DecomposeRelinearize.h"
+#include "lib/Dialect/CKKS/Transforms/DecomposeRescale.h"
 #include "mlir/include/mlir/Pass/Pass.h"          // from @llvm-project
 #include "mlir/include/mlir/Pass/PassRegistry.h"  // from @llvm-project
 // IWYU pragma: end_keep
