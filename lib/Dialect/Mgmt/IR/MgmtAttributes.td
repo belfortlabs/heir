@@ -37,6 +37,7 @@ def Mgmt_MgmtAttr : Mgmt_Attr<"Mgmt", "mgmt"> {
   let parameters = (ins
     "int": $level,
     DefaultValuedParameter<"int", "2">:$dimension,
+    // TODO(bence): high-precision scale for CKKS
     DefaultValuedParameter<"int64_t", "0">:$scale
   );
   let builders = [

@@ -41,6 +41,7 @@ class CKKSAdjustScaleMaterializer : public AdjustScaleMaterializer {
 
   int64_t deltaScale(int64_t scale, int64_t inputScale) const override {
     // TODO(#1640): support high-precision scale management
+    // TODO(bence)
     return scale - inputScale;
   }
 };

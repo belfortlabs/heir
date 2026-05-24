@@ -54,6 +54,7 @@ class LWE_EncodingAttrWithScalingParam<string attrName, string attrMnemonic, lis
   let mnemonic = attrMnemonic;
   let assemblyFormat = "`<` struct(params) `>`";
 
+  // TODO(bence): high-precision scale for CKKS
   let parameters = (ins
     "int64_t":$scaling_factor
   );

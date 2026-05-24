@@ -19,6 +19,8 @@ def DecomposeKeySwitch : Pass<"ckks-decompose-keyswitch"> {
   let dependentDialects = ["mlir::heir::ckks::CKKSDialect", "tensor::TensorDialect"];
 }
 
+// TODO(bence): add DecomposeRescale pass
+
 def CKKSToLWE : Pass<"ckks-to-lwe"> {
   let summary = "Lower `ckks` to `lwe` dialect.";
 

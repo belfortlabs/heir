@@ -70,6 +70,7 @@ class ScaleState {
  private:
   // This may not represent 2 ** 80 scale for CKKS.
   // Currently we use logScale for CKKS.
+  // TODO(bence): track high-precision scale for CKKS
   std::optional<int64_t> scale;
 };
 

@@ -73,12 +73,14 @@ int64_t BGVScaleModel::evalModReduceScaleBackward(
 int64_t CKKSScaleModel::evalMulScale(const ckks::LocalParam& param, int64_t lhs,
                                      int64_t rhs) {
   // TODO(#1640): support high-precision scale management
+  // TODO(bence)
   return lhs + rhs;
 }
 
 int64_t CKKSScaleModel::evalMulScaleBackward(const ckks::LocalParam& param,
                                              int64_t result, int64_t lhs) {
   // TODO(#1640): support high-precision scale management
+  // TODO(bence)
   return result - lhs;
 }
 
@@ -88,6 +90,7 @@ int64_t CKKSScaleModel::evalModReduceScale(const ckks::LocalParam& inputParam,
   // TODO(#1640): rescale using logqi instead of logDefaultScale
   // auto logqi = schemeParam->getLogqi();
   // auto level = inputParam.getCurrentLevel();
+  // TODO(bence): use inputParam.getCurrentLevel() and schemeParam->getQi()
   auto logDefaultScale = schemeParam->getLogDefaultScale();
   return scale - logDefaultScale;
 }
@@ -98,6 +101,7 @@ int64_t CKKSScaleModel::evalModReduceScaleBackward(
   // TODO(#1640): rescale using logqi instead of logDefaultScale
   // auto logqi = schemeParam->getLogqi();
   // auto level = inputParam.getCurrentLevel();
+  // TODO(bence)
   auto logDefaultScale = schemeParam->getLogDefaultScale();
   return resultScale + logDefaultScale;
 }

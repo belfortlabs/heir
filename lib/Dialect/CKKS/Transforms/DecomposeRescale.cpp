@@ -14,7 +14,8 @@ namespace ckks {
 
 LogicalResult DecomposeRescalePattern::matchAndRewrite(RescaleOp op,
                             PatternRewriter& rewriter) const {
-    // TODO(bence)
+    // TODO(bence): implement
+    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
 }
 
 struct DecomposeRescale

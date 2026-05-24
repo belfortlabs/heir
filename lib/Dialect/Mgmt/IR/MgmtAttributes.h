@@ -18,6 +18,7 @@ namespace mgmt {
 // MgmtAttr helpers
 //===----------------------------------------------------------------------===//
 
+// TODO(bence): int64_t scale will not work with high-precision scale CKKS
 MgmtAttr getMgmtAttrWithNewScale(MgmtAttr mgmtAttr, int64_t scale);
 
 //===----------------------------------------------------------------------===//

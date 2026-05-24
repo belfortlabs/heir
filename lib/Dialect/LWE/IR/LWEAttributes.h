@@ -27,6 +27,7 @@ PlaintextSpaceAttr inferMulOpPlaintextSpaceAttr(MLIRContext* ctx,
 PlaintextSpaceAttr inferModulusSwitchOrRescaleOpPlaintextSpaceAttr(
     MLIRContext* ctx, PlaintextSpaceAttr x, APInt dividedModulus);
 
+// TODO(bence): int64_t scale will not work with high-precision scale CKKS
 Attribute getEncodingAttrWithNewScalingFactor(Attribute encoding,
                                               int64_t newScale);
 
