@@ -58,7 +58,10 @@ dev = [
   # For ML integration tests
   "torch>=2.8.0",
   "setuptools>=80.9.0",
-  "cibuildwheel>=3.0.0",
+  # Wheels can only be built on 3.11+ with 3.0.0+,
+  # but we can still build wheels for 3.10 from 3.11+
+  # so we gate only this dependency.
+  "cibuildwheel>=3.0.0; python_version >= '3.11'",
 ]
 
 # For `uv sync` (which includes `dev` by default) or / `pip install --group dev`.
