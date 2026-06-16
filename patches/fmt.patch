@@ -1,0 +1,11 @@
+diff --git a/include/fmt/format.h b/include/fmt/format.h
+--- a/include/fmt/format.h
++++ b/include/fmt/format.h
+@@ -41,6 +41,7 @@
+ #include "base.h"
+
+ #ifndef FMT_MODULE
++#  include <cstdlib>  // malloc, free
+ #  include <cmath>    // std::signbit
+ #  include <cstddef>  // std::byte
+ #  include <cstdint>  // uint32_t

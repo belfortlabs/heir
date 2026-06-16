@@ -89,6 +89,17 @@ bazel_dep(name = "eigen", version = "3.4.0.bcr.3")
 bazel_dep(name = "soplex", version = "7.1.4.bcr.1")
 bazel_dep(name = "or-tools", version = "9.12", repo_name = "com_google_ortools")
 
+# fmt 11.1.3 (pulled in transitively by soplex) relies on <cstdlib> being
+# transitively available for malloc/free in format.h. Newer libc++ (e.g. the
+# one shipped with Homebrew clang 22) no longer leaks that include, so the build
+# fails with "use of undeclared identifier 'malloc'". Patch in the explicit
+# include; this matches the fix upstream applied in fmt 12.1.0.
+single_version_override(
+    module_name = "fmt",
+    patch_strip = 1,
+    patches = ["//patches:fmt.patch"],
+)
+
 # openfhe deps that are needed for bundling openfhe with the python frontend
 bazel_dep(name = "cereal", version = "1.3.2.bcr.3")
 bazel_dep(name = "rapidjson", version = "1.1.0.bcr.20250205")
