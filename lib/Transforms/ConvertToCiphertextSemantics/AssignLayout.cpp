@@ -102,6 +102,25 @@ static FailureOr<Value> implementAssignLayoutNew(
     }
   }
 
+  // For a single-element tensor input, extract the lone scalar and recurse so
+  // the scalar code paths above (e.g. dense-layout splat) handle the rest. The
+  // loop-generator path below would otherwise produce a tensor.extract with too
+  // few indices, because ISL elides all-constant domain dims from the AST.
+  if (dataSemanticType && dataSemanticType.hasStaticShape() &&
+      dataSemanticType.getNumElements() == 1) {
+    SmallVector<Value> zeroIndices;
+    for (int64_t i = 0; i < dataSemanticType.getRank(); ++i) {
+      auto idx = arith::ConstantIndexOp::create(builder, 0);
+      createdOpCallback(idx);
+      zeroIndices.push_back(idx.getResult());
+    }
+    auto extractOp = tensor::ExtractOp::create(builder, input, zeroIndices);
+    createdOpCallback(extractOp);
+    return implementAssignLayoutNew(extractOp.getResult(), layout,
+                                    ciphertextSize, builder, createdOpCallback,
+                                    domainSchedule);
+  }
+
   // If the input is a dense/splat constant, evaluate the relation on its
   // elements at compile-time. This avoids generating a loop nest and evaluating
   // the packing at runtime.
@@ -218,8 +237,13 @@ static FailureOr<Value> implementUnpackOpNew(
   RankedTensorType unpackedTensorType =
       dyn_cast<RankedTensorType>(op.getResult().getType());
 
-  if (!unpackedTensorType) {
-    // it's a scalar, so we can extract from any slot in the mapping
+  bool isSingleElementTensor = unpackedTensorType &&
+                               unpackedTensorType.hasStaticShape() &&
+                               unpackedTensorType.getNumElements() == 1;
+  bool isScalar = !unpackedTensorType;
+
+  if (isScalar || isSingleElementTensor) {
+    // Extract the lone element from any slot in the mapping.
     std::vector<int64_t> point = anyRangePoint(rel);
     if (point.empty()) {
       return op.emitError()
@@ -233,7 +257,16 @@ static FailureOr<Value> implementUnpackOpNew(
     }
     auto extractOp = tensor::ExtractOp::create(builder, op.getValue(), indices);
     createdOpCallback(extractOp);
-    return extractOp.getResult();
+
+    if (isScalar) {
+      return extractOp.getResult();
+    }
+
+    // isSingleElementTensor -> wrap back into single-element tensor.
+    auto fromElementsOp = tensor::FromElementsOp::create(
+        builder, unpackedTensorType, ValueRange{extractOp.getResult()});
+    createdOpCallback(fromElementsOp);
+    return fromElementsOp.getResult();
   }
 
   MLIRLoopNestGenerator generator(builder);
