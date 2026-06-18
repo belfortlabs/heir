@@ -63,6 +63,7 @@ cc_library(
         "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/Mgmt/IR:Dialect",
         "@heir//lib/Dialect/Secret/IR:Dialect",
+        "@heir//lib/Dialect/TensorExt/IR:Dialect",
         "@heir//lib/Transforms/Halo:Patterns",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:AffineDialect",
