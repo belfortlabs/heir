@@ -445,7 +445,11 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
       return rewriter.notifyMatchFailure(op, "not a ReLU (max(x, 0)) shape");
     }
 
-    Type elemType = op.getType();
+    // The ReLU may be scalar (f32) or shaped (tensor<...xf32>); in the
+    // torch-linalg-to-ckks flow the maximumf operates on tensors inside a
+    // secret.generic, so match on the element type and splat constants.
+    Type opType = op.getType();
+    Type elemType = getElementTypeOrSelf(opType);
     if (!isa<FloatType>(elemType)) {
       return rewriter.notifyMatchFailure(op, "non-float ReLU operand");
     }
@@ -483,9 +487,16 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
       return eval.getResult();
     };
 
-    // xs = x * (1/B)  -> prescale into [-1, 1]
-    Value invB = rewriter.create<arith::ConstantOp>(
-        loc, rewriter.getFloatAttr(elemType, 1.0 / bound));
+    // xs = x * (1/B)  -> prescale into [-1, 1]. Build a splat constant when the
+    // operand is shaped so the multiply type-checks against the tensor operand.
+    auto invBFloat =
+        cast<FloatAttr>(rewriter.getFloatAttr(elemType, 1.0 / bound));
+    TypedAttr invBAttr =
+        isa<ShapedType>(opType)
+            ? cast<TypedAttr>(DenseElementsAttr::get(cast<ShapedType>(opType),
+                                                     invBFloat.getValue()))
+            : cast<TypedAttr>(invBFloat);
+    Value invB = rewriter.create<arith::ConstantOp>(loc, invBAttr);
     Value xs = rewriter.create<arith::MulFOp>(loc, x, invB);
     // step(xs) via the 3-stage composite sign approximation.
     Value s0 = makeEval(xs, kCompositeSignPoly0);
