@@ -13,8 +13,8 @@
 // CHECK: linalg.generic
 // CHECK-NOT: domain_lower
 // CHECK: %[[MAX:.*]] = arith.maximumf
-// CHECK-SAME: domain_lower = -7.803{{.*}}
-// CHECK-SAME: domain_upper = 2.782{{.*}}
+// CHECK-SAME: domain_lower = -0.78033679723739624
+// CHECK-SAME: domain_upper = 0.27823492884635925
 // CHECK: linalg.yield %[[MAX]]
 // CHECK: return
 func.func @relu_generic(%arg0: tensor<1x3xf32>) -> tensor<1x3xf32> {
