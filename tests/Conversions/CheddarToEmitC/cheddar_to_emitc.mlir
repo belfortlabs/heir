@@ -19,20 +19,28 @@
 !parameter = !cheddar.parameter
 !boot_context = !cheddar.boot_context
 
-// CreateContext is a static factory (not destination-passing): it produces a
-// `Context<word>*`, so it stays `T x = T::Create(args);`.
-// CHECK: func.func @create_context
-// CHECK: emitc.call_opaque "Context<word>::Create"
-func.func @create_context(%params: !parameter) -> !context {
-  %ctx = cheddar.create_context %params : (!parameter) -> !context
-  return %ctx : !context
-}
-
-// CHECK: func.func @prepare_keys
+// A generated-style `__configure`: make_parameter + create_context +
+// create_user_interface + prepare_rot_key, in destination-passing tensor form.
+// The two tensor results become owning out-params; the setup ops lower to
+// assignments / a member call. level_config ({{1,0},...}) and the default level
+// (#mainPrimes-1) are derived from mainPrimes by the emitter.
+// CHECK: func.func @configure
+// CHECK-SAME: !emitc.opaque<"std::shared_ptr<Context<word>>&">
+// CHECK-SAME: !emitc.opaque<"std::unique_ptr<UserInterface<word>>&">
+// CHECK: emitc.call_opaque "Parameter"
+// CHECK-SAME: std::vector<word>{1ULL, 2ULL, 3ULL}
+// CHECK-SAME: std::vector<word>{4ULL, 5ULL}
+// CHECK: emitc.verbatim "{} = Context<word>::Create({});"
+// CHECK: emitc.verbatim "{} = std::make_unique<UserInterface<word>>({});"
 // CHECK: emitc.verbatim "{}->PrepareRotationKey(3, 5);"
-func.func @prepare_keys(%ui: !user_interface) {
-  cheddar.prepare_rot_key %ui {distance = 3 : i64, maxLevel = 5 : i64} : (!user_interface) -> ()
-  return
+func.func @configure() -> (tensor<!context>, tensor<!user_interface>) {
+  %p = cheddar.make_parameter {logN = 14 : i64, logScale = 45 : i64, mainPrimes = array<i64: 1, 2, 3>, auxPrimes = array<i64: 4, 5>} : !parameter
+  %ci = bufferization.alloc_tensor() : tensor<!context>
+  %ctx = cheddar.create_context %p, %ci : (!parameter, tensor<!context>) -> tensor<!context>
+  %uii = bufferization.alloc_tensor() : tensor<!user_interface>
+  %ui = cheddar.create_user_interface %ctx, %uii : (tensor<!context>, tensor<!user_interface>) -> tensor<!user_interface>
+  %ui2 = cheddar.prepare_rot_key %ui {distance = 3 : i64, maxLevel = 5 : i64} : (tensor<!user_interface>) -> tensor<!user_interface>
+  return %ctx, %ui2 : tensor<!context>, tensor<!user_interface>
 }
 
 // A two-op chain: each op is `ctx->Method(out, a, b)`. The first op's result is
