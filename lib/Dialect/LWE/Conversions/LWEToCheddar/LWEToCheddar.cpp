@@ -582,10 +582,10 @@ struct AddCheddarContextArg : public OpConversionPattern<func::FuncOp> {
 
 struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
   ConvertCheddarFuncCallOp(
-      mlir::MLIRContext* context,
+      const TypeConverter& typeConverter, mlir::MLIRContext* context,
       const std::vector<std::pair<Type, OpPredicate>>& evaluators)
-      : OpConversionPattern<func::CallOp>(context), evaluators(evaluators) {}
-  using OpConversionPattern<func::CallOp>::OpConversionPattern;
+      : OpConversionPattern<func::CallOp>(typeConverter, context),
+        evaluators(evaluators) {}
 
   LogicalResult matchAndRewrite(
       func::CallOp op, typename func::CallOp::Adaptor adaptor,
@@ -604,10 +604,19 @@ struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
       newOperands.push_back(result.value());
     }
     llvm::append_range(newOperands, adaptor.getOperands());
+    // The callee's result types are type-converted by the structural func
+    // pattern (e.g. tensor<Nx!lwe.plaintext> -> tensor<Nx!cheddar.plaintext>),
+    // so the rebuilt call must use the converted result types or it stays
+    // signature-inconsistent with its callee and fails to legalize. Operand
+    // types come pre-converted via the adaptor.
+    SmallVector<Type> newResultTypes;
+    if (failed(
+            typeConverter->convertTypes(op.getResultTypes(), newResultTypes)))
+      return rewriter.notifyMatchFailure(op, "failed to convert result types");
     SmallVector<NamedAttribute> dialectAttrs(op->getDialectAttrs());
     rewriter
-        .replaceOpWithNewOp<func::CallOp>(op, op.getCallee(),
-                                          op.getResultTypes(), newOperands)
+        .replaceOpWithNewOp<func::CallOp>(op, op.getCallee(), newResultTypes,
+                                          newOperands)
         ->setDialectAttrs(dialectAttrs);
     return success();
   }
@@ -651,6 +660,47 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     addStructuralConversionPatterns(typeConverter, patterns, target);
     addTensorConversionPatterns(typeConverter, patterns, target);
 
+    // BootContext and the rotation-key map (EvkMap) must be threaded
+    // transitively: a function that (directly or indirectly) calls a function
+    // that bootstraps / needs the key map must itself carry those context
+    // arguments so it can forward them. A per-body walk only sees a function's
+    // own ops (the bootstrap may live in a callee, e.g. @main calling
+    // @main__preprocessed), so propagate both properties to all transitive
+    // callers via a fixed point over the call graph.
+    DenseMap<func::FuncOp, bool> bootstrapsTransitively;
+    DenseMap<func::FuncOp, bool> needsEvkMapTransitively;
+    module->walk([&](func::FuncOp f) {
+      bool boots = false;
+      bool evk = false;
+      f.walk([&](Operation* inner) {
+        if (isa<ckks::BootstrapOp>(inner)) boots = true;
+        if (isa<ckks::BootstrapOp, orion::LinearTransformOp,
+                orion::ChebyshevOp>(inner))
+          evk = true;
+      });
+      bootstrapsTransitively[f] = boots;
+      needsEvkMapTransitively[f] = evk;
+    });
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      module->walk([&](func::CallOp call) {
+        auto caller = call->getParentOfType<func::FuncOp>();
+        FailureOr<func::FuncOp> callee = getCalledFunction(call);
+        if (!caller || failed(callee)) return;
+        if (bootstrapsTransitively[callee.value()] &&
+            !bootstrapsTransitively[caller]) {
+          bootstrapsTransitively[caller] = true;
+          changed = true;
+        }
+        if (needsEvkMapTransitively[callee.value()] &&
+            !needsEvkMapTransitively[caller]) {
+          needsEvkMapTransitively[caller] = true;
+          changed = true;
+        }
+      });
+    }
+
     auto hasCryptoOps = [&](Operation* op) -> bool {
       return containsArgumentOfDialect<lwe::LWEDialect, ckks::CKKSDialect>(op);
     };
@@ -661,23 +711,13 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
       funcOp->walk([&](lwe::RLWEEncodeOp) { found = true; });
       return found;
     };
-    auto needsEvkMap = [&](Operation* op) -> bool {
+    auto needsEvkMap = [&needsEvkMapTransitively](Operation* op) -> bool {
       auto funcOp = dyn_cast<func::FuncOp>(op);
-      if (!funcOp) return false;
-      bool found = false;
-      funcOp->walk([&](Operation* inner) {
-        if (isa<ckks::BootstrapOp, orion::LinearTransformOp,
-                orion::ChebyshevOp>(inner))
-          found = true;
-      });
-      return found;
+      return funcOp && needsEvkMapTransitively.lookup(funcOp);
     };
-    auto funcBootstraps = [&](Operation* op) -> bool {
+    auto funcBootstraps = [&bootstrapsTransitively](Operation* op) -> bool {
       auto funcOp = dyn_cast<func::FuncOp>(op);
-      if (!funcOp) return false;
-      bool found = false;
-      funcOp->walk([&](ckks::BootstrapOp) { found = true; });
-      return found;
+      return funcOp && bootstrapsTransitively.lookup(funcOp);
     };
     auto hasCryptoNoBoot = [&](Operation* op) -> bool {
       return hasCryptoOps(op) && !funcBootstraps(op);
@@ -695,7 +735,7 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     };
 
     patterns.add<AddCheddarContextArg>(context, evaluators);
-    patterns.add<ConvertCheddarFuncCallOp>(context, evaluators);
+    patterns.add<ConvertCheddarFuncCallOp>(typeConverter, context, evaluators);
 
     patterns.add<ConvertCKKSAddOp, ConvertCKKSSubOp, ConvertCKKSMulOp,
                  ConvertCKKSAddPlainOp, ConvertCKKSSubPlainOp,

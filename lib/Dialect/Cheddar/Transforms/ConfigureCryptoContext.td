@@ -26,6 +26,8 @@ def CheddarConfigureCryptoContext : Pass<"cheddar-configure-crypto-context"> {
 
   let options = [
     Option<"entryFunction", "entry-function", "std::string", "", "Entry function to configure (auto-detected if empty)">,
+    Option<"numCtsLevels", "num-cts-levels", "int", /*default=*/"3", "Bootstrap CoeffToSlot (CtS) level budget (cf. OpenFHE level-budget-encode); only used when the program bootstraps">,
+    Option<"numStcLevels", "num-stc-levels", "int", /*default=*/"3", "Bootstrap SlotToCoeff (StC) level budget (cf. OpenFHE level-budget-decode); only used when the program bootstraps">,
   ];
 
   let dependentDialects = [

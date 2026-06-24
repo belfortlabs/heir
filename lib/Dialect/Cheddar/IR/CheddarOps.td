@@ -67,6 +67,16 @@ def Cheddar_UserInterfaceLike : TensorOrMemRef<[Cheddar_UserInterface]>;
 def Cheddar_ContextResult : Variadic<RankedTensorOf<[Cheddar_Context]>>;
 def Cheddar_UserInterfaceResult : Variadic<RankedTensorOf<[Cheddar_UserInterface]>>;
 
+// A BootContext is an owning setup handle just like Context (it lowers to
+// `std::shared_ptr<BootContext<word>>`); bootstrapping programs create one of
+// these instead of a plain Context. `AnyOwningContextLike` accepts either, used
+// by ops (e.g. create_user_interface) that work off whichever context the
+// program selected.
+def Cheddar_BootContextLike : TensorOrMemRef<[Cheddar_BootContext]>;
+def Cheddar_BootContextResult : Variadic<RankedTensorOf<[Cheddar_BootContext]>>;
+def Cheddar_AnyOwningContextLike :
+    TensorOrMemRef<[Cheddar_Context, Cheddar_BootContext]>;
+
 //===----------------------------------------------------------------------===//
 // Setup operations
 //===----------------------------------------------------------------------===//
@@ -93,7 +103,53 @@ def Cheddar_CreateUserInterfaceOp : Cheddar_DpsOp<"create_user_interface"> {
     `std::unique_ptr<UserInterface<word>>&` out-param at the boundary):
     `ui_out = std::make_unique<UserInterface<word>>(ctx)`.
   }];
-  let arguments = (ins Cheddar_ContextLike:$ctx, Cheddar_UserInterfaceLike:$output);
+  let arguments = (ins Cheddar_AnyOwningContextLike:$ctx,
+                       Cheddar_UserInterfaceLike:$output);
+  let results = (outs Cheddar_UserInterfaceResult:$result);
+}
+
+def Cheddar_CreateBootContextOp : Cheddar_DpsOp<"create_boot_context"> {
+  let summary = "Create a CHEDDAR bootstrapping context from parameters";
+  let description = [{
+    Creates a `BootContext<word>` from a Parameter object (DPS), for programs
+    that bootstrap. Bootstrapping is parameterized by the CoeffToSlot (CtS) and
+    SlotToCoeff (StC) level budgets -- a depth/rotation trade-off that mirrors
+    OpenFHE's `levelBudgetEncode`/`levelBudgetDecode` -- carried here as the
+    `numCtsLevels`/`numStcLevels` attributes. `$output` is the destination
+    buffer hint; after bufferization the result becomes a
+    `memref<!cheddar.boot_context>` re-typed to `std::shared_ptr<BootContext<word>>&`
+    at the emitc boundary:
+    `ctx_out = BootContext<word>::Create(params, BootParameter(params.max_level_, numCtsLevels, numStcLevels))`.
+  }];
+  let arguments = (ins
+    Cheddar_Parameter:$params,
+    Builtin_IntegerAttr:$numCtsLevels,
+    Builtin_IntegerAttr:$numStcLevels,
+    Cheddar_BootContextLike:$output
+  );
+  let results = (outs Cheddar_BootContextResult:$result);
+}
+
+def Cheddar_PrepareBootstrapOp : Cheddar_DpsOp<"prepare_bootstrap", [], "Ui"> {
+  let summary = "Run the one-time bootstrap precompute and rotation-key setup";
+  let description = [{
+    Performs the one-time bootstrapping preparation on a `!cheddar.boot_context`
+    and threads the resulting rotation keys into the UserInterface (DPS on
+    `$ui`). Emits the canonical CHEDDAR sequence:
+      ctx->PrepareEvalMod();
+      ctx->PrepareEvalSpecialFFT(numSlots);
+      EvkRequest req; ctx->AddRequiredRotations(req, numSlots);
+      ui->PrepareRotationKey(req);
+    `numSlots` is the number of slots the bootstrap refreshes (full-slot boot
+    uses the context's slot count). Must run after the boot context + user
+    interface are created and (for programs that also rotate outside boot) after
+    the program's own `prepare_rot_key`s, so all keys land in one EvkMap.
+  }];
+  let arguments = (ins
+    Cheddar_BootContextLike:$ctx,
+    Cheddar_UserInterfaceLike:$ui,
+    Builtin_IntegerAttr:$numSlots
+  );
   let results = (outs Cheddar_UserInterfaceResult:$result);
 }
 
@@ -154,12 +210,22 @@ def Cheddar_MakeParameterOp : Cheddar_Op<"make_parameter"> {
     scale. This is the single setup op that produces the `!cheddar.parameter`
     consumed by `cheddar.create_context`, so a generated `__configure` is
     self-contained.
+
+    Bootstrapping programs override the defaults: `defaultEncryptionLevel`
+    pins the encryption level below the chain top (the boot-circuit primes sit
+    above it), and `denseHammingWeight`/`sparseHammingWeight` set the secret-key
+    hamming weights CHEDDAR's BootContext requires. Each is omitted (and the
+    emitter falls back to `#mainPrimes - 1` / not emitting a SetHammingWeight
+    call) for non-bootstrapping programs.
   }];
   let arguments = (ins
     Builtin_IntegerAttr:$logN,
     Builtin_IntegerAttr:$logScale,
     DenseI64ArrayAttr:$mainPrimes,
-    DenseI64ArrayAttr:$auxPrimes
+    DenseI64ArrayAttr:$auxPrimes,
+    OptionalAttr<Builtin_IntegerAttr>:$defaultEncryptionLevel,
+    OptionalAttr<Builtin_IntegerAttr>:$denseHammingWeight,
+    OptionalAttr<Builtin_IntegerAttr>:$sparseHammingWeight
   );
   let results = (outs Cheddar_Parameter:$params);
   let assemblyFormat = "attr-dict `:` type($params)";
