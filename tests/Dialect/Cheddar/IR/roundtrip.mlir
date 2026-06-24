@@ -4,20 +4,28 @@
 // ops are destination-passing: their payload operands are `tensor<!cheddar.X>`
 // and they take a trailing `$output` init operand tied to the result.
 
-// --- Setup operations (not destination-passing) ---
+// --- Setup operations ---
+
+// CHECK: @test_make_parameter
+func.func @test_make_parameter() -> !cheddar.parameter {
+  // CHECK: cheddar.make_parameter
+  // CHECK-SAME: logN = 14
+  %p = cheddar.make_parameter {logN = 14 : i64, logScale = 45 : i64, mainPrimes = array<i64: 1, 2, 3>, auxPrimes = array<i64: 4, 5>} : !cheddar.parameter
+  return %p : !cheddar.parameter
+}
 
 // CHECK: @test_create_context
-func.func @test_create_context(%params: !cheddar.parameter) -> !cheddar.context {
+func.func @test_create_context(%params: !cheddar.parameter, %init: tensor<!cheddar.context>) -> tensor<!cheddar.context> {
   // CHECK: cheddar.create_context
-  %ctx = cheddar.create_context %params : (!cheddar.parameter) -> !cheddar.context
-  return %ctx : !cheddar.context
+  %ctx = cheddar.create_context %params, %init : (!cheddar.parameter, tensor<!cheddar.context>) -> tensor<!cheddar.context>
+  return %ctx : tensor<!cheddar.context>
 }
 
 // CHECK: @test_create_user_interface
-func.func @test_create_user_interface(%ctx: !cheddar.context) -> !cheddar.user_interface {
+func.func @test_create_user_interface(%ctx: tensor<!cheddar.context>, %init: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
   // CHECK: cheddar.create_user_interface
-  %ui = cheddar.create_user_interface %ctx : (!cheddar.context) -> !cheddar.user_interface
-  return %ui : !cheddar.user_interface
+  %ui = cheddar.create_user_interface %ctx, %init : (tensor<!cheddar.context>, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+  return %ui : tensor<!cheddar.user_interface>
 }
 
 // CHECK: @test_get_encoder
@@ -42,12 +50,12 @@ func.func @test_get_mult_key(%ui: !cheddar.user_interface) -> !cheddar.eval_key 
 }
 
 // CHECK: @test_prepare_rot_key
-func.func @test_prepare_rot_key(%ui: !cheddar.user_interface) {
+func.func @test_prepare_rot_key(%ui: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
   // CHECK: cheddar.prepare_rot_key
   // CHECK-SAME: distance = 3
   // CHECK-SAME: maxLevel = 10
-  cheddar.prepare_rot_key %ui {distance = 3 : i64, maxLevel = 10 : i64} : (!cheddar.user_interface) -> ()
-  return
+  %ui2 = cheddar.prepare_rot_key %ui {distance = 3 : i64, maxLevel = 10 : i64} : (tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+  return %ui2 : tensor<!cheddar.user_interface>
 }
 
 // --- Encode / Encrypt / Decrypt ---

@@ -52,28 +52,49 @@ def Cheddar_CtResult : Variadic<RankedTensorOf<[Cheddar_Ciphertext]>>;
 def Cheddar_PtResult : Variadic<RankedTensorOf<[Cheddar_Plaintext]>>;
 def Cheddar_ConstResult : Variadic<RankedTensorOf<[Cheddar_Constant]>>;
 
+// Owning setup-handle destinations. The `create_*` setup ops are
+// destination-passing like the payload ops: in tensor form they produce an SSA
+// result (the owning context / user_interface, consumed downstream) and carry a
+// trailing `$output` init operand that is the bufferization destination hint.
+// After one-shot-bufferize + buffer-results-to-out-params the result becomes a
+// `memref<!cheddar.{context,user_interface}>` out-param, which
+// `cheddar-emitc-boundary` re-types to the owning C++ smart-pointer references
+// (`std::shared_ptr<Context<word>>&` / `std::unique_ptr<UserInterface<word>>&`),
+// distinguishing them from the borrowed raw-pointer handles the
+// compute/encrypt/decrypt funcs take.
+def Cheddar_ContextLike : TensorOrMemRef<[Cheddar_Context]>;
+def Cheddar_UserInterfaceLike : TensorOrMemRef<[Cheddar_UserInterface]>;
+def Cheddar_ContextResult : Variadic<RankedTensorOf<[Cheddar_Context]>>;
+def Cheddar_UserInterfaceResult : Variadic<RankedTensorOf<[Cheddar_UserInterface]>>;
+
 //===----------------------------------------------------------------------===//
 // Setup operations
 //===----------------------------------------------------------------------===//
 
-def Cheddar_CreateContextOp : Cheddar_Op<"create_context", [MemoryEffects<[MemWrite]>]> {
+def Cheddar_CreateContextOp : Cheddar_DpsOp<"create_context"> {
   let summary = "Create a CHEDDAR context from parameters";
   let description = [{
-    Creates a CHEDDAR Context<word> from a Parameter object.
-    The context is the main server-side computation engine.
+    Creates a CHEDDAR Context<word> from a Parameter object (DPS). The result is
+    the owning context (the main server-side computation engine); `$output` is
+    the destination buffer hint. After bufferization the destination is a
+    `memref<!cheddar.context>` re-typed to `std::shared_ptr<Context<word>>&` at
+    the emitc boundary, so a generated `__configure` hands the context back
+    through an out-param: `ctx_out = Context<word>::Create(params)`.
   }];
-  let arguments = (ins Cheddar_Parameter:$params);
-  let results = (outs Cheddar_Context:$ctx);
+  let arguments = (ins Cheddar_Parameter:$params, Cheddar_ContextLike:$output);
+  let results = (outs Cheddar_ContextResult:$result);
 }
 
-def Cheddar_CreateUserInterfaceOp : Cheddar_Op<"create_user_interface", [MemoryEffects<[MemWrite]>]> {
+def Cheddar_CreateUserInterfaceOp : Cheddar_DpsOp<"create_user_interface"> {
   let summary = "Create a CHEDDAR UserInterface for key gen and encrypt/decrypt";
   let description = [{
-    Creates a UserInterface<word> from a context. The UserInterface handles
-    key generation, encryption, and decryption. Note: for test purposes only.
+    Creates a UserInterface<word> from an owning context (DPS). The result is the
+    owning user_interface; `$output` is the destination buffer hint (becomes a
+    `std::unique_ptr<UserInterface<word>>&` out-param at the boundary):
+    `ui_out = std::make_unique<UserInterface<word>>(ctx)`.
   }];
-  let arguments = (ins Cheddar_AnyContext:$ctx);
-  let results = (outs Cheddar_UserInterface:$ui);
+  let arguments = (ins Cheddar_ContextLike:$ctx, Cheddar_UserInterfaceLike:$output);
+  let results = (outs Cheddar_UserInterfaceResult:$result);
 }
 
 def Cheddar_GetEncoderOp : Cheddar_Op<"get_encoder"> {
@@ -104,20 +125,44 @@ def Cheddar_GetMultKeyOp : Cheddar_Op<"get_mult_key"> {
   let results = (outs Cheddar_EvalKey:$key);
 }
 
-def Cheddar_PrepareRotKeyOp : Cheddar_Op<"prepare_rot_key", [MemoryEffects<[MemWrite]>]> {
+def Cheddar_PrepareRotKeyOp : Cheddar_DpsOp<"prepare_rot_key", [], "Ui"> {
   let summary = "Generate a rotation key for a given distance";
   let description = [{
-    Calls ui.PrepareRotationKey(distance, max_level) to generate a rotation key.
-    Must be called before using rotation with that distance.
-    The max_level parameter specifies the maximum ciphertext level at which
-    this rotation key will be used.
+    Calls `ui->PrepareRotationKey(distance, maxLevel)` to generate a rotation
+    key, mutating the UserInterface in place. DPS: `$ui` is the in-place
+    destination and the result is the updated UserInterface (threaded to the
+    next setup op / the configure return). Must be called before using rotation
+    with that distance; `maxLevel` is the maximum ciphertext level at which the
+    key will be used.
   }];
   let arguments = (ins
-    Cheddar_UserInterface:$ui,
+    Cheddar_UserInterfaceLike:$ui,
     Builtin_IntegerAttr:$distance,
     Builtin_IntegerAttr:$maxLevel
   );
-  let results = (outs);
+  let results = (outs Cheddar_UserInterfaceResult:$result);
+}
+
+def Cheddar_MakeParameterOp : Cheddar_Op<"make_parameter"> {
+  let summary = "Construct a CHEDDAR Parameter from CKKS scheme parameters";
+  let description = [{
+    Builds a `cheddar::Parameter<word>` from the CKKS modulus chain. The main
+    primes are the CKKS `Q` limbs and the aux primes are the `P` limbs; the
+    canonical level config is one-main-prime-per-level (`{{1, 0}, {2, 0}, ...}`)
+    and the default encryption level is `#mainPrimes - 1`, both derived from
+    `mainPrimes` by the emitter. `logScale` is the log2 of the default CKKS
+    scale. This is the single setup op that produces the `!cheddar.parameter`
+    consumed by `cheddar.create_context`, so a generated `__configure` is
+    self-contained.
+  }];
+  let arguments = (ins
+    Builtin_IntegerAttr:$logN,
+    Builtin_IntegerAttr:$logScale,
+    DenseI64ArrayAttr:$mainPrimes,
+    DenseI64ArrayAttr:$auxPrimes
+  );
+  let results = (outs Cheddar_Parameter:$params);
+  let assemblyFormat = "attr-dict `:` type($params)";
 }
 
 //===----------------------------------------------------------------------===//

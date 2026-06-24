@@ -82,6 +82,19 @@ std::string stdArrayName(ArrayRef<int64_t> shape, StringRef elt) {
   return s;
 }
 
+// The owning C++ smart-pointer type name for a cheddar setup-handle element
+// (context / user_interface), or "" otherwise. A `memref<!cheddar.X>` of one of
+// these is an OWNING destination (written by
+// create_context/create_user_interface and handed back through a `__configure`
+// out-param), as opposed to the bare borrowed handle the compute funcs take
+// (`Context<word>*` / `UserInterface<word>*`).
+std::string owningHandleTypeName(Type t) {
+  if (isa<cheddar::ContextType>(t)) return "std::shared_ptr<Context<word>>";
+  if (isa<cheddar::UserInterfaceType>(t))
+    return "std::unique_ptr<UserInterface<word>>";
+  return "";
+}
+
 // True if an emitc opaque value type names a (move-only) cheddar payload, i.e.
 // the buffer's elements are move-only. Used to choose move vs copy semantics.
 bool opaqueNamesPayload(StringRef name) {
@@ -194,7 +207,7 @@ void addCheddarEmitCTypeConversions(TypeConverter& tc, MLIRContext* ctx) {
   tc.addConversion([](emitc::OpaqueType t) -> Type { return t; });
   tc.addConversion([](emitc::SizeTType t) -> Type { return t; });
   tc.addConversion([ctx](cheddar::ParameterType) -> Type {
-    return OpaqueType::get(ctx, "Parameter");
+    return OpaqueType::get(ctx, "Parameter<word>");
   });
   tc.addConversion([ctx](cheddar::ContextType) -> Type {
     return PointerType::get(ctx, OpaqueType::get(ctx, "Context<word>"));
@@ -240,6 +253,14 @@ void addCheddarEmitCTypeConversions(TypeConverter& tc, MLIRContext* ctx) {
   // shape alone names the std::array). Other memrefs are left to upstream.
   tc.addConversion([ctx](MemRefType type) -> std::optional<Type> {
     Type eltType = type.getElementType();
+    // Owning setup-handle destination (rank-0 context/user_interface buffer):
+    // an `lvalue` of the owning smart-pointer type, re-typed to `T&` at the
+    // function boundary so `__configure` writes the handle back to the caller.
+    if (type.getRank() == 0) {
+      std::string owning = owningHandleTypeName(eltType);
+      if (!owning.empty())
+        return Type(LValueType::get(OpaqueType::get(ctx, owning)));
+    }
     std::string elt = scalarCppName(eltType);
     if (elt.empty()) return std::nullopt;
     bool payload = !payloadTypeName(eltType).empty();
@@ -271,8 +292,8 @@ struct EmitCOpaqueAsMemRefElement
 bool diagnoseUnsupportedGetters(Operation* root) {
   bool found = false;
   root->walk([&](Operation* op) {
-    if (isa<cheddar::GetEvkMapOp, cheddar::GetMultKeyOp, cheddar::GetEncoderOp,
-            cheddar::CreateUserInterfaceOp>(op)) {
+    if (isa<cheddar::GetEvkMapOp, cheddar::GetMultKeyOp, cheddar::GetEncoderOp>(
+            op)) {
       op->emitError()
           << "cheddar-to-emitc: lowering of '" << op->getName().getStringRef()
           << "' is not supported: it returns a const reference to a "
@@ -322,18 +343,85 @@ struct OutParamDpsPattern : public OpConversionPattern<Op> {
   std::function<std::string(Op)> extra;
 };
 
-// CreateContext: static factory, `T x = T::Create(args);`.
-struct ConvertCreateContext
-    : public OpConversionPattern<cheddar::CreateContextOp> {
+// A setup op that writes an owning handle into its destination buffer:
+//   create_context %params, %out          -> out =
+//   Context<word>::Create(params); create_user_interface %ctx, %out      -> out
+//   = make_unique<UI<word>>(ctx);
+// Operands are (source, output); the RHS callee is the only thing that differs.
+template <typename Op>
+struct ConvertSetupAssign : public OpConversionPattern<Op> {
+  ConvertSetupAssign(const TypeConverter& tc, MLIRContext* ctx,
+                     StringRef rhsCallee)
+      : OpConversionPattern<Op>(tc, ctx), rhsCallee(rhsCallee.str()) {}
+
+  LogicalResult matchAndRewrite(
+      Op op, typename Op::Adaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    auto operands = adaptor.getOperands();  // [source, output]
+    VerbatimOp::create(rewriter, op.getLoc(), "{} = " + rhsCallee + "({});",
+                       ValueRange{operands[1], operands[0]});
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  std::string rhsCallee;
+};
+
+// MakeParameter: construct a `cheddar::Parameter<word>` value from the CKKS
+// modulus chain carried as attributes:
+//   Parameter<word>(logN, scale, maxLevel, {{1,0},...}, {Q...}, {P...})
+struct ConvertMakeParameter
+    : public OpConversionPattern<cheddar::MakeParameterOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
-      cheddar::CreateContextOp op, OpAdaptor adaptor,
+      cheddar::MakeParameterOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     Type t = typeConverter->convertType(op.getResult().getType());
-    auto call = CallOpaqueOp::create(
-        rewriter, op.getLoc(), TypeRange{t},
-        rewriter.getStringAttr("Context<word>::Create"),
-        ValueRange{adaptor.getParams()}, ArrayAttr{}, ArrayAttr{});
+    auto* ctx = rewriter.getContext();
+    int64_t logN = op.getLogN().getInt();
+    int64_t logScale = op.getLogScale().getInt();
+    ArrayRef<int64_t> mainPrimes = op.getMainPrimes();
+    ArrayRef<int64_t> auxPrimes = op.getAuxPrimes();
+    // Canonical one-main-prime-per-level layout: default encryption level is
+    // the deepest level, #mainPrimes - 1.
+    int64_t maxLevel = static_cast<int64_t>(mainPrimes.size()) - 1;
+
+    // level_config: the canonical one-main-prime-per-level layout
+    // {{1, 0}, {2, 0}, ..., {#Q, 0}}.
+    std::string levelCfg = "std::vector<std::pair<int, int>>{";
+    for (size_t i = 0; i < mainPrimes.size(); ++i) {
+      if (i) levelCfg += ", ";
+      levelCfg += "{" + std::to_string(i + 1) + ", 0}";
+    }
+    levelCfg += "}";
+
+    // Primes are stored as i64 attrs but represent uint64 CKKS moduli.
+    auto primeVec = [](ArrayRef<int64_t> primes) {
+      std::string s = "std::vector<word>{";
+      for (size_t i = 0; i < primes.size(); ++i) {
+        if (i) s += ", ";
+        s += std::to_string(static_cast<uint64_t>(primes[i])) + "ULL";
+      }
+      s += "}";
+      return s;
+    };
+
+    std::string scaleLit = "static_cast<double>(static_cast<word>(1) << " +
+                           std::to_string(logScale) + ")";
+
+    SmallVector<Attribute> args{
+        OpaqueAttr::get(ctx, std::to_string(logN)),
+        OpaqueAttr::get(ctx, scaleLit),
+        OpaqueAttr::get(ctx, std::to_string(maxLevel)),
+        OpaqueAttr::get(ctx, levelCfg),
+        OpaqueAttr::get(ctx, primeVec(mainPrimes)),
+        OpaqueAttr::get(ctx, primeVec(auxPrimes)),
+    };
+    SmallVector<Attribute> templateArgs{OpaqueAttr::get(ctx, "word")};
+    auto call = CallOpaqueOp::create(rewriter, op.getLoc(), TypeRange{t},
+                                     rewriter.getStringAttr("Parameter"),
+                                     ValueRange{}, rewriter.getArrayAttr(args),
+                                     rewriter.getArrayAttr(templateArgs));
     rewriter.replaceOp(op, call.getResults());
     return success();
   }
@@ -1008,10 +1096,14 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
                  ConvertExpandShapeFloatCopy, ConvertGlobalDropAlign>(
         typeConverter, ctx, /*benefit=*/2);
 
-    patterns.add<ConvertCreateContext, ConvertPrepareRotKey, ConvertEncode,
+    patterns.add<ConvertMakeParameter, ConvertPrepareRotKey, ConvertEncode,
                  ConvertEncodeConstant, ConvertDecode, ConvertHRot,
                  ConvertHRotAdd, ConvertHConj, ConvertHConjAdd,
                  ConvertLinearTransform, ConvertEvalPoly>(typeConverter, ctx);
+    patterns.add<ConvertSetupAssign<cheddar::CreateContextOp>>(
+        typeConverter, ctx, "Context<word>::Create");
+    patterns.add<ConvertSetupAssign<cheddar::CreateUserInterfaceOp>>(
+        typeConverter, ctx, "std::make_unique<UserInterface<word>>");
 
     auto addDps = [&](StringRef name, auto opTag,
                       std::function<std::string(decltype(opTag))> extra =

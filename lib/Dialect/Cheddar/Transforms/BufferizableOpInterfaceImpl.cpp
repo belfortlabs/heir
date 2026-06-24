@@ -79,8 +79,9 @@ void attachAll(MLIRContext* ctx) {
 void mlir::heir::cheddar::registerBufferizableOpInterfaceExternalModels(
     DialectRegistry& registry) {
   registry.addExtension(+[](MLIRContext* ctx, CheddarDialect* dialect) {
-    attachAll<EncodeOp, EncodeConstantOp, DecodeOp, EncryptOp, DecryptOp, AddOp,
-              SubOp, MultOp, AddPlainOp, SubPlainOp, MultPlainOp, AddConstOp,
+    attachAll<CreateContextOp, CreateUserInterfaceOp, PrepareRotKeyOp, EncodeOp,
+              EncodeConstantOp, DecodeOp, EncryptOp, DecryptOp, AddOp, SubOp,
+              MultOp, AddPlainOp, SubPlainOp, MultPlainOp, AddConstOp,
               MultConstOp, NegOp, RescaleOp, LevelDownOp, RelinearizeOp,
               RelinearizeRescaleOp, HMultOp, HRotOp, HRotAddOp, HConjOp,
               HConjAddOp, MadUnsafeOp, BootOp, LinearTransformOp, EvalPolyOp>(
