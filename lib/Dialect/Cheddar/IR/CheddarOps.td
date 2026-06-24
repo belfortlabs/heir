@@ -177,7 +177,7 @@ def Cheddar_PrepareBootstrapOp : Cheddar_DpsOp<"prepare_bootstrap", [], "Ui"> {
   let results = (outs Cheddar_UserInterfaceResult:$result);
 }
 
-def Cheddar_GetEncoderOp : Cheddar_Op<"get_encoder"> {
+def Cheddar_GetEncoderOp : Cheddar_Op<"get_encoder", [Pure]> {
   let summary = "Get the encoder from a CHEDDAR context";
   let description = [{
     Returns a reference to the context's encoder (context->encoder_).
@@ -186,7 +186,7 @@ def Cheddar_GetEncoderOp : Cheddar_Op<"get_encoder"> {
   let results = (outs Cheddar_Encoder:$encoder);
 }
 
-def Cheddar_GetEvkMapOp : Cheddar_Op<"get_evk_map"> {
+def Cheddar_GetEvkMapOp : Cheddar_Op<"get_evk_map", [Pure]> {
   let summary = "Get the evaluation key map from a UserInterface";
   let description = [{
     Returns the EvkMap from the UserInterface (ui.GetEvkMap()).
@@ -195,7 +195,7 @@ def Cheddar_GetEvkMapOp : Cheddar_Op<"get_evk_map"> {
   let results = (outs Cheddar_EvkMap:$evkMap);
 }
 
-def Cheddar_GetMultKeyOp : Cheddar_Op<"get_mult_key"> {
+def Cheddar_GetMultKeyOp : Cheddar_Op<"get_mult_key", [Pure]> {
   let summary = "Get the multiplication evaluation key";
   let description = [{
     Returns the multiplication key from the UserInterface
@@ -223,7 +223,7 @@ def Cheddar_PrepareRotKeyOp : Cheddar_DpsOp<"prepare_rot_key", [], "Ui"> {
   let results = (outs Cheddar_UserInterfaceResult:$result);
 }
 
-def Cheddar_MakeParameterOp : Cheddar_Op<"make_parameter"> {
+def Cheddar_MakeParameterOp : Cheddar_Op<"make_parameter", [Pure]> {
   let summary = "Construct a CHEDDAR Parameter from CKKS scheme parameters";
   let description = [{
     Builds a `cheddar::Parameter<word>` from the CKKS modulus chain. The main
