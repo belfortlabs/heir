@@ -789,15 +789,27 @@ struct ConvertAllocLocal : public OpConversionPattern<mlir::memref::AllocOp> {
   }
 };
 
-// memref.dealloc of a cheddar buffer (lvalue<opaque>) is a no-op -- the
-// scope-bound emitc.variable is freed automatically. Erase it.
+// memref.dealloc of a cheddar payload buffer (lvalue<opaque>, a move-only
+// Ciphertext/Plaintext<word> that owns GPU memory) -> free the device buffer
+// *now* by move-assigning an empty handle (`v = {};`), which runs the payload's
+// destructor at last use. Without this, every intermediate stays live until the
+// enclosing C++ function returns (scope-bound RAII), so peak GPU memory is the
+// sum of ALL intermediates and large models OOM. The ownership-based buffer
+// deallocation pass inserts these deallocs at last use; here we lower them.
 struct EraseDealloc : public OpConversionPattern<mlir::memref::DeallocOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
       mlir::memref::DeallocOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     auto l = dyn_cast<emitc::LValueType>(adaptor.getMemref().getType());
-    if (!l || !isa<emitc::OpaqueType>(l.getValueType())) return failure();
+    if (!l) return failure();
+    if (isa<emitc::OpaqueType>(l.getValueType())) {
+      // Move-only payload: `v = {};` frees the GPU buffer (move-assign empty).
+      VerbatimOp::create(rewriter, op.getLoc(), "{} = {{}};",
+                         ValueRange{adaptor.getMemref()});
+    }
+    // Non-payload lvalues (e.g. plain float scalars) are scope-bound stack
+    // values with nothing to free -- just drop the dealloc.
     rewriter.eraseOp(op);
     return success();
   }
