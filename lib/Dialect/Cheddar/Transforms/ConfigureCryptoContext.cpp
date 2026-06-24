@@ -8,6 +8,7 @@
 #include "lib/Dialect/CKKS/IR/CKKSDialect.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Utils/TransformUtils.h"
 #include "llvm/include/llvm/ADT/SmallVector.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/IR/Bufferization.h"  // from @llvm-project
@@ -39,10 +40,20 @@ namespace {
 // become owning context/user_interface out-params after one-shot-bufferize +
 // buffer-results-to-out-params, and the cheddar-to-emitc boundary re-types them
 // to owning smart-pointer references.
+// When the program bootstraps, the generated configure builds a BootContext
+// (and runs the one-time bootstrap precompute + rotation-key request) instead
+// of a plain Context: the entry then takes a `!cheddar.boot_context`.
+// `numSlots` is the slot count the (full-slot) bootstrap refreshes;
+// `numCtsLevels` / `numStcLevels` are the CtS/StC level budgets (a
+// depth/rotations trade-off, cf. OpenFHE's level-budget-encode/decode),
+// threaded in as pass options.
 void buildConfigureFunc(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                         int64_t logScale, DenseI64ArrayAttr Q,
-                        DenseI64ArrayAttr P,
-                        ArrayRef<int64_t> rotationIndices) {
+                        DenseI64ArrayAttr P, ArrayRef<int64_t> rotationIndices,
+                        bool bootstraps, int64_t numSlots, int64_t numCtsLevels,
+                        int64_t numStcLevels, int64_t defaultEncLevel,
+                        int64_t denseHammingWeight,
+                        int64_t sparseHammingWeight) {
   MLIRContext *ctx = moduleOp.getContext();
   int64_t maxLevel = Q.size() - 1;
 
@@ -50,7 +61,10 @@ void buildConfigureFunc(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   builder.setInsertionPointToEnd(moduleOp.getBody());
   Location loc = entry.getLoc();
 
-  auto ctxTensor = RankedTensorType::get({}, ContextType::get(ctx));
+  // Bootstrapping programs hand back an owning BootContext; others a Context.
+  Type ctxElt = bootstraps ? Type(BootContextType::get(ctx))
+                           : Type(ContextType::get(ctx));
+  auto ctxTensor = RankedTensorType::get({}, ctxElt);
   auto uiTensor = RankedTensorType::get({}, UserInterfaceType::get(ctx));
   auto funcType = FunctionType::get(ctx, {}, {ctxTensor, uiTensor});
   // Discovered by name convention (`<entry>__configure`), like the lattigo
@@ -63,17 +77,33 @@ void buildConfigureFunc(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   builder.setInsertionPointToStart(bodyBlock);
 
   auto i64 = [&](int64_t v) { return builder.getI64IntegerAttr(v); };
-  Value params = MakeParameterOp::create(builder, loc, ParameterType::get(ctx),
-                                         i64(logN), i64(logScale), Q, P)
-                     .getParams();
+  // Bootstrapping pins default_encryption_level below the chain top and sets
+  // the secret-key hamming weights; non-boot leaves these null (emitter
+  // defaults).
+  IntegerAttr defaultEncAttr =
+      bootstraps ? i64(defaultEncLevel) : IntegerAttr();
+  IntegerAttr denseHwAttr =
+      bootstraps ? i64(denseHammingWeight) : IntegerAttr();
+  IntegerAttr sparseHwAttr =
+      bootstraps ? i64(sparseHammingWeight) : IntegerAttr();
+  Value params =
+      MakeParameterOp::create(builder, loc, ParameterType::get(ctx), i64(logN),
+                              i64(logScale), Q, P, defaultEncAttr, denseHwAttr,
+                              sparseHwAttr)
+          .getParams();
   // DPS destination buffers; bufferization hoists these allocs to the
   // out-params.
   Value ctxInit = bufferization::AllocTensorOp::create(builder, loc, ctxTensor,
                                                        ValueRange{})
                       .getResult();
-  Value context = CreateContextOp::create(builder, loc, TypeRange{ctxTensor},
-                                          ValueRange{params, ctxInit})
-                      ->getResult(0);
+  Value context =
+      bootstraps ? CreateBootContextOp::create(
+                       builder, loc, TypeRange{ctxTensor}, params,
+                       i64(numCtsLevels), i64(numStcLevels), ctxInit)
+                       ->getResult(0)
+                 : CreateContextOp::create(builder, loc, TypeRange{ctxTensor},
+                                           ValueRange{params, ctxInit})
+                       ->getResult(0);
   Value uiInit =
       bufferization::AllocTensorOp::create(builder, loc, uiTensor, ValueRange{})
           .getResult();
@@ -83,6 +113,12 @@ void buildConfigureFunc(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   for (int64_t d : rotationIndices)
     ui = PrepareRotKeyOp::create(builder, loc, TypeRange{uiTensor}, ui, i64(d),
                                  i64(maxLevel))
+             ->getResult(0);
+  // Bootstrap precompute + boot rotation keys land in the same UserInterface
+  // (EvkMap) as the program rotations above, so this must run last.
+  if (bootstraps)
+    ui = PrepareBootstrapOp::create(builder, loc, TypeRange{uiTensor}, context,
+                                    ui, i64(numSlots))
              ->getResult(0);
   func::ReturnOp::create(builder, loc, ValueRange{context, ui});
 }
@@ -143,8 +179,57 @@ struct CheddarConfigureCryptoContext
         const auto &indexSet = rotationAnalysis.getRotationIndices();
         SmallVector<int64_t> rotationIndices(indexSet.begin(), indexSet.end());
         llvm::sort(rotationIndices);  // deterministic key-prep order
+
+        // Bootstrapping programs need a BootContext + the one-time boot
+        // precompute. Detect by the presence of cheddar.boot (lwe-to-cheddar
+        // has already run at this point).
+        bool bootstraps = false;
+        moduleOp.walk([&](BootOp) { bootstraps = true; });
+        // Full-slot bootstrap refreshes the context's slot count; the lowering
+        // records it as the `scheme.actual_slot_count` module attribute.
+        int64_t numSlots = 0;
+        if (bootstraps) {
+          if (auto slotsAttr = moduleOp->getAttrOfType<IntegerAttr>(
+                  kActualSlotCountAttrName))
+            numSlots = slotsAttr.getInt();
+          else {
+            entry->emitOpError(
+                "bootstrapping program is missing the scheme.actual_slot_count "
+                "module attribute needed to configure the boot context");
+            signalPassFailure();
+            return;
+          }
+        }
+        // Bootstrap parameters: GenerateParamCKKS sized the modulus chain for
+        // the boot circuit and recorded the split (num_cts/num_stc) +
+        // default_encryption_level it assumed. Prefer those over the
+        // pass-option defaults so the chain, the BootParameter, and the
+        // Parameter agree (cheddar's BootContext asserts default_enc == max -
+        // num_cts - evalMod).
+        int64_t bootNumCts = numCtsLevels;
+        int64_t bootNumStc = numStcLevels;
+        int64_t defaultEncLevel = static_cast<int64_t>(Q.size()) - 1;
+        int64_t denseHammingWeight = 0;
+        int64_t sparseHammingWeight = 0;
+        if (bootstraps) {
+          if (auto a =
+                  moduleOp->getAttrOfType<IntegerAttr>("cheddar.boot.num_cts"))
+            bootNumCts = a.getInt();
+          if (auto a =
+                  moduleOp->getAttrOfType<IntegerAttr>("cheddar.boot.num_stc"))
+            bootNumStc = a.getInt();
+          if (auto a = moduleOp->getAttrOfType<IntegerAttr>(
+                  "cheddar.boot.default_encryption_level"))
+            defaultEncLevel = a.getInt();
+          // CHEDDAR's reference bootstrap params use a dense (full) secret-key
+          // hamming weight of N/2 and a sparse hamming weight of 32.
+          denseHammingWeight = int64_t{1} << (logN - 1);
+          sparseHammingWeight = 32;
+        }
         buildConfigureFunc(moduleOp, entry, logN, logDefaultScale, Q, P,
-                           rotationIndices);
+                           rotationIndices, bootstraps, numSlots, bootNumCts,
+                           bootNumStc, defaultEncLevel, denseHammingWeight,
+                           sparseHammingWeight);
       }
 
       // Remove the CKKS scheme param attribute — consumed

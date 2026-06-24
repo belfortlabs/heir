@@ -42,7 +42,15 @@ def _cheddar_deps_impl(_):
         build_file = "@heir//bazel/cheddar:cheddar.BUILD",
         commit = CHEDDAR_COMMIT,
         remote = "https://github.com/scale-snu/cheddar-fhe.git",
-        patches = ["@heir//patches:cheddar.patch"],
+        patches = [
+            "@heir//patches:cheddar.patch",
+            # Raise the NTT's compile-time max ring degree from 2^16 to 2^17 so
+            # wide models (e.g. CriteoHELRM, whose 65536-slot embeddings force
+            # logN=17) fit. CHEDDAR's NTT kernels are constexpr-generated per
+            # log_degree, so this just emits the extra logN=17 specialization;
+            # logN=17 ciphertexts are ~2x memory (needs a >=48GB GPU).
+            "@heir//patches:cheddar_max_log_degree.patch",
+        ],
         patch_args = ["-p1"],
     )
 

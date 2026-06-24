@@ -164,6 +164,7 @@
 #include "mlir/include/mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/Transforms/BufferDeallocationOpInterfaceImpl.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"  // from @llvm-project
+#include "mlir/include/mlir/Dialect/Arith/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/IR/Bufferization.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/Transforms/Passes.h"  // from @llvm-project
@@ -318,10 +319,11 @@ int main(int argc, char** argv) {
   mlir::registerConvertSCFToEmitCInterface(registry);
 
   // Misc
-  registerTransformsPasses();            // canonicalize, cse, etc.
-  affine::registerAffinePasses();        // loop unrolling
-  registerLinalgPasses();                // linalg to loops
-  mlir::memref::registerMemRefPasses();  // expand-strided-metadata, etc.
+  registerTransformsPasses();                 // canonicalize, cse, etc.
+  affine::registerAffinePasses();             // loop unrolling
+  registerLinalgPasses();                     // linalg to loops
+  mlir::memref::registerMemRefPasses();       // expand-strided-metadata, etc.
+  mlir::arith::registerArithExpandOpsPass();  // expand floordivsi/ceildiv/etc.
 
   // These are only needed by two tests that build a pass pipeline
   // from the CLI. Those tests can probably eventually be removed.

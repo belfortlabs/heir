@@ -14,9 +14,10 @@ package(
 # folded into the preceding Linear) lowered the rest of the way to emitc and
 # run on real folded weights + real MNIST images, checking the decrypted
 # classification against a plaintext reference computed in the harness. Much
-# simpler than the mnist relu model: Quad is a single ciphertext square, so the
-# IR needs only the mechanical canonical-scale bake (bake_scales.py), no relu
-# scale-align hand-edits.
+# simpler than the mnist relu model: Quad is a single ciphertext square. The
+# CheddarToEmitC emitter materialises each encode's scale at runtime as
+# `encoder.GetScale(level)` (the exact prime-derived canonical scale), so no
+# scale baking/hand-editing of the IR is needed.
 heir_opt(
     name = "orion_mlp_emitc",
     # Cheddar-level IR (already past --scheme-to-cheddar); lower it to emitc.

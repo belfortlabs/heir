@@ -9,10 +9,14 @@
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Utils/ConversionUtils.h"
-#include "llvm/include/llvm/ADT/DenseSet.h"     // from @llvm-project
-#include "llvm/include/llvm/ADT/STLExtras.h"    // from @llvm-project
-#include "llvm/include/llvm/ADT/SmallVector.h"  // from @llvm-project
-#include "llvm/include/llvm/ADT/StringSet.h"    // from @llvm-project
+#include "llvm/include/llvm/ADT/APFloat.h"          // from @llvm-project
+#include "llvm/include/llvm/ADT/DenseSet.h"         // from @llvm-project
+#include "llvm/include/llvm/ADT/STLExtras.h"        // from @llvm-project
+#include "llvm/include/llvm/ADT/SmallString.h"      // from @llvm-project
+#include "llvm/include/llvm/ADT/SmallVector.h"      // from @llvm-project
+#include "llvm/include/llvm/ADT/StringSet.h"        // from @llvm-project
+#include "llvm/include/llvm/Support/FileSystem.h"   // from @llvm-project
+#include "llvm/include/llvm/Support/raw_ostream.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/ConvertToEmitC/ToEmitCInterface.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/MemRefToEmitC/MemRefToEmitC.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"   // from @llvm-project
@@ -34,6 +38,7 @@
 namespace mlir::heir {
 
 #define GEN_PASS_DEF_CHEDDARTOEMITC
+#define GEN_PASS_DEF_CHEDDAREXTERNALIZEWEIGHTS
 #include "lib/Conversions/CheddarToEmitC/CheddarToEmitC.h.inc"
 
 namespace {
@@ -90,6 +95,8 @@ std::string stdArrayName(ArrayRef<int64_t> shape, StringRef elt) {
 // (`Context<word>*` / `UserInterface<word>*`).
 std::string owningHandleTypeName(Type t) {
   if (isa<cheddar::ContextType>(t)) return "std::shared_ptr<Context<word>>";
+  if (isa<cheddar::BootContextType>(t))
+    return "std::shared_ptr<BootContext<word>>";
   if (isa<cheddar::UserInterfaceType>(t))
     return "std::unique_ptr<UserInterface<word>>";
   return "";
@@ -377,14 +384,17 @@ struct ConvertMakeParameter
       cheddar::MakeParameterOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     Type t = typeConverter->convertType(op.getResult().getType());
-    auto* ctx = rewriter.getContext();
     int64_t logN = op.getLogN().getInt();
     int64_t logScale = op.getLogScale().getInt();
     ArrayRef<int64_t> mainPrimes = op.getMainPrimes();
     ArrayRef<int64_t> auxPrimes = op.getAuxPrimes();
     // Canonical one-main-prime-per-level layout: default encryption level is
-    // the deepest level, #mainPrimes - 1.
+    // the deepest level, #mainPrimes - 1, unless overridden (bootstrapping
+    // pins it below the chain top so the boot-circuit primes sit above it).
     int64_t maxLevel = static_cast<int64_t>(mainPrimes.size()) - 1;
+    int64_t defaultEncLevel = op.getDefaultEncryptionLevel()
+                                  ? op.getDefaultEncryptionLevelAttr().getInt()
+                                  : maxLevel;
 
     // level_config: the canonical one-main-prime-per-level layout
     // {{1, 0}, {2, 0}, ..., {#Q, 0}}.
@@ -409,20 +419,39 @@ struct ConvertMakeParameter
     std::string scaleLit = "static_cast<double>(static_cast<word>(1) << " +
                            std::to_string(logScale) + ")";
 
-    SmallVector<Attribute> args{
-        OpaqueAttr::get(ctx, std::to_string(logN)),
-        OpaqueAttr::get(ctx, scaleLit),
-        OpaqueAttr::get(ctx, std::to_string(maxLevel)),
-        OpaqueAttr::get(ctx, levelCfg),
-        OpaqueAttr::get(ctx, primeVec(mainPrimes)),
-        OpaqueAttr::get(ctx, primeVec(auxPrimes)),
-    };
-    SmallVector<Attribute> templateArgs{OpaqueAttr::get(ctx, "word")};
-    auto call = CallOpaqueOp::create(rewriter, op.getLoc(), TypeRange{t},
-                                     rewriter.getStringAttr("Parameter"),
-                                     ValueRange{}, rewriter.getArrayAttr(args),
-                                     rewriter.getArrayAttr(templateArgs));
-    rewriter.replaceOp(op, call.getResults());
+    // CHEDDAR's Context stores a `const Parameter<word>&` (it does NOT copy),
+    // so the Parameter must outlive the Context the generated `__configure`
+    // hands back. Emit it as a function-local `static` (constructed once on
+    // first call) and return an `emitc.literal` reference to it, rather than a
+    // plain local that would dangle once `__configure` returns.
+    std::string ctorArgs = std::to_string(logN) + ", " + scaleLit + ", " +
+                           std::to_string(defaultEncLevel) + ", " + levelCfg +
+                           ", " + primeVec(mainPrimes) + ", " +
+                           primeVec(auxPrimes);
+    StringRef name = "cheddar_param";
+    VerbatimOp::create(rewriter, op.getLoc(),
+                       ("static Parameter<word> " + name +
+                        " = Parameter<word>(" + ctorArgs + ");")
+                           .str(),
+                       ValueRange{});
+    // Bootstrapping needs the secret-key hamming weights set on the Parameter
+    // (sparse-secret bootstrapping); CHEDDAR's BootContext relies on them.
+    if (op.getDenseHammingWeight())
+      VerbatimOp::create(
+          rewriter, op.getLoc(),
+          (name + ".SetDenseHammingWeight(" +
+           std::to_string(op.getDenseHammingWeightAttr().getInt()) + ");")
+              .str(),
+          ValueRange{});
+    if (op.getSparseHammingWeight())
+      VerbatimOp::create(
+          rewriter, op.getLoc(),
+          (name + ".SetSparseHammingWeight(" +
+           std::to_string(op.getSparseHammingWeightAttr().getInt()) + ");")
+              .str(),
+          ValueRange{});
+    auto lit = emitc::LiteralOp::create(rewriter, op.getLoc(), t, name);
+    rewriter.replaceOp(op, lit.getResult());
     return success();
   }
 };
@@ -438,6 +467,59 @@ struct ConvertPrepareRotKey
     VerbatimOp::create(rewriter, op.getLoc(),
                        "{}->PrepareRotationKey(" + extra + ");",
                        ValueRange{adaptor.getUi()});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// create_boot_context: build the owning BootContext from the Parameter plus the
+// CtS/StC level budgets (BootParameter). Operands are (params, output).
+//   {out} = BootContext<word>::Create(param,
+//               BootParameter(param.max_level_, numCts, numStc));
+struct ConvertCreateBootContext
+    : public OpConversionPattern<cheddar::CreateBootContextOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      cheddar::CreateBootContextOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    std::string numCts = std::to_string(op.getNumCtsLevels().getInt());
+    std::string numStc = std::to_string(op.getNumStcLevels().getInt());
+    VerbatimOp::create(
+        rewriter, op.getLoc(),
+        "{} = BootContext<word>::Create({}, BootParameter({}.max_level_, " +
+            numCts + ", " + numStc + "));",
+        ValueRange{adaptor.getOutput(), adaptor.getParams(),
+                   adaptor.getParams()});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// prepare_bootstrap: the one-time bootstrap precompute + rotation-key request.
+// Mutates the boot context (eval-mod / special-FFT precompute) and threads the
+// required rotation keys into the user interface. Mirrors CHEDDAR's canonical
+// boot preparation sequence.
+struct ConvertPrepareBootstrap
+    : public OpConversionPattern<cheddar::PrepareBootstrapOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      cheddar::PrepareBootstrapOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    std::string n = std::to_string(op.getNumSlots().getInt());
+    Value ctx = adaptor.getCtx();
+    Value ui = adaptor.getUi();
+    VerbatimOp::create(rewriter, op.getLoc(), "{}->PrepareEvalMod();",
+                       ValueRange{ctx});
+    VerbatimOp::create(rewriter, op.getLoc(),
+                       "{}->PrepareEvalSpecialFFT(" + n + ");",
+                       ValueRange{ctx});
+    VerbatimOp::create(rewriter, op.getLoc(), "EvkRequest boot_evk_req;",
+                       ValueRange{});
+    VerbatimOp::create(rewriter, op.getLoc(),
+                       "{}->AddRequiredRotations(boot_evk_req, " + n + ");",
+                       ValueRange{ctx});
+    VerbatimOp::create(rewriter, op.getLoc(),
+                       "{}->PrepareRotationKey(boot_evk_req);", ValueRange{ui});
     rewriter.eraseOp(op);
     return success();
   }
@@ -1096,9 +1178,10 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
                  ConvertExpandShapeFloatCopy, ConvertGlobalDropAlign>(
         typeConverter, ctx, /*benefit=*/2);
 
-    patterns.add<ConvertMakeParameter, ConvertPrepareRotKey, ConvertEncode,
-                 ConvertEncodeConstant, ConvertDecode, ConvertHRot,
-                 ConvertHRotAdd, ConvertHConj, ConvertHConjAdd,
+    patterns.add<ConvertMakeParameter, ConvertPrepareRotKey,
+                 ConvertCreateBootContext, ConvertPrepareBootstrap,
+                 ConvertEncode, ConvertEncodeConstant, ConvertDecode,
+                 ConvertHRot, ConvertHRotAdd, ConvertHConj, ConvertHConjAdd,
                  ConvertLinearTransform, ConvertEvalPoly>(typeConverter, ctx);
     patterns.add<ConvertSetupAssign<cheddar::CreateContextOp>>(
         typeConverter, ctx, "Context<word>::Create");
@@ -1328,6 +1411,119 @@ struct CheddarToEmitCPass
         if (auto kept = stripTensorExt(fn.getResultAttrDict(i)))
           fn.setResultAttrs(i, *kept);
     });
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// cheddar-externalize-weights pass
+//===----------------------------------------------------------------------===//
+
+// Write a large emitc.global weight initializer's raw float bytes to
+// <data-dir>/<name>.bin and strip the initializer; emit a __load_constants()
+// loader of verbatim `heir_load_f32(...)` calls. See the .td.
+struct CheddarExternalizeWeights
+    : impl::CheddarExternalizeWeightsBase<CheddarExternalizeWeights> {
+  using CheddarExternalizeWeightsBase::CheddarExternalizeWeightsBase;
+
+  void runOnOperation() override {
+    if (dataDir.empty()) return;
+    ModuleOp mod = cast<ModuleOp>(getOperation());
+    MLIRContext* ctx = &getContext();
+
+    if (std::error_code ec = llvm::sys::fs::create_directories(dataDir)) {
+      mod.emitError() << "cheddar-externalize-weights: cannot create data-dir '"
+                      << dataDir << "': " << ec.message();
+      signalPassFailure();
+      return;
+    }
+
+    SmallVector<std::pair<std::string, int64_t>> loaded;  // (name, numElements)
+    // (name, numElements, valueLiteral) for large non-zero splats filled at
+    // load time; all-zero splats need no entry (C++ static zero-init).
+    SmallVector<std::tuple<std::string, int64_t, std::string>> splatFills;
+    bool writeFailed = false;
+    mod.walk([&](emitc::GlobalOp g) {
+      if (writeFailed) return;
+      Attribute init = g.getInitialValueAttr();
+      if (!init) return;
+      auto arrTy = dyn_cast<emitc::ArrayType>(g.getType());
+      if (!arrTy || !isa<FloatType>(arrTy.getElementType())) return;
+      int64_t n = 1;
+      for (int64_t d : arrTy.getShape()) n *= d;
+
+      ArrayRef<char> bytes;
+      if (auto dr = dyn_cast<DenseResourceElementsAttr>(init)) {
+        // torch-mlir stores large weights as resource blobs; externalize any.
+        bytes = dr.getData();
+        if (bytes.empty()) return;  // data not materialized; leave inline
+      } else if (auto de = dyn_cast<DenseElementsAttr>(init)) {
+        // Small dense constants emit fine inline.
+        if (n <= threshold) return;
+        // A *large* splat must never stay inline: heir-translate expands an
+        // array initializer element-by-element, so a splat global (e.g. a
+        // 512x65536 zero-padded ciphertext-width buffer) balloons the emitted
+        // C++ by hundreds of MB and makes the host compiler OOM. Drop the
+        // initializer instead -- an all-zero splat then relies on C++ static
+        // zero-initialization (no data file), and a non-zero splat is filled
+        // in __load_constants. Only genuine large non-splat weights get a blob.
+        if (de.isSplat()) {
+          APFloat sv = de.getSplatValue<APFloat>();
+          g.removeInitialValueAttr();
+          if (!sv.isZero()) {
+            SmallString<32> sbuf;
+            sv.toString(sbuf);
+            splatFills.emplace_back(g.getSymName().str(), n, std::string(sbuf));
+          }
+          return;
+        }
+        bytes = de.getRawData();
+      } else {
+        return;
+      }
+
+      std::string path = dataDir + "/" + g.getSymName().str() + ".bin";
+      std::error_code ec;
+      llvm::raw_fd_ostream os(path, ec, llvm::sys::fs::OF_None);
+      if (ec) {
+        g.emitError() << "cannot write weight blob '" << path
+                      << "': " << ec.message();
+        writeFailed = true;
+        return;
+      }
+      os.write(bytes.data(), bytes.size());
+      os.close();
+
+      g.removeInitialValueAttr();
+      loaded.emplace_back(g.getSymName().str(), n);
+    });
+    if (writeFailed) {
+      signalPassFailure();
+      return;
+    }
+    if (loaded.empty() && splatFills.empty()) return;
+
+    // Generate `void __load_constants()` that loads each blob into its global
+    // and fills any large non-zero splat global.
+    OpBuilder b(ctx);
+    b.setInsertionPointToEnd(mod.getBody());
+    Location loc = mod.getLoc();
+    auto fn = func::FuncOp::create(b, loc, "__load_constants",
+                                   FunctionType::get(ctx, {}, {}));
+    fn.setPublic();
+    b.setInsertionPointToStart(fn.addEntryBlock());
+    for (auto& [name, n] : loaded) {
+      std::string txt = "heir_load_f32(\"data/" + name + ".bin\", " +
+                        "reinterpret_cast<float*>(" + name + "), " +
+                        std::to_string(n) + ");";
+      VerbatimOp::create(b, loc, txt, ValueRange{});
+    }
+    for (auto& [name, n, val] : splatFills) {
+      std::string txt = "for (size_t __i = 0; __i < " + std::to_string(n) +
+                        "; ++__i) reinterpret_cast<float*>(" + name +
+                        ")[__i] = static_cast<float>(" + val + ");";
+      VerbatimOp::create(b, loc, txt, ValueRange{});
+    }
+    func::ReturnOp::create(b, loc);
   }
 };
 

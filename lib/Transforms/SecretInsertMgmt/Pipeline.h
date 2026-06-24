@@ -44,7 +44,8 @@ void adjustLevelsForRegionBranchOps(Operation* top);
 void handleCrossLevelOps(Operation* top, int* idCounter, bool includeFloats,
                          bool cheddarMode);
 
-void handleCrossMulDepthOps(Operation* top, int* idCounter, bool includeFloats);
+void handleCrossMulDepthOps(Operation* top, int* idCounter, bool includeFloats,
+                            bool cheddarMode);
 
 void insertBootstrapWaterLine(Operation* top, int bootstrapWaterline);
 
