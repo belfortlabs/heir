@@ -29,12 +29,32 @@ class Cheddar_Op<string mnemonic, list<Trait> traits = []> :
 // `$accumulator` for a true in-place update).
 class Cheddar_DpsOp<string mnemonic, list<Trait> traits = [],
                     string initName = "Output"> :
-        Cheddar_Op<mnemonic, traits # [DestinationStyleOpInterface]> {
+        Cheddar_Op<mnemonic, traits # [DestinationStyleOpInterface,
+            DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let extraClassDeclaration = [{
     // The single init operand as a (length-1) MutableOperandRange.
     ::mlir::MutableOperandRange getDpsInitsMutable() {
       return ::mlir::MutableOperandRange(
           getOperation(), get}] # initName # [{Mutable().getOperandNumber(), 1);
+    }
+    // Operand-aware memory effects (linalg-style): only memref operands carry
+    // effects, so the tensor form stays value-semantics/side-effect-free (and
+    // DCE/CSE-able) while the bufferized memref form reports read/write. The DPS
+    // init memref is written; other memref operands are read. This lets the
+    // stock ownership-based buffer-deallocation analyze the bufferized cheddar
+    // ops and free intermediate GPU buffers at their last use.
+    void getEffects(::llvm::SmallVectorImpl<::mlir::SideEffects::EffectInstance<
+                        ::mlir::MemoryEffects::Effect>> &effects) {
+      for (::mlir::OpOperand &operand : getOperation()->getOpOperands()) {
+        if (!::llvm::isa<::mlir::MemRefType>(operand.get().getType()))
+          continue;
+        if (isDpsInit(&operand))
+          effects.emplace_back(::mlir::MemoryEffects::Write::get(), &operand,
+                               ::mlir::SideEffects::DefaultResource::get());
+        else
+          effects.emplace_back(::mlir::MemoryEffects::Read::get(), &operand,
+                               ::mlir::SideEffects::DefaultResource::get());
+      }
     }
   }];
 }
@@ -285,7 +305,7 @@ def Cheddar_DecodeOp : Cheddar_DpsOp<"decode", [], "Value"> {
   let results = (outs Variadic<AnyRankedTensor>:$decoded);
 }
 
-def Cheddar_EncryptOp : Cheddar_DpsOp<"encrypt", [MemoryEffects<[MemWrite]>]> {
+def Cheddar_EncryptOp : Cheddar_DpsOp<"encrypt"> {
   let summary = "Encrypt a plaintext into a ciphertext";
   let description = [{
     Calls ui.Encrypt(ct, pt). Test-only operation. `$output` is the destination
@@ -299,7 +319,7 @@ def Cheddar_EncryptOp : Cheddar_DpsOp<"encrypt", [MemoryEffects<[MemWrite]>]> {
   let results = (outs Cheddar_CtResult:$result);
 }
 
-def Cheddar_DecryptOp : Cheddar_DpsOp<"decrypt", [MemoryEffects<[MemWrite]>]> {
+def Cheddar_DecryptOp : Cheddar_DpsOp<"decrypt"> {
   let summary = "Decrypt a ciphertext into a plaintext";
   let description = [{
     Calls ui.Decrypt(pt, ct). Test-only operation. `$output` is the destination
