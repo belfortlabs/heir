@@ -801,17 +801,28 @@ struct EraseDealloc : public OpConversionPattern<mlir::memref::DeallocOp> {
   LogicalResult matchAndRewrite(
       mlir::memref::DeallocOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    auto l = dyn_cast<emitc::LValueType>(adaptor.getMemref().getType());
-    if (!l) return failure();
-    if (isa<emitc::OpaqueType>(l.getValueType())) {
-      // Move-only payload: `v = {};` frees the GPU buffer (move-assign empty).
-      VerbatimOp::create(rewriter, op.getLoc(), "{} = {{}};",
-                         ValueRange{adaptor.getMemref()});
+    Type memTy = adaptor.getMemref().getType();
+    if (auto l = dyn_cast<emitc::LValueType>(memTy)) {
+      if (isa<emitc::OpaqueType>(l.getValueType())) {
+        // Move-only payload: `v = {};` frees the GPU buffer (move-assign
+        // empty). emitc.verbatim escaping here: `{{` -> `{`, and a lone `}` is
+        // literal, so the empty-brace init `{};` is written as `{{};`.
+        VerbatimOp::create(rewriter, op.getLoc(), "{} = {{};",
+                           ValueRange{adaptor.getMemref()});
+      }
+      // Non-payload lvalues (e.g. plain float scalars) are scope-bound stack
+      // values with nothing to free -- just drop the dealloc.
+      rewriter.eraseOp(op);
+      return success();
     }
-    // Non-payload lvalues (e.g. plain float scalars) are scope-bound stack
-    // values with nothing to free -- just drop the dealloc.
-    rewriter.eraseOp(op);
-    return success();
+    // Plain float buffers lower to scope-bound stack arrays (emitc.array); the
+    // ownership-based dealloc still inserts a memref.dealloc for them, which
+    // has nothing to free -- drop it.
+    if (isa<emitc::ArrayType>(memTy)) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+    return failure();
   }
 };
 
