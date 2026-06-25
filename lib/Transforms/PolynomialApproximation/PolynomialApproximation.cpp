@@ -13,6 +13,7 @@
 #include "lib/Dialect/Polynomial/IR/PolynomialTypes.h"
 #include "lib/Utils/Approximation/CaratheodoryFejer.h"
 #include "lib/Utils/Polynomial/Polynomial.h"
+#include "lib/Utils/Utils.h"
 #include "llvm/include/llvm/ADT/APFloat.h"             // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"           // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
@@ -209,6 +210,32 @@ inline APFloat minnumf(const APFloat& lhs, const APFloat& rhs) {
   APFloat lhsConverted = APFloat(lhs.convertToDouble());
   APFloat rhsConverted = APFloat(rhs.convertToDouble());
   return llvm::minimumnum(lhsConverted, rhsConverted);
+}
+
+// Rescale `x` from [lower, upper] onto Chebyshev's native [-1, 1] domain via
+// the explicit affine map x -> x*(2/(U-L)) - (U+L)/(U-L). Mirrors the rescale
+// in LowerViaPatersonStockmeyerChebyshev (LowerPolynomialEval/Patterns.cpp). We
+// materialize it HERE (before level/scale analysis) when the consumer is a kept
+// Chebyshev kernel (orion-kernel path), because cheddar's eval_poly only
+// evaluates on [-1, 1] and the unrolled rescale in LowerPolynomialEval is
+// skipped on that path. For symmetric domains the shift is 0, so this is a
+// single scalar multiply.
+static Value rescaleToUnitInterval(PatternRewriter& rewriter, Location loc,
+                                   Value x, double lower, double upper) {
+  APFloat rescale = APFloat(2 / (upper - lower));
+  APFloat shift = APFloat(-(upper + lower) / (upper - lower));
+  Type ty = x.getType();
+  if (!rescale.isExactlyValue(1.0)) {
+    auto c = arith::ConstantOp::create(rewriter, loc, ty,
+                                       getScalarOrDenseAttr(ty, rescale));
+    x = arith::MulFOp::create(rewriter, loc, x, c).getResult();
+  }
+  if (!shift.isZero()) {
+    auto c = arith::ConstantOp::create(rewriter, loc, ty,
+                                       getScalarOrDenseAttr(ty, shift));
+    x = arith::AddFOp::create(rewriter, loc, x, c).getResult();
+  }
+  return x;
 }
 
 template <typename OpTy>
@@ -489,18 +516,16 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
       return eval.getResult();
     };
 
-    // step(x/B) via the 3-stage composite sign approximation. The 1/B prescale
-    // is FOLDED into the first eval's domain ([-B, B] -> [-1, 1]) rather than
-    // emitted as an explicit `x * invB` multiply: cheby0 over domain [-B, B] on
-    // x equals cheby0 over [-1, 1] on x/B. This removes x's second use — x now
-    // feeds only the first sign eval (which is opaque to scale
-    // back-propagation) and the final `x * step` multiply, so the scale lattice
-    // determines x's scale cleanly from that single multiply. The explicit
-    // prescale multiply previously forked x's scale demand across two
-    // multiplies at different levels, leaving the residual-add
-    // `adjust_scale`/prescale `init` ops unpopulated in the orion-kernel path
-    // (kept chebyshev/conv ops).
-    Value s0 = makeEval(x, kCompositeSignPoly0, -bound, bound);
+    // step(x/B) via the 3-stage composite sign approximation. cheby0 is fit on
+    // [-1, 1], so prescale x by 1/B explicitly (x -> x/B maps [-B, B] -> [-1,
+    // 1]) and feed the result to the first eval on domain [-1, 1]. The explicit
+    // multiply is required for the orion-kernel path: cheddar's eval_poly only
+    // evaluates on [-1, 1], so the [-B, B] domain cannot be folded into the
+    // kept Chebyshev kernel (LowerPolynomialEval, which would otherwise apply
+    // the rescale for the unrolled path, is skipped). x itself is unchanged and
+    // still feeds the final `x * step` multiply at its native scale.
+    Value xPrescaled = rescaleToUnitInterval(rewriter, loc, x, -bound, bound);
+    Value s0 = makeEval(xPrescaled, kCompositeSignPoly0, -1.0, 1.0);
     Value s1 = makeEval(s0, kCompositeSignPoly1, -1.0, 1.0);
     Value step = makeEval(s1, kCompositeSignPoly2, -1.0, 1.0);
     // ReLU(x) = x * step(x/B)  (step in [0,1]; B>0 so sign unchanged by scale)
