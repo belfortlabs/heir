@@ -194,16 +194,54 @@ struct ConvertCKKSPlainOp : public OpConversionPattern<CKKSOp> {
   }
 };
 
+// Ct-pt subtraction. cheddar.sub_plain computes ct - pt, so it requires the
+// ciphertext first -- but unlike add/mul, subtraction is NOT commutative, so a
+// blind operand swap turns `pt - ct` into `ct - pt` (a sign flip). When the
+// plaintext is the lhs, lower `pt - ct` as `(-ct) + pt` (negate then
+// add_plain). Mirrors LWEToLattigo's ConvertRlweSubPlainOp.
+template <typename CKKSOp>
+struct ConvertCKKSSubPlainOpImpl : public OpConversionPattern<CKKSOp> {
+  using OpConversionPattern<CKKSOp>::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      CKKSOp op, typename CKKSOp::Adaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    auto ctx = getContextualContext(op.getOperation());
+    if (failed(ctx)) return ctx;
+    auto isCt = [](Value v) {
+      auto t = dyn_cast<RankedTensorType>(v.getType());
+      return t && isa<cheddar::CiphertextType>(t.getElementType());
+    };
+    Type resultTy = this->typeConverter->convertType(op.getOutput().getType());
+    if (isCt(adaptor.getLhs())) {
+      // ct - pt: direct.
+      Value dest = makeDest(rewriter, op.getLoc(), resultTy);
+      rewriter.replaceOpWithNewOp<cheddar::SubPlainOp>(
+          op, resultTy, ctx.value(), adaptor.getLhs(), adaptor.getRhs(), dest);
+      return success();
+    }
+    // pt - ct  ==  (-ct) + pt
+    Value plaintext = adaptor.getLhs();
+    Value ciphertext = adaptor.getRhs();
+    Value negDest = makeDest(rewriter, op.getLoc(), resultTy);
+    Value negated = cheddar::NegOp::create(rewriter, op.getLoc(), resultTy,
+                                           ctx.value(), ciphertext, negDest)
+                        ->getResult(0);
+    Value addDest = makeDest(rewriter, op.getLoc(), resultTy);
+    rewriter.replaceOpWithNewOp<cheddar::AddPlainOp>(
+        op, resultTy, ctx.value(), negated, plaintext, addDest);
+    return success();
+  }
+};
+
 using ConvertCKKSAddPlainOp =
     ConvertCKKSPlainOp<ckks::AddPlainOp, cheddar::AddPlainOp>;
-using ConvertCKKSSubPlainOp =
-    ConvertCKKSPlainOp<ckks::SubPlainOp, cheddar::SubPlainOp>;
+using ConvertCKKSSubPlainOp = ConvertCKKSSubPlainOpImpl<ckks::SubPlainOp>;
 using ConvertCKKSMulPlainOp =
     ConvertCKKSPlainOp<ckks::MulPlainOp, cheddar::MultPlainOp>;
 using ConvertRAddPlainOp =
     ConvertCKKSPlainOp<lwe::RAddPlainOp, cheddar::AddPlainOp>;
-using ConvertRSubPlainOp =
-    ConvertCKKSPlainOp<lwe::RSubPlainOp, cheddar::SubPlainOp>;
+using ConvertRSubPlainOp = ConvertCKKSSubPlainOpImpl<lwe::RSubPlainOp>;
 using ConvertRMulPlainOp =
     ConvertCKKSPlainOp<lwe::RMulPlainOp, cheddar::MultPlainOp>;
 
