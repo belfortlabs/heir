@@ -516,8 +516,18 @@ struct ConvertPrepareBootstrap
     Value ui = adaptor.getUi();
     VerbatimOp::create(rewriter, op.getLoc(), "{}->PrepareEvalMod();",
                        ValueRange{ctx});
+    // kImaginaryRemoving: CKKS bootstrap (CoeffToSlot/EvalMod/SlotToCoeff)
+    // leaves the EvalMod error + conjugate term in the imaginary slots; the
+    // default kNormal variant does NOT strip them. A real-valued pipeline must
+    // remove them at prepare time (the variant also halves the SlotToCoeff
+    // constant, so bolting on a post-hoc HConjAdd would double the real part
+    // instead). Left as kNormal, a boot output carries a hidden imaginary
+    // component that the downstream (complex-linear) layers propagate and the
+    // Chebyshev eval_poly -- bounded only on the real axis -- detonates on
+    // (~1e16+).
     VerbatimOp::create(rewriter, op.getLoc(),
-                       "{}->PrepareEvalSpecialFFT(" + n + ");",
+                       "{}->PrepareEvalSpecialFFT(" + n +
+                           ", cheddar::BootVariant::kImaginaryRemoving);",
                        ValueRange{ctx});
     VerbatimOp::create(rewriter, op.getLoc(), "EvkRequest boot_evk_req;",
                        ValueRange{});
@@ -784,7 +794,7 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
     Value out = adaptor.getOutput();
     Value evk = adaptor.getEvkMap();
     // EvalPoly internally drops level_consumption = Log2Ceil(degree+1) levels;
-    // the level analysis already encoded that as level - outputLevel.
+    // the level analysis encodes that as level - outputLevel.
     int64_t levelConsumption =
         op.getLevelAttr().getInt() - op.getOutputLevelAttr().getInt();
 
