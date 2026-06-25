@@ -19,6 +19,7 @@
 !plaintext = !cheddar.plaintext
 !constant = !cheddar.constant
 !context = !cheddar.context
+!encoder = !cheddar.encoder
 
 // Add / Sub / Mult chained on ciphertexts.
 func.func @arith(%ctx: !context, %a: tensor<!ciphertext>,
@@ -172,7 +173,7 @@ func.func @linear_transform(%ctx: !context, %ct: tensor<!ciphertext>,
   return %0 : tensor<!ciphertext>
 }
 
-func.func @eval_poly(%ctx: !context, %ct: tensor<!ciphertext>,
+func.func @eval_poly(%ctx: !context, %enc: !encoder, %ct: tensor<!ciphertext>,
                      %evk: !cheddar.evk_map) -> tensor<!ciphertext> {
   %d0 = bufferization.alloc_tensor() : tensor<!ciphertext>
   %0 = cheddar.eval_poly %ctx, %ct, %evk, %d0

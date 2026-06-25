@@ -40,6 +40,13 @@ struct Parameter {
   double GetScale(int level) const;
 };
 
+// The encoder exposes the per-level canonical scale (the EvalPoly emitter reads
+// input/target scales via `encoder.GetScale(level)`).
+template <typename word>
+struct Encoder {
+  double GetScale(int level) const;
+};
+
 // Move-only payload types with full move support (default + move-ctor +
 // move-assign; copy deleted).
 template <typename word>
