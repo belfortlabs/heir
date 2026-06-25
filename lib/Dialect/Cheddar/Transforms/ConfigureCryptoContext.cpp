@@ -56,17 +56,23 @@ void buildConfigureFunc(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                         int64_t logMessageRatio) {
   MLIRContext *ctx = moduleOp.getContext();
   int64_t maxLevel = Q.size() - 1;
-  // EvalMod message headroom passed to CHEDDAR's BootParameter. When the option
-  // is left at -1, derive it from the chain: log2(q0/scale) = firstModBits -
-  // logScale, less a 2-bit margin so messages with |m| up to ~2^((ratio)-4)
-  // (a few units, the usual activation range) stay clear of the sine domain
-  // edge without inflating the absolute noise floor. Q holds the actual primes,
-  // so firstModBits = ceil(log2(q0)).
+  // EvalMod message headroom passed to CHEDDAR's BootParameter. This is the
+  // reserved bits for the MESSAGE magnitude (~log2(max|m|)+margin), NOT a
+  // function of the modulus chain: CHEDDAR scales the level-0 message UP by
+  // (log2(q0/scale) - log_message_ratio) bits before EvalMod, so the message
+  // fills the accurate part of the fixed sine (sin 2*pi*x) minimax. Too LARGE a
+  // ratio under-scales the message into the inaccurate low end of the sine ->
+  // the bootstrap stops being identity and silently corrupts its output (which
+  // then detonates a downstream Chebyshev eval). The old
+  // firstModBits-logScale-2 formula tied the headroom to the chain and gave ~13
+  // (log_scaleup_ ~= 2, a 256x under-scale). For the normalized activations
+  // these models bootstrap
+  // (|m| ~ O(1), the sign/ReLU inputs), CHEDDAR's default headroom of 5 is the
+  // right magnitude (log_scaleup_ ~= 10). Override via the `log-message-ratio`
+  // option for a model with a larger message bound.
   int64_t effLogMessageRatio = logMessageRatio;
   if (bootstraps && effLogMessageRatio < 0) {
-    int64_t firstModBits =
-        Q.empty() ? 0 : llvm::Log2_64_Ceil(static_cast<uint64_t>(Q[0]));
-    effLogMessageRatio = firstModBits - logScale - 2;
+    effLogMessageRatio = 5;
   }
 
   OpBuilder builder(ctx);
