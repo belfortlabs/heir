@@ -30,3 +30,15 @@ func.func @debug_chain(%enc: !encoder, %ui: !user_interface, %ct: tensor<!cipher
   func.call @__heir_debug_0(%enc, %ui, %ct) {debug.name = "heir_val0", debug.metadata = "heir_meta0"} : (!encoder, !user_interface, tensor<!ciphertext>) -> ()
   return
 }
+
+// A rank-1 (1-element array) ciphertext value -- the usual cheddar value rep --
+// lowers the ct operand to a const std::array<Ciphertext<word>, N>& (the
+// medusa C++ hook overloads on both this and the scalar form).
+// CHECK: func.func @debug_arr
+// CHECK: emitc.call_opaque "__heir_debug"
+// CHECK-SAME: !emitc.opaque<"const std::array<Ciphertext<word>, 1>&">
+func.func private @__heir_debug_1(!encoder, !user_interface, tensor<1x!ciphertext>)
+func.func @debug_arr(%enc: !encoder, %ui: !user_interface, %ct: tensor<1x!ciphertext>) {
+  func.call @__heir_debug_1(%enc, %ui, %ct) {debug.name = "arr0", debug.metadata = "m"} : (!encoder, !user_interface, tensor<1x!ciphertext>) -> ()
+  return
+}

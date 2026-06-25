@@ -658,9 +658,14 @@ struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
       ConversionPatternRewriter& rewriter) const override {
     if (!op.isExternal() || !isDebugPort(op.getName())) return failure();
     auto* ctx = getContext();
-    SmallVector<Type> argTypes{
-        cheddar::EncoderType::get(ctx), cheddar::UserInterfaceType::get(ctx),
-        RankedTensorType::get({}, cheddar::CiphertextType::get(ctx))};
+    // The original decl's last arg is the lwe ciphertext tensor (real IR uses a
+    // 1-element array, tensor<1x!lwe.lwe_ciphertext>, not a scalar); convert it
+    // preserving rank so the decl matches the (converted) call operand type.
+    Type origCt = op.getFunctionType().getInputs().back();
+    Type cheddarCt = getTypeConverter()->convertType(origCt);
+    if (!cheddarCt) return failure();
+    SmallVector<Type> argTypes{cheddar::EncoderType::get(ctx),
+                               cheddar::UserInterfaceType::get(ctx), cheddarCt};
     rewriter.modifyOpInPlace(
         op, [&] { op.setType(FunctionType::get(ctx, argTypes, {})); });
     return success();
