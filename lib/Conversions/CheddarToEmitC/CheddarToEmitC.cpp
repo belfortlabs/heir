@@ -485,10 +485,15 @@ struct ConvertCreateBootContext
       ConversionPatternRewriter& rewriter) const override {
     std::string numCts = std::to_string(op.getNumCtsLevels().getInt());
     std::string numStc = std::to_string(op.getNumStcLevels().getInt());
+    // log_message_ratio (4th BootParameter arg) governs EvalMod precision; when
+    // unset, omit it so CHEDDAR's BootParameter default applies.
+    std::string ratioArg;
+    if (auto r = op.getLogMessageRatioAttr())
+      ratioArg = ", " + std::to_string(r.getInt());
     VerbatimOp::create(
         rewriter, op.getLoc(),
         "{} = BootContext<word>::Create({}, BootParameter({}.max_level_, " +
-            numCts + ", " + numStc + "));",
+            numCts + ", " + numStc + ratioArg + "));",
         ValueRange{adaptor.getOutput(), adaptor.getParams(),
                    adaptor.getParams()});
     rewriter.eraseOp(op);
