@@ -1030,6 +1030,28 @@ struct ConvertSubViewSubscript
   }
 };
 
+// memref.cast of a payload buffer -> forward the converted source. The
+// rank-reducing extract_slice that pulls a single ciphertext out of a
+// `tensor<1x!cheddar.X>` packing container produces a `strided<[]>` rank-0
+// memref; when that feeds an extern call (the __heir_debug read) whose decl arg
+// is the plain unstrided memref, a `memref.cast` strided<[]> -> plain is
+// inserted. Both sides are the same Ciphertext/Plaintext lvalue at the C++
+// level, so the cast is a no-op: replace it with its (already converted)
+// source.
+struct ConvertPayloadCast : public OpConversionPattern<mlir::memref::CastOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      mlir::memref::CastOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    auto resTy = dyn_cast<MemRefType>(op.getType());
+    if (!resTy || !isa<cheddar::CiphertextType, cheddar::PlaintextType,
+                       cheddar::ConstantType>(resTy.getElementType()))
+      return failure();
+    rewriter.replaceOp(op, adaptor.getSource());
+    return success();
+  }
+};
+
 // memref.subview producing a strided slice of a float C-array buffer ->
 // `&base[o...]`, a raw pointer (the message slice fed to cheddar.encode).
 struct ConvertSubViewToPointer
@@ -1255,8 +1277,8 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
     patterns.add<ConvertAllocLocal, EraseDealloc, ConvertLoadArray,
                  ConvertStoreArray, ConvertCopy, ConvertMemRefCopyFloat,
                  ConvertSubViewSubscript, ConvertSubViewToPointer,
-                 ConvertExpandShapeFloatCopy, ConvertGlobalDropAlign>(
-        typeConverter, ctx, /*benefit=*/2);
+                 ConvertPayloadCast, ConvertExpandShapeFloatCopy,
+                 ConvertGlobalDropAlign>(typeConverter, ctx, /*benefit=*/2);
 
     patterns.add<ConvertMakeParameter, ConvertPrepareRotKey,
                  ConvertCreateBootContext, ConvertPrepareBootstrap,
