@@ -557,15 +557,19 @@ BackendPipelineBuilder toCheddarPipelineBuilder() {
     // Convert CKKS to LWE
     pm.addPass(ckks::createCKKSToLWE());
 
-    // Insert debug handler calls (decrypt-and-validate after every ciphertext
-    // op) and/or lower any debug.validate ops to `__heir_debug_*` func calls.
-    // Run while values are still `!lwe.ciphertext` so the shared lwe machinery
-    // applies; LWEToCheddar then converts the `__heir_debug_*` decls/calls to
-    // the cheddar context+ciphertext form, and CheddarToEmitC emits them as
-    // `__heir_debug(...)` C++ calls.
+    // Lower any debug.validate ops (inserted by the frontend at meaningful
+    // layer boundaries -- the same high-level annotation the lattigo path uses)
+    // to `__heir_debug_*` func calls. Run while values are still
+    // `!lwe.ciphertext` so the shared lwe machinery applies; LWEToCheddar then
+    // converts the decls/calls to the cheddar context+ciphertext form, and
+    // CheddarToEmitC emits them as `__heir_debug(...)` C++ calls. We never
+    // insert-after-every-op here: cheddar --debug uses the per-layer annotation
+    // (with a plaintext comparison), and an every-op decrypt would both bury
+    // those points and break op fusion's adjacency. `options.debug` instead
+    // just marks a debug build (skips fusion below).
     lwe::AddDebugPortOptions addDebugPortOptions{
         .entryFunction = options.entryFunction,
-        .insertDebugAfterEveryOp = options.debug,
+        .insertDebugAfterEveryOp = false,
     };
     pm.addPass(lwe::createAddDebugPort(addDebugPortOptions));
 
