@@ -52,10 +52,22 @@ void buildConfigureFunc(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                         DenseI64ArrayAttr P, ArrayRef<int64_t> rotationIndices,
                         bool bootstraps, int64_t numSlots, int64_t numCtsLevels,
                         int64_t numStcLevels, int64_t defaultEncLevel,
-                        int64_t denseHammingWeight,
-                        int64_t sparseHammingWeight) {
+                        int64_t denseHammingWeight, int64_t sparseHammingWeight,
+                        int64_t logMessageRatio) {
   MLIRContext *ctx = moduleOp.getContext();
   int64_t maxLevel = Q.size() - 1;
+  // EvalMod message headroom passed to CHEDDAR's BootParameter. When the option
+  // is left at -1, derive it from the chain: log2(q0/scale) = firstModBits -
+  // logScale, less a 2-bit margin so messages with |m| up to ~2^((ratio)-4)
+  // (a few units, the usual activation range) stay clear of the sine domain
+  // edge without inflating the absolute noise floor. Q holds the actual primes,
+  // so firstModBits = ceil(log2(q0)).
+  int64_t effLogMessageRatio = logMessageRatio;
+  if (bootstraps && effLogMessageRatio < 0) {
+    int64_t firstModBits =
+        Q.empty() ? 0 : llvm::Log2_64_Ceil(static_cast<uint64_t>(Q[0]));
+    effLogMessageRatio = firstModBits - logScale - 2;
+  }
 
   OpBuilder builder(ctx);
   builder.setInsertionPointToEnd(moduleOp.getBody());
@@ -97,13 +109,14 @@ void buildConfigureFunc(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                                                        ValueRange{})
                       .getResult();
   Value context =
-      bootstraps ? CreateBootContextOp::create(
-                       builder, loc, TypeRange{ctxTensor}, params,
-                       i64(numCtsLevels), i64(numStcLevels), ctxInit)
-                       ->getResult(0)
-                 : CreateContextOp::create(builder, loc, TypeRange{ctxTensor},
-                                           ValueRange{params, ctxInit})
-                       ->getResult(0);
+      bootstraps
+          ? CreateBootContextOp::create(
+                builder, loc, TypeRange{ctxTensor}, params, i64(numCtsLevels),
+                i64(numStcLevels), i64(effLogMessageRatio), ctxInit)
+                ->getResult(0)
+          : CreateContextOp::create(builder, loc, TypeRange{ctxTensor},
+                                    ValueRange{params, ctxInit})
+                ->getResult(0);
   Value uiInit =
       bufferization::AllocTensorOp::create(builder, loc, uiTensor, ValueRange{})
           .getResult();
@@ -229,7 +242,7 @@ struct CheddarConfigureCryptoContext
         buildConfigureFunc(moduleOp, entry, logN, logDefaultScale, Q, P,
                            rotationIndices, bootstraps, numSlots, bootNumCts,
                            bootNumStc, defaultEncLevel, denseHammingWeight,
-                           sparseHammingWeight);
+                           sparseHammingWeight, logMessageRatio);
       }
 
       // Remove the CKKS scheme param attribute — consumed

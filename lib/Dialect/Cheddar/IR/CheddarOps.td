@@ -143,12 +143,19 @@ def Cheddar_CreateBootContextOp : Cheddar_DpsOp<"create_boot_context"> {
     buffer hint; after bufferization the result becomes a
     `memref<!cheddar.boot_context>` re-typed to `std::shared_ptr<BootContext<word>>&`
     at the emitc boundary:
-    `ctx_out = BootContext<word>::Create(params, BootParameter(params.max_level_, numCtsLevels, numStcLevels))`.
+    `ctx_out = BootContext<word>::Create(params, BootParameter(params.max_level_, numCtsLevels, numStcLevels, logMessageRatio))`.
+
+    `logMessageRatio` ~ log2(q0 / scale): the headroom between the bottom modulus
+    and the message scale that CHEDDAR's EvalMod assumes. It governs bootstrap
+    precision -- too small and large messages hit the sine-approximation domain
+    edge, too large and the absolute noise floor (~ q0/scale) dominates small
+    messages. When omitted, the emitter falls back to CHEDDAR's default.
   }];
   let arguments = (ins
     Cheddar_Parameter:$params,
     Builtin_IntegerAttr:$numCtsLevels,
     Builtin_IntegerAttr:$numStcLevels,
+    OptionalAttr<Builtin_IntegerAttr>:$logMessageRatio,
     Cheddar_BootContextLike:$output
   );
   let results = (outs Cheddar_BootContextResult:$result);
