@@ -182,7 +182,14 @@ void mlirToSecretArithmeticPipelineBuilder(
   // Vectorize and optimize rotations
   // TODO(#2320): figure out where this fits in the new pipeline
   hecoSIMDVectorizerPipelineBuilder(pm, options.experimentalDisableLoopUnroll);
-  mathToPolynomialApproximationBuilder(pm, options.useCompositeRelu);
+  // With --use-orion-kernels, keep polynomial.eval ops intact (skip
+  // LowerPolynomialEval) so SecretToCKKS can lower them to orion.chebyshev
+  // (-> cheddar.eval_poly, evaluated inside cheddar) instead of an unrolled
+  // Paterson-Stockmeyer mul/add chain (which hits cheddar's cross-level scale
+  // mismatch and diverges). NOTE: cheddar wires up ONLY the chebyshev path;
+  // matmul/conv still lower normally (no orion.linear_transform).
+  mathToPolynomialApproximationBuilder(pm, options.useCompositeRelu,
+                                       options.useOrionKernels);
 
   // Layout assignment and optimization
   LayoutPropagationOptions layoutPropagationOptions;
@@ -437,7 +444,10 @@ void mlirToRLWEPipeline(OpPassManager& pm,
   }
 
   ElementwiseToAffineOptions elementwiseOptions;
-  elementwiseOptions.convertDialects = {"ckks", "bgv", "lwe"};
+  // "orion" so an orion.chebyshev produced on a tensor<Nx!ct> (under
+  // --use-orion-kernels) is scalarized to per-ciphertext ops before backend
+  // lowering (cheddar handles one ciphertext per cheddar.eval_poly).
+  elementwiseOptions.convertDialects = {"ckks", "bgv", "lwe", "orion"};
   pm.addPass(createElementwiseToAffine(elementwiseOptions));
 
   pm.addPass(tensor_ext::createTensorExtToTensor());
@@ -628,6 +638,7 @@ void torchLinalgToCkksBuilder(OpPassManager& manager,
   suboptions.ciphertextDegree = options.ciphertextDegree;
   suboptions.ckksBootstrapWaterline = options.ckksBootstrapWaterline;
   suboptions.useCompositeRelu = options.useCompositeRelu;
+  suboptions.useOrionKernels = options.useOrionKernels;
   suboptions.scalingModBits = options.scalingModBits;
   suboptions.firstModBits = options.firstModBits;
   suboptions.enableSplitPreprocessing = options.enableSplitPreprocessing;

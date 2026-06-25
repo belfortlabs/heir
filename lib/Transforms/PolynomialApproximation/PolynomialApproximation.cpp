@@ -469,7 +469,8 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
     PolynomialType polyType =
         PolynomialType::get(ctx, RingAttr::get(Float64Type::get(ctx)));
 
-    auto makeEval = [&](Value in, const std::vector<double>& coeffs) -> Value {
+    auto makeEval = [&](Value in, const std::vector<double>& coeffs,
+                        double domainLo, double domainHi) -> Value {
       // NB: `ChebyshevPolynomial poly(ArrayRef<double>(coeffs))` would be a
       // most-vexing-parse function declaration; bind the ArrayRef to a named
       // variable first so this is unambiguously a value construction.
@@ -480,28 +481,28 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
       // (`replaceOpWithNewOp<EvalOp>(op, polyAttr, operand)`): pass (polyAttr,
       // value); the result type follows the input via AllTypesMatch.
       auto eval = rewriter.create<EvalOp>(loc, polyAttr, in);
-      // The sign polys are fit on [-1, 1]; record that for downstream
-      // domain-rescaling in LowerPolynomialEval.
-      eval->setAttr("domain_lower", rewriter.getF64FloatAttr(-1.0));
-      eval->setAttr("domain_upper", rewriter.getF64FloatAttr(1.0));
+      // The sign polys are fit on [-1, 1]; LowerPolynomialEval rescales the
+      // input from [domainLo, domainHi] -> [-1, 1] before evaluating the
+      // Chebyshev basis.
+      eval->setAttr("domain_lower", rewriter.getF64FloatAttr(domainLo));
+      eval->setAttr("domain_upper", rewriter.getF64FloatAttr(domainHi));
       return eval.getResult();
     };
 
-    // xs = x * (1/B)  -> prescale into [-1, 1]. Build a splat constant when the
-    // operand is shaped so the multiply type-checks against the tensor operand.
-    auto invBFloat =
-        cast<FloatAttr>(rewriter.getFloatAttr(elemType, 1.0 / bound));
-    TypedAttr invBAttr =
-        isa<ShapedType>(opType)
-            ? cast<TypedAttr>(DenseElementsAttr::get(cast<ShapedType>(opType),
-                                                     invBFloat.getValue()))
-            : cast<TypedAttr>(invBFloat);
-    Value invB = rewriter.create<arith::ConstantOp>(loc, invBAttr);
-    Value xs = rewriter.create<arith::MulFOp>(loc, x, invB);
-    // step(xs) via the 3-stage composite sign approximation.
-    Value s0 = makeEval(xs, kCompositeSignPoly0);
-    Value s1 = makeEval(s0, kCompositeSignPoly1);
-    Value step = makeEval(s1, kCompositeSignPoly2);
+    // step(x/B) via the 3-stage composite sign approximation. The 1/B prescale
+    // is FOLDED into the first eval's domain ([-B, B] -> [-1, 1]) rather than
+    // emitted as an explicit `x * invB` multiply: cheby0 over domain [-B, B] on
+    // x equals cheby0 over [-1, 1] on x/B. This removes x's second use — x now
+    // feeds only the first sign eval (which is opaque to scale
+    // back-propagation) and the final `x * step` multiply, so the scale lattice
+    // determines x's scale cleanly from that single multiply. The explicit
+    // prescale multiply previously forked x's scale demand across two
+    // multiplies at different levels, leaving the residual-add
+    // `adjust_scale`/prescale `init` ops unpopulated in the orion-kernel path
+    // (kept chebyshev/conv ops).
+    Value s0 = makeEval(x, kCompositeSignPoly0, -bound, bound);
+    Value s1 = makeEval(s0, kCompositeSignPoly1, -1.0, 1.0);
+    Value step = makeEval(s1, kCompositeSignPoly2, -1.0, 1.0);
     // ReLU(x) = x * step(x/B)  (step in [0,1]; B>0 so sign unchanged by scale)
     rewriter.replaceOpWithNewOp<arith::MulFOp>(op, x, step);
     return success();
