@@ -145,6 +145,14 @@ struct BackendOptions : public PassPipelineOptions<BackendOptions> {
       llvm::cl::desc("Insert function calls to an externally-defined debug "
                      "function (cf. --lwe-add-debug-port)"),
       llvm::cl::init(false)};
+  PassOptions::Option<bool> debugEveryOp{
+      *this, "insert-debug-after-every-op",
+      llvm::cl::desc(
+          "Insert a debug handler call after EVERY ciphertext op "
+          "(coarse every-op decrypt trace), instead of only lowering "
+          "pre-existing per-layer debug.validate annotations. "
+          "Requires insert-debug-handler-calls."),
+      llvm::cl::init(false)};
 };
 
 using RLWEPipelineBuilder =

@@ -569,7 +569,7 @@ BackendPipelineBuilder toCheddarPipelineBuilder() {
     // just marks a debug build (skips fusion below).
     lwe::AddDebugPortOptions addDebugPortOptions{
         .entryFunction = options.entryFunction,
-        .insertDebugAfterEveryOp = false,
+        .insertDebugAfterEveryOp = options.debugEveryOp,
     };
     pm.addPass(lwe::createAddDebugPort(addDebugPortOptions));
 
