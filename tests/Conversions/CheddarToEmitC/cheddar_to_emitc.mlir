@@ -27,7 +27,7 @@
 // CHECK: func.func @configure
 // CHECK-SAME: !emitc.opaque<"std::shared_ptr<Context<word>>&">
 // CHECK-SAME: !emitc.opaque<"std::unique_ptr<UserInterface<word>>&">
-// CHECK: emitc.call_opaque "Parameter"
+// CHECK: emitc.verbatim "static Parameter<word> cheddar_param
 // CHECK-SAME: std::vector<word>{1ULL, 2ULL, 3ULL}
 // CHECK-SAME: std::vector<word>{4ULL, 5ULL}
 // CHECK: emitc.verbatim "{} = Context<word>::Create({});"
