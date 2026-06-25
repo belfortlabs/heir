@@ -17,10 +17,11 @@
 
 module attributes {scheme.ckks, ckks.schemeParam = #ckks.scheme_param<logN = 16, Q = [36028797019488257, 1099512938497], P = [2305843009211596801], logDefaultScale = 40>} {
   // The reshaped external declaration: (encoder, user_interface, ciphertext).
+  // heir-opt prints the cheddar types via auto-generated aliases !encoder etc.
   // CHECK: func.func private @__heir_debug_0
-  // CHECK-SAME: !cheddar.encoder
-  // CHECK-SAME: !cheddar.user_interface
-  // CHECK-SAME: tensor<!cheddar.ciphertext>
+  // CHECK-SAME: !encoder
+  // CHECK-SAME: !user_interface
+  // CHECK-SAME: tensor<!ciphertext>
 
   // CHECK: func.func @debug
   func.func @debug(%ct: !ct_L1) -> !ct_L1 {

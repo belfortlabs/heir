@@ -650,22 +650,23 @@ struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
 // emits these calls as `__heir_debug(...)` C++ calls.
 
 // The external __heir_debug_* declaration: reshape its signature to
-// (Encoder, UserInterface, tensor<!cheddar.ciphertext>) -> ().
+// (Encoder, UserInterface, <converted ciphertext>) -> (). The ciphertext is the
+// original last operand (a scalar `!lwe.ciphertext` -> rank-0
+// `tensor<!cheddar.ciphertext>`, or a packed `tensor<Nx!lwe.ciphertext>` ->
+// `tensor<Nx!cheddar.ciphertext>`), converted via the type converter.
 struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
       func::FuncOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     if (!op.isExternal() || !isDebugPort(op.getName())) return failure();
+    auto inputs = op.getFunctionType().getInputs();
+    if (inputs.empty()) return failure();
+    Type ctType = typeConverter->convertType(inputs.back());
+    if (!ctType) return failure();
     auto* ctx = getContext();
-    // The original decl's last arg is the lwe ciphertext tensor (real IR uses a
-    // 1-element array, tensor<1x!lwe.lwe_ciphertext>, not a scalar); convert it
-    // preserving rank so the decl matches the (converted) call operand type.
-    Type origCt = op.getFunctionType().getInputs().back();
-    Type cheddarCt = getTypeConverter()->convertType(origCt);
-    if (!cheddarCt) return failure();
     SmallVector<Type> argTypes{cheddar::EncoderType::get(ctx),
-                               cheddar::UserInterfaceType::get(ctx), cheddarCt};
+                               cheddar::UserInterfaceType::get(ctx), ctType};
     rewriter.modifyOpInPlace(
         op, [&] { op.setType(FunctionType::get(ctx, argTypes, {})); });
     return success();
@@ -834,14 +835,19 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
                  ConvertPayloadFromElements>(typeConverter, context,
                                              /*benefit=*/2);
 
-    // A reshaped `__heir_debug_*` declaration has exactly
-    // (Encoder, UserInterface, tensor<!cheddar.ciphertext>) inputs and no
+    // A reshaped `__heir_debug_*` declaration / call has exactly
+    // (Encoder, UserInterface, tensor<...x!cheddar.ciphertext>) inputs and no
     // results.
+    auto isReshapedDebugSig = [](TypeRange ins) {
+      if (ins.size() != 3 || !isa<cheddar::EncoderType>(ins[0]) ||
+          !isa<cheddar::UserInterfaceType>(ins[1]))
+        return false;
+      auto t = dyn_cast<RankedTensorType>(ins[2]);
+      return t && isa<cheddar::CiphertextType>(t.getElementType());
+    };
     auto isReshapedDebugDecl = [&](func::FuncOp op) {
-      auto ins = op.getFunctionType().getInputs();
-      return op.getFunctionType().getNumResults() == 0 && ins.size() == 3 &&
-             isa<cheddar::EncoderType>(ins[0]) &&
-             isa<cheddar::UserInterfaceType>(ins[1]);
+      return op.getFunctionType().getNumResults() == 0 &&
+             isReshapedDebugSig(op.getFunctionType().getInputs());
     };
     target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
       if (isDebugPort(op.getName())) return isReshapedDebugDecl(op);
@@ -861,11 +867,8 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     });
 
     target.addDynamicallyLegalOp<func::CallOp>([&](func::CallOp op) {
-      if (isDebugPort(op.getCallee())) {
-        auto ins = op.getCalleeType().getInputs();
-        return ins.size() == 3 && isa<cheddar::EncoderType>(ins[0]) &&
-               isa<cheddar::UserInterfaceType>(ins[1]);
-      }
+      if (isDebugPort(op.getCallee()))
+        return isReshapedDebugSig(op.getCalleeType().getInputs());
       auto operandTypes = op.getCalleeType().getInputs();
       auto containsCryptoArg = llvm::any_of(operandTypes, [&](Type argType) {
         return DialectEqual<lwe::LWEDialect, ckks::CKKSDialect>()(
