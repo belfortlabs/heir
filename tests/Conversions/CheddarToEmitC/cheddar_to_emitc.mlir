@@ -196,21 +196,23 @@ func.func @lintrans(%ctx: !context, %ct: tensor<!ciphertext>, %evk: !evk_map, %d
 }
 
 // eval_poly lowers to the real cheddar::EvalPoly<word> class -- there is no
-// `RunEvalPoly` in cheddar. The stateful object (construct from the Chebyshev
-// coefficients on [-1,1], Compile, Evaluate) is wrapped in a `{ }` block scope
-// so it (and its GPU power-basis) is destroyed right after Evaluate. Input and
-// target scales come from the encoder's canonical per-level scale; Compile /
-// Evaluate take a (non-owning) ConstContextPtr wrapped around the raw Context*.
+// `RunEvalPoly` in cheddar. It mirrors cheddar's own EvalMod: the level/scale
+// are taken from the actual input ciphertext (NPToLevel(in.GetNP()),
+// in.GetScale()) and target_scale is the square/divide recurrence over
+// GetRescalePrimeProd -- seeding the constructor with anything else silently
+// blows the Chebyshev basis recurrence up. The construct/Compile/Evaluate
+// (which need the move-only ciphertext as a method receiver + ctx->param_ + the
+// recurrence) are emitted as verbatim real-cheddar statements in a `{ }` block
+// scope so the EvalPoly (and its GPU power basis) is destroyed right after use.
 // CHECK: func.func @eval_poly
 // CHECK: emitc.verbatim "{"
-// CHECK: emitc.call_opaque "ConstContextPtr<word>"
-// CHECK: emitc.member_call_opaque %{{.*}} "GetScale"
-// CHECK: emitc.call_opaque "cheddar::EvalPoly<word>"
-// CHECK-SAME: {1, 2, 3}
-// CHECK-SAME: true
-// CHECK: emitc.member_call_opaque %{{.*}} "Compile"
-// CHECK: emitc.member_call_opaque %{{.*}} "GetMultiplicationKey"
-// CHECK: emitc.member_call_opaque %{{.*}} "Evaluate"
+// CHECK: emitc.verbatim "ConstContextPtr<word> _ep_cp(ConstContextPtr<word>(), {}
+// CHECK: emitc.verbatim "int _ep_lvl = {}->param_.NPToLevel({}.GetNP());"
+// CHECK: emitc.verbatim "double _ep_is = {}.GetScale();"
+// CHECK: emitc.verbatim "_ep_ts = _ep_ts * _ep_ts / {}->param_.GetRescalePrimeProd
+// CHECK: emitc.verbatim "cheddar::EvalPoly<word> _ep({1, 2, 3}, _ep_lvl, _ep_is, _ep_ts, true);"
+// CHECK: emitc.verbatim "_ep.Compile(_ep_cp);"
+// CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());"
 // CHECK: emitc.verbatim "}"
 func.func @eval_poly(%ctx: !context, %enc: !encoder, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
   %d0 = bufferization.alloc_tensor() : tensor<!ciphertext>
