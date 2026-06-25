@@ -107,6 +107,40 @@ void insertBootstrapsByForwardLevelSim(Operation* top, int lEff) {
     return it == remaining.end() ? lEff : it->second;  // default: fresh
   };
 
+  // A "kept eval" is a multi-level-drop ReducesLevelOpInterface op (the kept
+  // polynomial.eval / composite-sign stage), as opposed to mod_reduce (a
+  // 1-level rescale, handled separately).
+  auto isKeptEval = [](Operation* o) {
+    return isa_and_nonnull<ReducesLevelOpInterface>(o) &&
+           !isa<mgmt::ModReduceOp>(o);
+  };
+  // Total multiplicative depth of a chained-eval run starting at `start`: the
+  // composite-sign `step` is 3 polynomial.evals chained (each feeds the next as
+  // its reduced operand). Boot placement must treat such a run as INDIVISIBLE
+  // -- bootstrapping between stages leaves the chain desynced (stage k+1
+  // evaluates a different polynomial than its input was prepared for),
+  // detonating the deg-27 tail. So at a chain start we size the refresh to the
+  // whole run.
+  auto chainTotalDrop = [&](Operation* start) -> int {
+    int total = 0;
+    for (Operation* cur = start; isKeptEval(cur);) {
+      total += cast<ReducesLevelOpInterface>(cur).getLevelsToDrop();
+      Operation* next = nullptr;
+      if (cur->getNumResults() == 1) {
+        Value res = cur->getResult(0);
+        for (Operation* u : res.getUsers()) {
+          auto rl = dyn_cast<ReducesLevelOpInterface>(u);
+          if (isKeptEval(u) && rl.getOperandToReduce().get() == res) {
+            next = u;
+            break;
+          }
+        }
+      }
+      cur = next;
+    }
+    return total;
+  };
+
   SmallVector<Operation*> ops;
   top->walk([&](Operation* op) { ops.push_back(op); });
 
@@ -224,12 +258,21 @@ void insertBootstrapsByForwardLevelSim(Operation* top, int lEff) {
           sawSecret = true;
         }
       }
-      int r = (sawSecret ? minRem : lEff) - drop;
+      int avail = sawSecret ? minRem : lEff;
+      int r = avail - drop;
       Value reduced = reduces.getOperandToReduce().get();
       bool resReaches = llvm::any_of(op->getResults(), [&](Value res) {
         return reachesModReduce.contains(res);
       });
-      if (r <= 0 && isSecret(reduced, &solver) && resReaches) {
+      // Refresh BEFORE the chain, not mid-chain. At a chain start (the reduced
+      // operand is not itself a kept eval) require room for the WHOLE chained
+      // run so all stages evaluate post-boot at healthy levels; mid-chain, fall
+      // back to the per-op exhaustion check (which should not fire once the
+      // chain-start refresh has).
+      Operation* defOp = reduced.getDefiningOp();
+      bool chainStart = !isKeptEval(defOp);
+      int need = chainStart ? chainTotalDrop(op) : drop;
+      if (avail - need <= 0 && isSecret(reduced, &solver) && resReaches) {
         OpBuilder builder(op);
         builder.setInsertionPoint(op);
         auto bootstrap = mgmt::BootstrapOp::create(builder, op->getLoc(),
