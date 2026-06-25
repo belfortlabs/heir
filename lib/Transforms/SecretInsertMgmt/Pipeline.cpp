@@ -5,6 +5,7 @@
 #include "lib/Analysis/LevelAnalysis/LevelAnalysis.h"
 #include "lib/Analysis/MulDepthAnalysis/MulDepthAnalysis.h"
 #include "lib/Analysis/SecretnessAnalysis/SecretnessAnalysis.h"
+#include "lib/Dialect/HEIRInterfaces.h"
 #include "lib/Dialect/Mgmt/IR/MgmtOps.h"
 #include "lib/Dialect/Secret/IR/SecretOps.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
@@ -197,6 +198,48 @@ void insertBootstrapsByForwardLevelSim(Operation* top, int lEff) {
         erased.insert(rot);
         siblingMr.erase();
         rot.erase();
+      }
+      continue;
+    }
+    // A kept `polynomial.eval` (lowered later to orion.chebyshev /
+    // cheddar.eval_poly) consumes its whole multiplicative depth in one op
+    // (ReducesLevelOpInterface::getLevelsToDrop, e.g. 4/5 for the
+    // composite-sign stages). The default branch below treats every
+    // non-mod_reduce op as a 0-drop pass-through, so a chained composite sign's
+    // `step` would sink far below the budget with no refresh, and cross-level
+    // matching can't then align it with `x` at the final `x*step` multiply
+    // (TODO #1642). Count the drop, and refresh the reduced operand if the
+    // chain would otherwise exhaust. (mod_reduce -- also a
+    // ReducesLevelOpInterface -- was handled and `continue`d above, so only
+    // multi-level-drop ops like the kept eval reach here; non-orion paths never
+    // keep a polynomial.eval, so they are unaffected.)
+    if (auto reduces = dyn_cast<ReducesLevelOpInterface>(op)) {
+      if (op->getNumResults() == 0) continue;
+      int drop = reduces.getLevelsToDrop();
+      int minRem = lEff;
+      bool sawSecret = false;
+      for (Value operand : op->getOperands()) {
+        if (isSecret(operand, &solver)) {
+          minRem = std::min(minRem, rem(operand));
+          sawSecret = true;
+        }
+      }
+      int r = (sawSecret ? minRem : lEff) - drop;
+      Value reduced = reduces.getOperandToReduce().get();
+      bool resReaches = llvm::any_of(op->getResults(), [&](Value res) {
+        return reachesModReduce.contains(res);
+      });
+      if (r <= 0 && isSecret(reduced, &solver) && resReaches) {
+        OpBuilder builder(op);
+        builder.setInsertionPoint(op);
+        auto bootstrap = mgmt::BootstrapOp::create(builder, op->getLoc(),
+                                                   reduced.getType(), reduced);
+        op->replaceUsesOfWith(reduced, bootstrap.getResult());
+        remaining[bootstrap.getResult()] = lEff;
+        r = lEff - drop;
+      }
+      for (Value res : op->getResults()) {
+        if (isSecret(res, &solver)) remaining[res] = r;
       }
       continue;
     }

@@ -96,6 +96,22 @@ struct MlirToRLWEPipelineOptions : public LoopOptions {
                      "instead of a single-polynomial max(x,0) fit. More "
                      "accurate for deep nets; needs more depth/bootstrapping."),
       llvm::cl::init(false)};
+  PassOptions::Option<bool> useOrionKernels{
+      *this, "use-orion-kernels",
+      llvm::cl::desc(
+          "Keep polynomial-eval (and matmul) as high-level ops and lower "
+          "them to orion.chebyshev / orion.linear_transform instead of "
+          "unrolling to arith rotate/mul/add. (cheddar wires up only the "
+          "orion.chebyshev path -> cheddar.eval_poly, which evaluates the "
+          "polynomial internally with correct scale management.)"),
+      llvm::cl::init(false)};
+  PassOptions::Option<bool> orionConvSkip{
+      *this, "orion-conv-skip",
+      llvm::cl::desc(
+          "Under use-orion-kernels, skip materializing the dense expanded-"
+          "Toeplitz layout of a constant conv filter for the orion direct-"
+          "conv kernel."),
+      llvm::cl::init(false)};
   PassOptions::Option<int> levelBudget{
       *this, "level-budget",
       llvm::cl::desc(
