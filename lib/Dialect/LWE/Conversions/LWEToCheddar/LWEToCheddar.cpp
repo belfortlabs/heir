@@ -667,8 +667,16 @@ struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
     auto* ctx = getContext();
     SmallVector<Type> argTypes{cheddar::EncoderType::get(ctx),
                                cheddar::UserInterfaceType::get(ctx), ctType};
-    rewriter.modifyOpInPlace(
-        op, [&] { op.setType(FunctionType::get(ctx, argTypes, {})); });
+    rewriter.modifyOpInPlace(op, [&] {
+      op.setType(FunctionType::get(ctx, argTypes, {}));
+      // __heir_debug only READS the ciphertext (decrypt+decode for printing).
+      // Without this, one-shot-bufferize treats the external call's operand
+      // conservatively as possibly-written and materializes a copy -- which for
+      // a move-only cheddar Ciphertext becomes a destructive std::move, leaving
+      // the observed value (and its later uses) empty -> "num primes mismatch".
+      // Mark the ciphertext arg read-only so bufferization borrows it.
+      op.setArgAttr(2, "bufferization.access", rewriter.getStringAttr("read"));
+    });
     return success();
   }
 };
