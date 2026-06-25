@@ -20,6 +20,7 @@
 #include "lib/Dialect/Orion/IR/OrionDialect.h"
 #include "lib/Dialect/Orion/IR/OrionOps.h"
 #include "lib/Utils/ConversionUtils.h"
+#include "lib/Utils/TargetUtils.h"
 #include "lib/Utils/Utils.h"
 #include "llvm/include/llvm/ADT/APInt.h"               // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"           // from @llvm-project
@@ -563,8 +564,15 @@ struct AddCheddarContextArg : public OpConversionPattern<func::FuncOp> {
       func::FuncOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     SmallVector<Type, 4> selectedTypes;
-    for (const auto& evaluator : evaluators)
-      if (evaluator.second(op)) selectedTypes.push_back(evaluator.first);
+    for (const auto& evaluator : evaluators) {
+      if (!evaluator.second(op)) continue;
+      // Skip a context type already present as an argument: with --debug
+      // enabled the lwe debug port adds an LWESecretKey arg that converts to a
+      // UserInterface, which would otherwise be duplicated here (and break
+      // call- site threading, which dedups by type).
+      if (llvm::is_contained(op.getArgumentTypes(), evaluator.first)) continue;
+      selectedTypes.push_back(evaluator.first);
+    }
     if (selectedTypes.empty())
       return rewriter.notifyMatchFailure(op, "no CHEDDAR context needed");
     SmallVector<DictionaryAttr> argAttrs(selectedTypes.size(), nullptr);
@@ -623,6 +631,67 @@ struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
 
  private:
   std::vector<std::pair<Type, OpPredicate>> evaluators;
+};
+
+//===----------------------------------------------------------------------===//
+// Debug port (__heir_debug_*) handling
+//===----------------------------------------------------------------------===//
+//
+// `lwe-add-debug-port` lowers each `debug.validate` to a call to an external
+// `func.func private @__heir_debug_N(%key: !lwe.secret_key, %ct:
+// !lwe.ciphertext)`. To decrypt AND decode the ciphertext for printing, the
+// CHEDDAR-side hook needs an `Encoder` (decode) and a `UserInterface`
+// (decrypt), so we re-shape both the external declaration and every call site
+// to
+// `(Encoder, UserInterface, Ciphertext)`. The original `!lwe.secret_key`
+// operand (which converts to a UserInterface) is dropped in favour of the
+// contextual UserInterface threaded into the enclosing function, matching how
+// all other CHEDDAR ops obtain their context args. The CheddarToEmitC pass then
+// emits these calls as `__heir_debug(...)` C++ calls.
+
+// The external __heir_debug_* declaration: reshape its signature to
+// (Encoder, UserInterface, tensor<!cheddar.ciphertext>) -> ().
+struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      func::FuncOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    if (!op.isExternal() || !isDebugPort(op.getName())) return failure();
+    auto* ctx = getContext();
+    SmallVector<Type> argTypes{
+        cheddar::EncoderType::get(ctx), cheddar::UserInterfaceType::get(ctx),
+        RankedTensorType::get({}, cheddar::CiphertextType::get(ctx))};
+    rewriter.modifyOpInPlace(
+        op, [&] { op.setType(FunctionType::get(ctx, argTypes, {})); });
+    return success();
+  }
+};
+
+// A call to __heir_debug_*: thread the enclosing function's Encoder +
+// UserInterface contextual args, followed by the (converted) ciphertext operand
+// (the last original operand; the original secret-key operand is dropped).
+struct ConvertDebugCall : public OpConversionPattern<func::CallOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      func::CallOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    if (!isDebugPort(op.getCallee())) return failure();
+    auto* ctx = getContext();
+    auto encoder = getContextualArgFromFunc(op.getOperation(),
+                                            cheddar::EncoderType::get(ctx));
+    if (failed(encoder)) return failure();
+    auto ui = getContextualArgFromFunc(op.getOperation(),
+                                       cheddar::UserInterfaceType::get(ctx));
+    if (failed(ui)) return failure();
+    SmallVector<Value> newOperands{encoder.value(), ui.value(),
+                                   adaptor.getOperands().back()};
+    SmallVector<NamedAttribute> dialectAttrs(op->getDialectAttrs());
+    rewriter
+        .replaceOpWithNewOp<func::CallOp>(op, op.getCallee(), TypeRange{},
+                                          newOperands)
+        ->setDialectAttrs(dialectAttrs);
+    return success();
+  }
 };
 
 }  // namespace
@@ -736,6 +805,10 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
 
     patterns.add<AddCheddarContextArg>(context, evaluators);
     patterns.add<ConvertCheddarFuncCallOp>(typeConverter, context, evaluators);
+    // Debug ports get dedicated, higher-benefit handling (the generic call /
+    // structural func patterns would mis-thread their context args).
+    patterns.add<ConvertDebugFuncDecl, ConvertDebugCall>(typeConverter, context,
+                                                         /*benefit=*/3);
 
     patterns.add<ConvertCKKSAddOp, ConvertCKKSSubOp, ConvertCKKSMulOp,
                  ConvertCKKSAddPlainOp, ConvertCKKSSubPlainOp,
@@ -756,7 +829,17 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
                  ConvertPayloadFromElements>(typeConverter, context,
                                              /*benefit=*/2);
 
+    // A reshaped `__heir_debug_*` declaration has exactly
+    // (Encoder, UserInterface, tensor<!cheddar.ciphertext>) inputs and no
+    // results.
+    auto isReshapedDebugDecl = [&](func::FuncOp op) {
+      auto ins = op.getFunctionType().getInputs();
+      return op.getFunctionType().getNumResults() == 0 && ins.size() == 3 &&
+             isa<cheddar::EncoderType>(ins[0]) &&
+             isa<cheddar::UserInterfaceType>(ins[1]);
+    };
     target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
+      if (isDebugPort(op.getName())) return isReshapedDebugDecl(op);
       bool hasCheddarCtxArg =
           op.getFunctionType().getNumInputs() > 0 &&
           containsArgumentOfType<cheddar::ContextType, cheddar::BootContextType,
@@ -773,6 +856,11 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     });
 
     target.addDynamicallyLegalOp<func::CallOp>([&](func::CallOp op) {
+      if (isDebugPort(op.getCallee())) {
+        auto ins = op.getCalleeType().getInputs();
+        return ins.size() == 3 && isa<cheddar::EncoderType>(ins[0]) &&
+               isa<cheddar::UserInterfaceType>(ins[1]);
+      }
       auto operandTypes = op.getCalleeType().getInputs();
       auto containsCryptoArg = llvm::any_of(operandTypes, [&](Type argType) {
         return DialectEqual<lwe::LWEDialect, ckks::CKKSDialect>()(
