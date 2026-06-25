@@ -195,15 +195,6 @@ Value findUi(Operation* op, const TypeConverter& tc) {
   return r.value();
 }
 
-// The enclosing function's Encoder argument (used to query the canonical scale
-// per level, `encoder.GetScale(level)`).
-Value findEncoder(Operation* op, const TypeConverter& tc) {
-  Type encType = tc.convertType(cheddar::EncoderType::get(op->getContext()));
-  auto r = getContextualArgFromFunc(op, encType);
-  if (failed(r)) return Value{};
-  return r.value();
-}
-
 //===----------------------------------------------------------------------===//
 // Type conversions
 //===----------------------------------------------------------------------===//
@@ -752,102 +743,81 @@ struct ConvertLinearTransform
 
 // cheddar.eval_poly -> the real cheddar::EvalPoly<word> class (no free
 // `RunEvalPoly` exists). It is a stateful object: construct, Compile, then
-// Evaluate. We wrap the three statements in a `{ }` block scope so the object
-// -- which holds the precomputed power-basis ciphertexts on the GPU -- is
-// destroyed immediately after Evaluate rather than living to function end:
+// Evaluate. Critically, EvalPoly's Chebyshev basis recurrence (T_{2n}=2T_n^2-1)
+// propagates scale as `x_scale*y_scale/param_.GetRescalePrimeProd(level)`, and
+// the constructor's `input_scale`/`target_scale`/`input_level` SEED that
+// recurrence -- cheddar's asserts only check self-consistency with these args,
+// not against the real q-products, so a wrong seed silently squares into a
+// catastrophic blow-up (e.g. a degree-15 sign poly returning ~1e105) while the
+// scale *label* stays canonical. So we must mirror exactly how cheddar's own
+// EvalMod seeds EvalPoly: take the level/scale from the *actual* input
+// ciphertext and derive target_scale by the same square/divide recurrence.
 //
 //   {
-//     cheddar::EvalPoly<word> ep({coeffs}, level, in.GetScale(),
-//                                encoder.GetScale(outputLevel),
-//                                /*chebyshev=*/true);
-//     ep.Compile(ctx);
-//     ep.Evaluate(ctx, out, in, evk.GetMultiplicationKey());
+//     ConstContextPtr<word> cp(ConstContextPtr<word>(), ctx);
+//     int lvl = ctx->param_.NPToLevel(in.GetNP());
+//     double is = in.GetScale();
+//     double ts = is;
+//     ts = ts*ts / ctx->param_.GetRescalePrimeProd(lvl - 0);   // x
+//     level_consumption
+//     ...
+//     cheddar::EvalPoly<word> ep({coeffs}, lvl, is, ts, /*chebyshev=*/true);
+//     ep.Compile(cp);
+//     ep.Evaluate(cp, out, in, evk.GetMultiplicationKey());
 //   }
+//
+// This needs `in.GetScale()`/`in.GetNP()` (whose receiver is a move-only lvalue
+// ciphertext that emitc.member_call_opaque rejects), `ctx->param_` (a nested
+// member access), and a per-level recurrence -- so it is emitted as verbatim
+// statements. These are all real cheddar public API (the inline equivalent of
+// EvalMod), not a shim. A `{ }` block scope destroys the EvalPoly (which holds
+// the GPU power basis) right after Evaluate; its locals stay block-local so
+// repeated eval_poly ops in one function do not collide.
 struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
       cheddar::EvalPolyOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    auto* ctx = rewriter.getContext();
     Location loc = op.getLoc();
-    Value enc = findEncoder(op, *typeConverter);
-    if (!enc)
-      return op.emitOpError("enclosing function is missing Encoder arg");
     Value ctxV = adaptor.getCtx();
     Value in = adaptor.getInput();
     Value out = adaptor.getOutput();
     Value evk = adaptor.getEvkMap();
+    // EvalPoly internally drops level_consumption = Log2Ceil(degree+1) levels;
+    // the level analysis already encoded that as level - outputLevel.
+    int64_t levelConsumption =
+        op.getLevelAttr().getInt() - op.getOutputLevelAttr().getInt();
 
-    Type dblTy = OpaqueType::get(ctx, "double");
-    // Reference type: GetMultiplicationKey() returns `const Evk&`; binding a
-    // reference avoids copying the (move-only / GPU-resident) key.
-    Type evkTy = OpaqueType::get(ctx, "const EvaluationKey<word>&");
-    Type evalPolyTy = OpaqueType::get(ctx, "cheddar::EvalPoly<word>");
-    Type ctxPtrTy = OpaqueType::get(ctx, "ConstContextPtr<word>");
-    auto strAttr = [&](StringRef s) { return rewriter.getStringAttr(s); };
-    auto opaque = [&](StringRef s) { return OpaqueAttr::get(ctx, s); };
-    ArrayAttr none{};
+    auto emit = [&](const Twine& fmt, ValueRange operands) {
+      VerbatimOp::create(rewriter, loc, rewriter.getStringAttr(fmt.str()),
+                         operands);
+    };
 
-    // Open the block scope (no operands -> emitted verbatim).
-    VerbatimOp::create(rewriter, loc, "{", ValueRange{});
-
+    emit("{", {});
     // Compile/Evaluate take a ConstContextPtr (shared_ptr<const Context>); wrap
     // the raw Context* in a non-owning alias (it does not own the context).
-    Value cp = CallOpaqueOp::create(
-                   rewriter, loc, TypeRange{ctxPtrTy},
-                   strAttr("ConstContextPtr<word>"), ValueRange{ctxV},
-                   rewriter.getArrayAttr({opaque("ConstContextPtr<word>()"),
-                                          rewriter.getIndexAttr(0)}),
-                   none)
-                   .getResult(0);
-
-    // input_scale = encoder.GetScale(level), target_scale =
-    // encoder.GetScale(outputLevel). Both use the canonical scale per level,
-    // which the (no-adjust-scale) cheddar pipeline keeps the ciphertexts at.
-    // (We query the encoder, not the input ciphertext: member_call_opaque's
-    // receiver must be a value, and the ciphertext is a move-only lvalue.)
-    Value inScale =
-        MemberCallOpaqueOp::create(
-            rewriter, loc, TypeRange{dblTy}, enc, strAttr("GetScale"),
-            rewriter.getArrayAttr({opaque(intLit(op.getLevelAttr()))}), none,
-            ValueRange{})
-            .getResult(0);
-    // target_scale = encoder.GetScale(outputLevel)   (canonical scale)
-    Value tgtScale =
-        MemberCallOpaqueOp::create(
-            rewriter, loc, TypeRange{dblTy}, enc, strAttr("GetScale"),
-            rewriter.getArrayAttr({opaque(intLit(op.getOutputLevelAttr()))}),
-            none, ValueRange{})
-            .getResult(0);
-
-    // cheddar::EvalPoly<word> ep({coeffs}, level, in_scale, tgt_scale, true);
-    SmallVector<Attribute> ctorArgs{
-        opaque(floatArrayLit(op.getCoefficientsAttr())),
-        opaque(intLit(op.getLevelAttr())), rewriter.getIndexAttr(0),
-        rewriter.getIndexAttr(1), opaque("true")};
-    Value ep = CallOpaqueOp::create(rewriter, loc, TypeRange{evalPolyTy},
-                                    strAttr("cheddar::EvalPoly<word>"),
-                                    ValueRange{inScale, tgtScale},
-                                    rewriter.getArrayAttr(ctorArgs), none)
-                   .getResult(0);
-
-    // ep.Compile(ctx);
-    MemberCallOpaqueOp::create(rewriter, loc, TypeRange{}, ep,
-                               strAttr("Compile"), none, none, ValueRange{cp});
-
-    // mult_key = evk.GetMultiplicationKey()
-    Value mk = MemberCallOpaqueOp::create(rewriter, loc, TypeRange{evkTy}, evk,
-                                          strAttr("GetMultiplicationKey"), none,
-                                          none, ValueRange{})
-                   .getResult(0);
-
-    // ep.Evaluate(ctx, out, in, mult_key);
-    MemberCallOpaqueOp::create(rewriter, loc, TypeRange{}, ep,
-                               strAttr("Evaluate"), none, none,
-                               ValueRange{cp, out, in, mk});
-
-    // Close the block scope -> ep destroyed here.
-    VerbatimOp::create(rewriter, loc, "}", ValueRange{});
+    emit("ConstContextPtr<word> _ep_cp(ConstContextPtr<word>(), {});", {ctxV});
+    // level + input scale taken from the actual input ciphertext.
+    emit("int _ep_lvl = {}->param_.NPToLevel({}.GetNP());", {ctxV, in});
+    emit("double _ep_is = {}.GetScale();", {in});
+    // target_scale recurrence: ts <- ts*ts / GetRescalePrimeProd(lvl - i).
+    emit("double _ep_ts = _ep_is;", {});
+    for (int64_t i = 0; i < levelConsumption; ++i)
+      emit(
+          "_ep_ts = _ep_ts * _ep_ts / {}->param_.GetRescalePrimeProd(_ep_lvl "
+          "- " +
+              Twine(i) + ");",
+          {ctxV});
+    // Construct (no operands -> the coefficient brace-list is emitted
+    // verbatim).
+    emit("cheddar::EvalPoly<word> _ep(" +
+             floatArrayLit(op.getCoefficientsAttr()) +
+             ", _ep_lvl, _ep_is, _ep_ts, true);",
+         {});
+    emit("_ep.Compile(_ep_cp);", {});
+    emit("_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());",
+         {out, in, evk});
+    emit("}", {});
 
     rewriter.eraseOp(op);
     return success();

@@ -33,11 +33,18 @@ namespace cheddar {
 
 using Complex = std::complex<double>;
 
+// Number-of-primes info a ciphertext carries; the EvalPoly emitter maps it back
+// to a level via Parameter::NPToLevel.
+struct NPInfo {};
+
 // Minimal parameter stub: the LinearTransform emitter reads the per-level
-// canonical scale via `ctx->param_.GetScale(level)`.
+// canonical scale via `ctx->param_.GetScale(level)`; the EvalPoly emitter reads
+// the level/q-product via NPToLevel / GetRescalePrimeProd (mirroring EvalMod).
 template <typename word>
 struct Parameter {
   double GetScale(int level) const;
+  double GetRescalePrimeProd(int level) const;
+  int NPToLevel(NPInfo np) const;
 };
 
 // The encoder exposes the per-level canonical scale (the EvalPoly emitter reads
@@ -56,6 +63,9 @@ struct Ciphertext {
   Ciphertext& operator=(Ciphertext&&) = default;
   Ciphertext(const Ciphertext&) = delete;
   Ciphertext& operator=(const Ciphertext&) = delete;
+  // The EvalPoly emitter reads the actual level/scale off the input ct.
+  double GetScale() const;
+  NPInfo GetNP() const;
 };
 template <typename word>
 struct Plaintext {
