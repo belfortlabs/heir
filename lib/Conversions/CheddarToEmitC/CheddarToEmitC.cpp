@@ -803,11 +803,14 @@ struct EraseDealloc : public OpConversionPattern<mlir::memref::DeallocOp> {
       ConversionPatternRewriter& rewriter) const override {
     Type memTy = adaptor.getMemref().getType();
     if (auto l = dyn_cast<emitc::LValueType>(memTy)) {
-      if (isa<emitc::OpaqueType>(l.getValueType())) {
-        // Move-only payload: `v = {};` frees the GPU buffer (move-assign
-        // empty). emitc.verbatim escaping here: `{{` -> `{`, and a lone `}` is
-        // literal, so the empty-brace init `{};` is written as `{{};`.
-        VerbatimOp::create(rewriter, op.getLoc(), "{} = {{};",
+      if (auto opaque = dyn_cast<emitc::OpaqueType>(l.getValueType())) {
+        // Move-only payload (Ciphertext/Plaintext<word>): free the GPU buffer
+        // at last use by move-assigning a fresh default-constructed temporary,
+        // e.g. `v = Ciphertext<word>();`. NB `v = {}` does NOT compile -- these
+        // types are `explicit`-constructed (all-default-args ctor) and not
+        // brace-assignable. The opaque type string IS the C++ type name.
+        std::string reset = "{} = " + opaque.getValue().str() + "();";
+        VerbatimOp::create(rewriter, op.getLoc(), reset,
                            ValueRange{adaptor.getMemref()});
       }
       // Non-payload lvalues (e.g. plain float scalars) are scope-bound stack
