@@ -16,24 +16,25 @@
 func.func private @__heir_debug_0(!encoder, !user_interface, tensor<!ciphertext>)
 
 // CHECK: func.func @debug_chain
-// The ciphertext input is ref-ified to a const C++ reference.
-// CHECK-SAME: !emitc.opaque<"Encoder<word>">
+// Encoder + scalar ciphertext inputs are tightened to const C++ references; the
+// UserInterface stays a pointer.
+// CHECK-SAME: !emitc.opaque<"const Encoder<word>&">
 // CHECK-SAME: !emitc.ptr<!emitc.opaque<"UserInterface<word>">>
 // CHECK-SAME: !emitc.opaque<"const Ciphertext<word>&">
 // The debug.validate -> __heir_debug call: encoder, ui, ct operands plus the
 // name + metadata baked as trailing string-literal opaque args.
 // CHECK: emitc.call_opaque "__heir_debug"
 // CHECK-SAME: %arg0, %arg1, %arg2
-// CHECK-SAME: "heir_val0"
-// CHECK-SAME: "heir_meta0"
+// CHECK-SAME: heir_val0
+// CHECK-SAME: heir_meta0
 func.func @debug_chain(%enc: !encoder, %ui: !user_interface, %ct: tensor<!ciphertext>) {
   func.call @__heir_debug_0(%enc, %ui, %ct) {debug.name = "heir_val0", debug.metadata = "heir_meta0"} : (!encoder, !user_interface, tensor<!ciphertext>) -> ()
   return
 }
 
 // A rank-1 (1-element array) ciphertext value -- the usual cheddar value rep --
-// lowers the ct operand to a const std::array<Ciphertext<word>, N>& (the
-// medusa C++ hook overloads on both this and the scalar form).
+// lowers the ct operand to a const std::array<Ciphertext<word>, N>& (the medusa
+// C++ hook should accept both this and the scalar form, e.g. via a template).
 // CHECK: func.func @debug_arr
 // CHECK: emitc.call_opaque "__heir_debug"
 // CHECK-SAME: !emitc.opaque<"const std::array<Ciphertext<word>, 1>&">
