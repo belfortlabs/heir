@@ -9,6 +9,7 @@
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Utils/ConversionUtils.h"
+#include "lib/Utils/TargetUtils.h"
 #include "llvm/include/llvm/ADT/APFloat.h"          // from @llvm-project
 #include "llvm/include/llvm/ADT/DenseSet.h"         // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"        // from @llvm-project
@@ -762,6 +763,56 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
   }
 };
 
+// A `__heir_debug_*` call (from --lwe-add-debug-port, re-shaped by LWEToCheddar
+// to (Encoder, UserInterface, Ciphertext)) -> a free C++ call to an
+// externally-defined `__heir_debug(encoder, ui, ct, "name", "metadata")`. The
+// debug name/metadata travel as `debug.name`/`debug.metadata` dialect attrs;
+// they are baked into the call as trailing string-literal args. Medusa's C++
+// prelude defines `__heir_debug` (decrypt + decode + print); the external
+// `func.func` declaration is erased by the cheddar-emitc-boundary pass (the
+// upstream Cpp emitter cannot print an external func.func declaration).
+struct ConvertDebugCall : public OpConversionPattern<func::CallOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      func::CallOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    if (!isDebugPort(op.getCallee())) return failure();
+    auto* ctx = rewriter.getContext();
+    auto escape = [](StringRef s) {
+      std::string out = "\"";
+      for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+      }
+      out += '"';
+      return out;
+    };
+    std::string name;
+    if (auto n = op->getAttrOfType<StringAttr>("debug.name"))
+      name = escape(n.getValue());
+    else
+      name = "\"\"";
+    std::string metadata;
+    if (auto m = op->getAttrOfType<StringAttr>("debug.metadata"))
+      metadata = escape(m.getValue());
+    else
+      metadata = "\"\"";
+    SmallVector<Value> operands(adaptor.getOperands().begin(),
+                                adaptor.getOperands().end());
+    SmallVector<Attribute> args;
+    for (size_t i = 0; i < operands.size(); ++i)
+      args.push_back(rewriter.getIndexAttr(i));
+    args.push_back(emitc::OpaqueAttr::get(ctx, name));
+    args.push_back(emitc::OpaqueAttr::get(ctx, metadata));
+    CallOpaqueOp::create(rewriter, op.getLoc(), TypeRange{},
+                         rewriter.getStringAttr("__heir_debug"), operands,
+                         rewriter.getArrayAttr(args),
+                         /*template_args=*/ArrayAttr{});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // memref op patterns (payload + float)
 //===----------------------------------------------------------------------===//
@@ -1174,8 +1225,11 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
     populateCallOpTypeConversionPattern(patterns, typeConverter);
     target.addDynamicallyLegalOp<func::CallOp>(
         [&typeConverter](func::CallOp op) {
-          return typeConverter.isLegal(op);
+          // A __heir_debug_* call is rewritten to an emitc.call_opaque
+          // "__heir_debug" by ConvertDebugCall; never treat it as legal.
+          return !isDebugPort(op.getCallee()) && typeConverter.isLegal(op);
         });
+    patterns.add<ConvertDebugCall>(typeConverter, ctx, /*benefit=*/2);
 
     target.addIllegalDialect<cheddar::CheddarDialect>();
     target.addIllegalDialect<arith::ArithDialect>();
@@ -1358,6 +1412,18 @@ struct CheddarToEmitCPass
       signalPassFailure();
       return;
     }
+
+    // Erase the external `__heir_debug_*` declarations: ConvertDebugCall
+    // already rewrote their call sites to emitc.call_opaque "__heir_debug", and
+    // the upstream Cpp emitter cannot print an external (bodyless) func.func
+    // (it mis-emits it as an empty zero-arg definition). Medusa's C++ prelude
+    // declares + defines `__heir_debug`.
+    SmallVector<func::FuncOp> debugDecls;
+    getOperation()->walk([&](func::FuncOp fn) {
+      if (fn.isExternal() && isDebugPort(fn.getName()))
+        debugDecls.push_back(fn);
+    });
+    for (func::FuncOp fn : debugDecls) fn.erase();
 
     // Re-type payload-buffer args (lvalue/array, which a func cannot carry) to
     // C++ references, mutable iff written.

@@ -553,9 +553,21 @@ BackendPipelineBuilder toLattigoPipelineBuilder() {
 }
 
 BackendPipelineBuilder toCheddarPipelineBuilder() {
-  return [=](OpPassManager& pm, const BackendOptions& /*options*/) {
+  return [=](OpPassManager& pm, const BackendOptions& options) {
     // Convert CKKS to LWE
     pm.addPass(ckks::createCKKSToLWE());
+
+    // Insert debug handler calls (decrypt-and-validate after every ciphertext
+    // op) and/or lower any debug.validate ops to `__heir_debug_*` func calls.
+    // Run while values are still `!lwe.ciphertext` so the shared lwe machinery
+    // applies; LWEToCheddar then converts the `__heir_debug_*` decls/calls to
+    // the cheddar context+ciphertext form, and CheddarToEmitC emits them as
+    // `__heir_debug(...)` C++ calls.
+    lwe::AddDebugPortOptions addDebugPortOptions{
+        .entryFunction = options.entryFunction,
+        .insertDebugAfterEveryOp = options.debug,
+    };
+    pm.addPass(lwe::createAddDebugPort(addDebugPortOptions));
 
     // Convert LWE to CHEDDAR
     pm.addPass(lwe::createLWEToCheddar());

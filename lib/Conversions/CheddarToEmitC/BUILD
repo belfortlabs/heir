@@ -14,6 +14,7 @@ cc_library(
         ":pass_inc_gen",
         "@heir//lib/Dialect/Cheddar/IR:Dialect",
         "@heir//lib/Utils:ConversionUtils",
+        "@heir//lib/Utils:TargetUtils",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:ConvertToEmitCInterface",
