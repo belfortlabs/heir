@@ -195,6 +195,15 @@ Value findUi(Operation* op, const TypeConverter& tc) {
   return r.value();
 }
 
+// The enclosing function's Encoder argument (used to query the canonical scale
+// per level, `encoder.GetScale(level)`).
+Value findEncoder(Operation* op, const TypeConverter& tc) {
+  Type encType = tc.convertType(cheddar::EncoderType::get(op->getContext()));
+  auto r = getContextualArgFromFunc(op, encType);
+  if (failed(r)) return Value{};
+  return r.value();
+}
+
 //===----------------------------------------------------------------------===//
 // Type conversions
 //===----------------------------------------------------------------------===//
@@ -741,28 +750,105 @@ struct ConvertLinearTransform
   }
 };
 
-// cheddar.eval_poly -> RunEvalPoly<word>(out, ctx, in, evk_map,
-// {coefficients}, level, outputLevel).
+// cheddar.eval_poly -> the real cheddar::EvalPoly<word> class (no free
+// `RunEvalPoly` exists). It is a stateful object: construct, Compile, then
+// Evaluate. We wrap the three statements in a `{ }` block scope so the object
+// -- which holds the precomputed power-basis ciphertexts on the GPU -- is
+// destroyed immediately after Evaluate rather than living to function end:
+//
+//   {
+//     cheddar::EvalPoly<word> ep({coeffs}, level, in.GetScale(),
+//                                encoder.GetScale(outputLevel),
+//                                /*chebyshev=*/true);
+//     ep.Compile(ctx);
+//     ep.Evaluate(ctx, out, in, evk.GetMultiplicationKey());
+//   }
 struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
       cheddar::EvalPolyOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    SmallVector<Value> operands{adaptor.getOutput(), adaptor.getCtx(),
-                                adaptor.getInput(), adaptor.getEvkMap()};
-    std::string trailing = floatArrayLit(op.getCoefficientsAttr()) + ", " +
-                           intLit(op.getLevelAttr()) + ", " +
-                           intLit(op.getOutputLevelAttr());
-    SmallVector<Attribute> args;
-    for (size_t i = 0; i < operands.size(); ++i)
-      args.push_back(rewriter.getIndexAttr(i));
-    args.push_back(emitc::OpaqueAttr::get(rewriter.getContext(), trailing));
-    SmallVector<Attribute> templateArgs{
-        emitc::OpaqueAttr::get(rewriter.getContext(), "word")};
-    CallOpaqueOp::create(rewriter, op.getLoc(), TypeRange{},
-                         rewriter.getStringAttr("RunEvalPoly"), operands,
-                         rewriter.getArrayAttr(args),
-                         rewriter.getArrayAttr(templateArgs));
+    auto* ctx = rewriter.getContext();
+    Location loc = op.getLoc();
+    Value enc = findEncoder(op, *typeConverter);
+    if (!enc)
+      return op.emitOpError("enclosing function is missing Encoder arg");
+    Value ctxV = adaptor.getCtx();
+    Value in = adaptor.getInput();
+    Value out = adaptor.getOutput();
+    Value evk = adaptor.getEvkMap();
+
+    Type dblTy = OpaqueType::get(ctx, "double");
+    // Reference type: GetMultiplicationKey() returns `const Evk&`; binding a
+    // reference avoids copying the (move-only / GPU-resident) key.
+    Type evkTy = OpaqueType::get(ctx, "const EvaluationKey<word>&");
+    Type evalPolyTy = OpaqueType::get(ctx, "cheddar::EvalPoly<word>");
+    Type ctxPtrTy = OpaqueType::get(ctx, "ConstContextPtr<word>");
+    auto strAttr = [&](StringRef s) { return rewriter.getStringAttr(s); };
+    auto opaque = [&](StringRef s) { return OpaqueAttr::get(ctx, s); };
+    ArrayAttr none{};
+
+    // Open the block scope (no operands -> emitted verbatim).
+    VerbatimOp::create(rewriter, loc, "{", ValueRange{});
+
+    // Compile/Evaluate take a ConstContextPtr (shared_ptr<const Context>); wrap
+    // the raw Context* in a non-owning alias (it does not own the context).
+    Value cp = CallOpaqueOp::create(
+                   rewriter, loc, TypeRange{ctxPtrTy},
+                   strAttr("ConstContextPtr<word>"), ValueRange{ctxV},
+                   rewriter.getArrayAttr({opaque("ConstContextPtr<word>()"),
+                                          rewriter.getIndexAttr(0)}),
+                   none)
+                   .getResult(0);
+
+    // input_scale = encoder.GetScale(level), target_scale =
+    // encoder.GetScale(outputLevel). Both use the canonical scale per level,
+    // which the (no-adjust-scale) cheddar pipeline keeps the ciphertexts at.
+    // (We query the encoder, not the input ciphertext: member_call_opaque's
+    // receiver must be a value, and the ciphertext is a move-only lvalue.)
+    Value inScale =
+        MemberCallOpaqueOp::create(
+            rewriter, loc, TypeRange{dblTy}, enc, strAttr("GetScale"),
+            rewriter.getArrayAttr({opaque(intLit(op.getLevelAttr()))}), none,
+            ValueRange{})
+            .getResult(0);
+    // target_scale = encoder.GetScale(outputLevel)   (canonical scale)
+    Value tgtScale =
+        MemberCallOpaqueOp::create(
+            rewriter, loc, TypeRange{dblTy}, enc, strAttr("GetScale"),
+            rewriter.getArrayAttr({opaque(intLit(op.getOutputLevelAttr()))}),
+            none, ValueRange{})
+            .getResult(0);
+
+    // cheddar::EvalPoly<word> ep({coeffs}, level, in_scale, tgt_scale, true);
+    SmallVector<Attribute> ctorArgs{
+        opaque(floatArrayLit(op.getCoefficientsAttr())),
+        opaque(intLit(op.getLevelAttr())), rewriter.getIndexAttr(0),
+        rewriter.getIndexAttr(1), opaque("true")};
+    Value ep = CallOpaqueOp::create(rewriter, loc, TypeRange{evalPolyTy},
+                                    strAttr("cheddar::EvalPoly<word>"),
+                                    ValueRange{inScale, tgtScale},
+                                    rewriter.getArrayAttr(ctorArgs), none)
+                   .getResult(0);
+
+    // ep.Compile(ctx);
+    MemberCallOpaqueOp::create(rewriter, loc, TypeRange{}, ep,
+                               strAttr("Compile"), none, none, ValueRange{cp});
+
+    // mult_key = evk.GetMultiplicationKey()
+    Value mk = MemberCallOpaqueOp::create(rewriter, loc, TypeRange{evkTy}, evk,
+                                          strAttr("GetMultiplicationKey"), none,
+                                          none, ValueRange{})
+                   .getResult(0);
+
+    // ep.Evaluate(ctx, out, in, mult_key);
+    MemberCallOpaqueOp::create(rewriter, loc, TypeRange{}, ep,
+                               strAttr("Evaluate"), none, none,
+                               ValueRange{cp, out, in, mk});
+
+    // Close the block scope -> ep destroyed here.
+    VerbatimOp::create(rewriter, loc, "}", ValueRange{});
+
     rewriter.eraseOp(op);
     return success();
   }

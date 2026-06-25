@@ -182,9 +182,9 @@ func.func @boot(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map) -
   return %r : tensor<!ciphertext>
 }
 
-// linear_transform / eval_poly have no Context method (they are classes), so
-// they lower to one structured call to the HEIR-side RunLinearTransform /
-// RunEvalPoly shim, carrying the trailing literal args + template args.
+// linear_transform has no Context method (it is a class), so it lowers to one
+// structured call to the HEIR-side RunLinearTransform shim, carrying the
+// trailing literal args + template args.
 // CHECK: func.func @lintrans
 // CHECK: emitc.call_opaque "RunLinearTransform"
 // CHECK-SAME: 0, 1}, 5, 2, 1
@@ -195,11 +195,24 @@ func.func @lintrans(%ctx: !context, %ct: tensor<!ciphertext>, %evk: !evk_map, %d
   return %r : tensor<!ciphertext>
 }
 
+// eval_poly lowers to the real cheddar::EvalPoly<word> class -- there is no
+// `RunEvalPoly` in cheddar. The stateful object (construct from the Chebyshev
+// coefficients on [-1,1], Compile, Evaluate) is wrapped in a `{ }` block scope
+// so it (and its GPU power-basis) is destroyed right after Evaluate. Input and
+// target scales come from the encoder's canonical per-level scale; Compile /
+// Evaluate take a (non-owning) ConstContextPtr wrapped around the raw Context*.
 // CHECK: func.func @eval_poly
-// CHECK: emitc.call_opaque "RunEvalPoly"
-// CHECK-SAME: 2, 3}, 4, 3
-// CHECK-SAME: word
-func.func @eval_poly(%ctx: !context, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
+// CHECK: emitc.verbatim "{"
+// CHECK: emitc.call_opaque "ConstContextPtr<word>"
+// CHECK: emitc.member_call_opaque %{{.*}} "GetScale"
+// CHECK: emitc.call_opaque "cheddar::EvalPoly<word>"
+// CHECK-SAME: {1, 2, 3}
+// CHECK-SAME: true
+// CHECK: emitc.member_call_opaque %{{.*}} "Compile"
+// CHECK: emitc.member_call_opaque %{{.*}} "GetMultiplicationKey"
+// CHECK: emitc.member_call_opaque %{{.*}} "Evaluate"
+// CHECK: emitc.verbatim "}"
+func.func @eval_poly(%ctx: !context, %enc: !encoder, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
   %d0 = bufferization.alloc_tensor() : tensor<!ciphertext>
   %r = cheddar.eval_poly %ctx, %ct, %evk, %d0 {coefficients = [1.0 : f64, 2.0 : f64, 3.0 : f64], level = 4 : i64, outputLevel = 3 : i64} : (!context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
   return %r : tensor<!ciphertext>

@@ -70,19 +70,6 @@ void RunLinearTransform(Ciphertext<wordT>& out, Context<wordT>* ctx,
   LinearTransform<wordT> lt(cp, m, level, ctx->param_.GetScale(level), bs, gs);
   lt.Evaluate(cp, out, in, evk_map);
 }
-// Same shape for cheddar.eval_poly -> CHEDDAR's EvalPoly class (Chebyshev basis).
-template <typename wordT>
-void RunEvalPoly(Ciphertext<wordT>& out, Context<wordT>* ctx,
-                 const Ciphertext<wordT>& in, const EvkMap<wordT>& evk_map,
-                 std::initializer_list<double> coeffs, int level,
-                 int output_level) {
-  ConstContextPtr<wordT> cp(ConstContextPtr<wordT>(), ctx);
-  std::vector<double> c(coeffs);
-  EvalPoly<wordT> poly(c, level, ctx->param_.GetScale(level),
-                       ctx->param_.GetScale(output_level), /*chebyshev=*/true);
-  poly.Compile(cp);
-  poly.Evaluate(cp, out, in, evk_map.GetMultiplicationKey());
-}
 PRELUDE_EOF
 cat $(location :kernels_raw.cc) >> $@
 """,
