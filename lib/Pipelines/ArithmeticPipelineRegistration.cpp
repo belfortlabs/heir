@@ -179,7 +179,7 @@ void mlirToSecretArithmeticPipelineBuilder(
   // Vectorize and optimize rotations
   // TODO(#2320): figure out where this fits in the new pipeline
   hecoSIMDVectorizerPipelineBuilder(pm, options.experimentalDisableLoopUnroll);
-  mathToPolynomialApproximationBuilder(pm);
+  mathToPolynomialApproximationBuilder(pm, options.useCompositeRelu);
 
   // Layout assignment and optimization
   LayoutPropagationOptions layoutPropagationOptions;
@@ -580,6 +580,7 @@ void torchLinalgToCkksBuilder(OpPassManager& manager,
   suboptions.enableArithmetization = true;
   suboptions.ciphertextDegree = options.ciphertextDegree;
   suboptions.ckksBootstrapWaterline = options.ckksBootstrapWaterline;
+  suboptions.useCompositeRelu = options.useCompositeRelu;
   suboptions.scalingModBits = options.scalingModBits;
   suboptions.firstModBits = options.firstModBits;
   suboptions.enableSplitPreprocessing = options.enableSplitPreprocessing;
