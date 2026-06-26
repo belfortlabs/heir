@@ -9,14 +9,11 @@ include "lib/Dialect/MathExt/IR/MathExtOps.td"
 
 def IsOne : Constraint<CPred<"IsOne($0)">>;
 
-// select(a >= c, a, c) = max(a, c)
-def SelectGreaterThanEqualFloat : Pat<
-  (SelectOp
-    (Arith_CmpFOp $pred, $a, $c, $flags), $a, $c),
-  (Arith_MaximumFOp $a, $c, $flags),
-  [(Constraint<
-            CPred<"$0.getValue() == arith::CmpFPredicate::UGT || "
-                  "$0.getValue() == arith::CmpFPredicate::UGE">> $pred)]>;
+// select(a >= c, a, c) = max(a, c) for floats is handled by the C++
+// `SelectGreaterThanEqualFloatPattern` in ActivationCanonicalizations.cpp,
+// which (unlike a DRR pattern) can also forward the `domain_lower`/
+// `domain_upper` attrs from an enclosing `linalg.generic` onto the generated
+// `arith.maximumf` — the polynomial-approximation domain HEIR reads later.
 
 // select(a >= c, a, c) = max(a, c)
 def SelectGreaterThanEqualUnsigned : Pat<
