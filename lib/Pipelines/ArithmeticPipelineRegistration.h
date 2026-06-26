@@ -89,6 +89,13 @@ struct MlirToRLWEPipelineOptions : public LoopOptions {
       llvm::cl::desc("The number of levels to keep until bootstrapping in CKKS "
                      "(c.f. --secret-insert-mgmt-ckks)"),
       llvm::cl::init(10)};
+  PassOptions::Option<bool> useCompositeRelu{
+      *this, "use-composite-relu",
+      llvm::cl::desc("Approximate ReLU with the composite-sign method "
+                     "(x*step(x/B), 3 chained minimax Chebyshev polys) "
+                     "instead of a single-polynomial max(x,0) fit. More "
+                     "accurate for deep nets; needs more depth/bootstrapping."),
+      llvm::cl::init(false)};
   PassOptions::Option<int> levelBudget{
       *this, "level-budget",
       llvm::cl::desc(

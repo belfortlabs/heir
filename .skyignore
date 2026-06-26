@@ -12,6 +12,7 @@ build
 wheelhouse
 .venv
 .uv
+.uv-cache
 .idea
 .vscode
 .DS_Store
