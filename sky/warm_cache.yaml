@@ -1,0 +1,28 @@
+# Populate the BuildBuddy remote cache for x86_64 linux by building //tools:all.
+# REQUIRES THAT YOU HAVE A WRITE-ENABLED BUILDBUDDY API KEY IN YOUR  .bazelrc.user !!!
+# Usage: sky launch -y -c heir-warm-cache --down sky/warm_cache.yaml
+
+name: heir-warm-cache
+
+workdir: .
+
+resources:
+  cpus: 128+
+  memory: 64+
+  disk_size: 200
+  autostop:
+    idle_minutes: 10
+
+setup: |
+  set -ex
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq clang wget
+
+  if ! command -v bazel &> /dev/null; then
+    sudo wget -q https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O /usr/local/bin/bazel
+    sudo chmod +x /usr/local/bin/bazel
+  fi
+
+run: |
+  set -ex
+  CC=clang bazel build -c opt --remote_upload_local_results //tools:all
