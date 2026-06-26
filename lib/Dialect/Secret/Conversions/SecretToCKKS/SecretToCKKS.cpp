@@ -252,7 +252,7 @@ class SecretGenericPlaintextDivision
 // Lower a kept `polynomial.eval` (Chebyshev basis) to `orion.chebyshev`, which
 // the Lattigo backend emits as a single compact polynomial.Evaluate call
 // instead of an unrolled Paterson-Stockmeyer mul/add chain. Only fires under
-// --use-orion-kernels, which skips LowerPolynomialEval so the eval op survives
+// --preserve-poly-eval, which skips LowerPolynomialEval so the eval op survives
 // to here. The op's multiplicative depth was already accounted for by mgmt via
 // ReducesLevelOpInterface (see Polynomial EvalOp::getLevelsToDrop).
 class ConvertChebyshevEval
@@ -331,8 +331,9 @@ struct SecretToCKKS : public impl::SecretToCKKSBase<SecretToCKKS> {
                                                          typeConverter);
 
     target.addLegalDialect<ckks::CKKSDialect>();
-    // orion.chebyshev (and orion.linear_transform) are produced under
-    // --use-orion-kernels and lowered to compact Lattigo calls downstream.
+    // orion.chebyshev is produced under --preserve-poly-eval and lowered to a
+    // compact backend call downstream. (The Orion dialect is also marked legal
+    // so any explicit orion.linear_transform in the input IR survives.)
     target.addLegalDialect<orion::OrionDialect>();
     patterns.add<
         ConvertChebyshevEval,

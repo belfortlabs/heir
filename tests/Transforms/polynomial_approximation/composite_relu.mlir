@@ -2,7 +2,7 @@
 
 // Composite-sign ReLU on a calibrated (non-[-1,1]) domain. The 1/B prescale is
 // materialized explicitly (B = max|domain| = 3.527138, so 1/B = 0.2835160) and
-// each Chebyshev sign stage is emitted on [-1, 1] so the kept orion-kernel /
+// each Chebyshev sign stage is emitted on [-1, 1] so the kept preserve-poly-eval /
 // cheddar eval_poly (which only evaluates on [-1, 1]) can consume it. The final
 // ReLU multiply uses the original (un-prescaled) input.
 // CHECK: @test_composite_relu_prescale
