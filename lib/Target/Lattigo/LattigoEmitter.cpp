@@ -2290,6 +2290,12 @@ LogicalResult LattigoEmitter::printOperation(CKKSChebyshevOp op) {
   os << bignumPoly << ", ";
   os << "rlwe.NewScale(" << op.getTargetScale().getInt() << "))\n";
   printErrPanic(errName);
+  // Register the result so that a later in-place reuse of this ciphertext
+  // buffer is emitted via `=` rather than a second `:=` (which Go rejects with
+  // "no new variables on left side of :="). Mirrors CKKSRotateNewOp et al.
+  if (resultName != "_") {
+    declaredVars.insert(resultName);
+  }
   return success();
 }
 
