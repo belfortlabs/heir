@@ -96,21 +96,16 @@ struct MlirToRLWEPipelineOptions : public LoopOptions {
                      "instead of a single-polynomial max(x,0) fit. More "
                      "accurate for deep nets; needs more depth/bootstrapping."),
       llvm::cl::init(false)};
-  PassOptions::Option<bool> useOrionKernels{
-      *this, "use-orion-kernels",
+  PassOptions::Option<bool> preservePolyEval{
+      *this, "preserve-poly-eval",
       llvm::cl::desc(
-          "Keep polynomial-eval (and matmul) as high-level ops and lower "
-          "them to orion.chebyshev / orion.linear_transform instead of "
-          "unrolling to arith rotate/mul/add. (cheddar wires up only the "
-          "orion.chebyshev path -> cheddar.eval_poly, which evaluates the "
-          "polynomial internally with correct scale management.)"),
-      llvm::cl::init(false)};
-  PassOptions::Option<bool> orionConvSkip{
-      *this, "orion-conv-skip",
-      llvm::cl::desc(
-          "Under use-orion-kernels, skip materializing the dense expanded-"
-          "Toeplitz layout of a constant conv filter for the orion direct-"
-          "conv kernel."),
+          "Skip LowerPolynomialEval so a Chebyshev-basis polynomial.eval "
+          "survives to SecretToCKKS and is lowered to a compact "
+          "orion.chebyshev op (-> backend polynomial.Evaluate / "
+          "cheddar.eval_poly) instead of an unrolled Paterson-Stockmeyer "
+          "arith mul/add chain. Backend-agnostic: matmul/conv still lower "
+          "normally (this option does NOT enable orion.linear_transform matmul "
+          "lowering)."),
       llvm::cl::init(false)};
   PassOptions::Option<int> levelBudget{
       *this, "level-budget",

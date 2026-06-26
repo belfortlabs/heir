@@ -68,14 +68,14 @@ void oneShotBufferize(OpPassManager& manager, bool includeDeallocation) {
 
 void mathToPolynomialApproximationBuilder(OpPassManager& pm,
                                           bool useCompositeRelu,
-                                          bool useOrionKernels) {
+                                          bool preservePolyEval) {
   PolynomialApproximationOptions polyApproxOptions;
   polyApproxOptions.useCompositeRelu = useCompositeRelu;
   pm.addPass(createPolynomialApproximation(polyApproxOptions));
-  // With orion kernels, leave polynomial.eval ops intact for SecretToCKKS to
-  // lower into orion.chebyshev (a compact backend library call) rather than
+  // With preserve-poly-eval, leave polynomial.eval ops intact for SecretToCKKS
+  // to lower into orion.chebyshev (a compact backend library call) rather than
   // unrolling them here into an arith mul/add chain.
-  if (!useOrionKernels) {
+  if (!preservePolyEval) {
     pm.addPass(createLowerPolynomialEval());
   }
   pm.addPass(createCanonicalizerPass());

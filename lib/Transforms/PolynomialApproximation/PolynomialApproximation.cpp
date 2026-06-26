@@ -216,7 +216,7 @@ inline APFloat minnumf(const APFloat& lhs, const APFloat& rhs) {
 // the explicit affine map x -> x*(2/(U-L)) - (U+L)/(U-L). Mirrors the rescale
 // in LowerViaPatersonStockmeyerChebyshev (LowerPolynomialEval/Patterns.cpp). We
 // materialize it HERE (before level/scale analysis) when the consumer is a kept
-// Chebyshev kernel (orion-kernel path), because cheddar's eval_poly only
+// Chebyshev kernel (preserve-poly-eval path), because cheddar's eval_poly only
 // evaluates on [-1, 1] and the unrolled rescale in LowerPolynomialEval is
 // skipped on that path. For symmetric domains the shift is 0, so this is a
 // single scalar multiply.
@@ -519,11 +519,12 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
     // step(x/B) via the 3-stage composite sign approximation. cheby0 is fit on
     // [-1, 1], so prescale x by 1/B explicitly (x -> x/B maps [-B, B] -> [-1,
     // 1]) and feed the result to the first eval on domain [-1, 1]. The explicit
-    // multiply is required for the orion-kernel path: cheddar's eval_poly only
-    // evaluates on [-1, 1], so the [-B, B] domain cannot be folded into the
-    // kept Chebyshev kernel (LowerPolynomialEval, which would otherwise apply
-    // the rescale for the unrolled path, is skipped). x itself is unchanged and
-    // still feeds the final `x * step` multiply at its native scale.
+    // multiply is required for the preserve-poly-eval path: cheddar's eval_poly
+    // only evaluates on [-1, 1], so the [-B, B] domain cannot be folded into
+    // the kept Chebyshev kernel (LowerPolynomialEval, which would otherwise
+    // apply the rescale for the unrolled path, is skipped). x itself is
+    // unchanged and still feeds the final `x * step` multiply at its native
+    // scale.
     Value xPrescaled = rescaleToUnitInterval(rewriter, loc, x, -bound, bound);
     Value s0 = makeEval(xPrescaled, kCompositeSignPoly0, -1.0, 1.0);
     Value s1 = makeEval(s0, kCompositeSignPoly1, -1.0, 1.0);
