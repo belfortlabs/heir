@@ -307,7 +307,7 @@ static FailureOr<Value> implementAssignLayoutStep(
     auto extractOp = tensor::ExtractOp::create(builder, input, zeroIndices);
     createdOpCallback(extractOp);
     return implementAssignLayoutStep(extractOp.getResult(), layout,
-                                     ciphertextSize, builder, createdOpCallback,
+                                     targetTypeTy, builder, createdOpCallback,
                                      isLast, domainSchedule);
   }
 
