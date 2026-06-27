@@ -963,10 +963,21 @@ struct ConvertLoadArray : public OpConversionPattern<mlir::memref::LoadOp> {
     Type baseTy = adaptor.getMemref().getType();
     bool isPayloadBuf = isa<emitc::LValueType>(baseTy);
     if (!isPayloadBuf && !isa<emitc::ArrayType>(baseTy)) return failure();
-    if (adaptor.getIndices().empty()) return failure();
     Type elt =
         getTypeConverter()->convertType(op.getMemRefType().getElementType());
     if (!elt) return failure();
+    // Rank-0 payload memref: a rank-0 `memref<!cheddar.X>` converts to the
+    // element lvalue itself (lvalue<opaque>), so a no-index load IS that lvalue
+    // -- no subscript. Mirrors the indexed payload case which yields an lvalue
+    // (used by preprocessing storage of a single plaintext slot). Non-payload
+    // rank-0 loads fall through to the stock memref->emitc patterns.
+    if (adaptor.getIndices().empty()) {
+      if (isPayloadBuf && isa<emitc::OpaqueType>(elt)) {
+        rewriter.replaceOp(op, adaptor.getMemref());
+        return success();
+      }
+      return failure();
+    }
     auto sub = emitc::SubscriptOp::create(
         rewriter, op.getLoc(), emitc::LValueType::get(elt), adaptor.getMemref(),
         adaptor.getIndices());
@@ -990,10 +1001,20 @@ struct ConvertStoreArray : public OpConversionPattern<mlir::memref::StoreOp> {
     Type baseTy = adaptor.getMemref().getType();
     if (!isa<emitc::LValueType>(baseTy) && !isa<emitc::ArrayType>(baseTy))
       return failure();
-    if (adaptor.getIndices().empty()) return failure();
     Type elt =
         getTypeConverter()->convertType(op.getMemRefType().getElementType());
     if (!elt) return failure();
+    // Rank-0 payload memref: store directly into the element lvalue (no
+    // subscript), mirroring the indexed payload move-assign below.
+    if (adaptor.getIndices().empty()) {
+      if (isa<emitc::LValueType>(baseTy) && isa<emitc::OpaqueType>(elt)) {
+        VerbatimOp::create(rewriter, op.getLoc(), "{} = std::move({});",
+                           ValueRange{adaptor.getMemref(), adaptor.getValue()});
+        rewriter.eraseOp(op);
+        return success();
+      }
+      return failure();
+    }
     auto sub = emitc::SubscriptOp::create(
         rewriter, op.getLoc(), emitc::LValueType::get(elt), adaptor.getMemref(),
         adaptor.getIndices());
