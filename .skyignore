@@ -1,18 +1,20 @@
 # Exclude bazel build outputs / wheels / dev caches from SkyPilot uploads.
 # There are multi-GB bazel artifacts that get rebuilt on the remote anyway.
-bazel-bin
-bazel-out
-bazel-heir
-bazel-testlogs
-bazel-medusa
+bazel-*
 external
 .git
 .jj
 build
 wheelhouse
 .venv
+venv
 .uv
 .uv-cache
+.cache
+# Huge local-only artifacts (rebuilt/regenerated on remote).
+compile_commands.json
+heir-opt
+heir-translate
 .idea
 .vscode
 .DS_Store
