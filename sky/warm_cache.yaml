@@ -6,6 +6,11 @@ name: heir-warm-cache
 
 workdir: .
 
+# Defaults: target and config used by the Python wheel build / editable install compiles
+envs:
+  TARGETS: "//tools:heir-opt.stripped //tools:heir-translate.stripped @abc//:abc_bin.stripped"
+  CONFIG: "--compilation_mode=opt --strip=always --cxxopt=-std=c++20"
+
 resources:
   cpus: 128+
   memory: 64+
@@ -25,4 +30,5 @@ setup: |
 
 run: |
   set -ex
-  CC=clang bazel build -c opt --remote_upload_local_results //tools:all
+  bazel fetch $TARGETS $CONFIG
+  bazel build $TARGETS $CONFIG --remote_upload_local_results
