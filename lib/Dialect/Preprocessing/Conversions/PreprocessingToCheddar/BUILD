@@ -1,4 +1,4 @@
-load("@heir//lib/Transforms:transforms.bzl", "add_heir_transforms")
+load("@llvm-project//mlir:tblgen.bzl", "gentbl_cc_library")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
 package(
@@ -7,28 +7,23 @@ package(
 )
 
 cc_library(
-    name = "LWEToCheddar",
-    srcs = ["LWEToCheddar.cpp"],
-    hdrs = [
-        "LWEToCheddar.h",
-    ],
+    name = "PreprocessingToCheddar",
+    srcs = ["PreprocessingToCheddar.cpp"],
+    hdrs = ["PreprocessingToCheddar.h"],
     deps = [
         ":pass_inc_gen",
-        "@heir//lib/Dialect:ModuleAttributes",
-        "@heir//lib/Dialect/CKKS/IR:Dialect",
+        "@heir//lib/Analysis/PreprocessingStorageLayoutAnalysis",
         "@heir//lib/Dialect/Cheddar/IR:Dialect",
-        "@heir//lib/Dialect/LWE/IR:Dialect",
-        "@heir//lib/Dialect/Orion/IR:Dialect",
         "@heir//lib/Dialect/Preprocessing/Conversions:Util",
         "@heir//lib/Dialect/Preprocessing/IR:Dialect",
         "@heir//lib/Utils",
         "@heir//lib/Utils:ConversionUtils",
-        "@heir//lib/Utils:TargetUtils",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AffineDialect",
         "@llvm-project//mlir:ArithDialect",
-        "@llvm-project//mlir:BufferizationDialect",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MemRefDialect",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:TensorDialect",
@@ -36,8 +31,19 @@ cc_library(
     ],
 )
 
-add_heir_transforms(
-    header_filename = "LWEToCheddar.h.inc",
-    pass_name = "LWEToCheddar",
-    td_file = "LWEToCheddar.td",
+gentbl_cc_library(
+    name = "pass_inc_gen",
+    tbl_outs = {
+        "PreprocessingToCheddar.h.inc": [
+            "-gen-pass-decls",
+            "-name=PreprocessingToCheddar",
+        ],
+        "PreprocessingToCheddar.md": ["-gen-pass-doc"],
+    },
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "PreprocessingToCheddar.td",
+    deps = [
+        "@llvm-project//mlir:OpBaseTdFiles",
+        "@llvm-project//mlir:PassBaseTdFiles",
+    ],
 )

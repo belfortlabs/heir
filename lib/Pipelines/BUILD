@@ -118,6 +118,7 @@ cc_library(
         "@heir//lib/Dialect/Openfhe/Transforms:ConfigureCryptoContext",
         "@heir//lib/Dialect/Openfhe/Transforms:CountAddAndKeySwitch",
         "@heir//lib/Dialect/Openfhe/Transforms:FastRotationPrecompute",
+        "@heir//lib/Dialect/Preprocessing/Conversions/PreprocessingToCheddar",
         "@heir//lib/Dialect/Preprocessing/Conversions/PreprocessingToLattigo",
         "@heir//lib/Dialect/Preprocessing/Conversions/PreprocessingToOpenfhe",
         "@heir//lib/Dialect/Preprocessing/Transforms",

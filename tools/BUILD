@@ -99,6 +99,7 @@ cc_binary(
         "@heir//lib/Dialect/Polynomial/Conversions/PolynomialToModArith",
         "@heir//lib/Dialect/Polynomial/IR:Dialect",
         "@heir//lib/Dialect/Polynomial/Transforms",
+        "@heir//lib/Dialect/Preprocessing/Conversions/PreprocessingToCheddar",
         "@heir//lib/Dialect/Preprocessing/Conversions/PreprocessingToLattigo",
         "@heir//lib/Dialect/Preprocessing/Conversions/PreprocessingToMemref",
         "@heir//lib/Dialect/Preprocessing/Conversions/PreprocessingToOpenfhe",
