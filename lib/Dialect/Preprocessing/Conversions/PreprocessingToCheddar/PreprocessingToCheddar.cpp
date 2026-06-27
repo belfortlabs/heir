@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "lib/Analysis/PreprocessingStorageLayoutAnalysis/PreprocessingStorageLayoutAnalysis.h"
+#include "lib/Dialect/Cheddar/IR/CheddarDialect.h"  // for the pass's dependentDialects (getDependentDialects)
 #include "lib/Dialect/Preprocessing/Conversions/Util.h"
 #include "lib/Dialect/Preprocessing/IR/PreprocessingDialect.h"
 #include "lib/Dialect/Preprocessing/IR/PreprocessingOps.h"
