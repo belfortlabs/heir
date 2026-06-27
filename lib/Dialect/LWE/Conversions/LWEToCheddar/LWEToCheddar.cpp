@@ -19,6 +19,9 @@
 #include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Orion/IR/OrionDialect.h"
 #include "lib/Dialect/Orion/IR/OrionOps.h"
+#include "lib/Dialect/Preprocessing/Conversions/Util.h"
+#include "lib/Dialect/Preprocessing/IR/PreprocessingDialect.h"
+#include "lib/Dialect/Preprocessing/IR/PreprocessingTypes.h"
 #include "lib/Utils/ConversionUtils.h"
 #include "lib/Utils/TargetUtils.h"
 #include "lib/Utils/Utils.h"
@@ -85,6 +88,12 @@ class ToCheddarTypeConverter : public TypeConverter {
         return RankedTensorType::get(type.getShape(),
                                      cheddar::PlaintextType::get(ctx));
       return RankedTensorType::get(type.getShape(), this->convertType(elt));
+    });
+    // split-preprocessing storage: convert its plaintext element types
+    // (lwe.lwe_plaintext -> rank-0 tensor<!cheddar.plaintext>); the storage
+    // itself is lowered to memref later by --preprocessing-to-cheddar.
+    addConversion([this](preprocessing::PreprocessingStorageType type) -> Type {
+      return preprocessing::convertStorageElementTypes(type, this);
     });
   }
 };
@@ -772,6 +781,11 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     target.addLegalDialect<cheddar::CheddarDialect>();
     target.addLegalDialect<bufferization::BufferizationDialect>();
     target.addIllegalDialect<ckks::CKKSDialect, orion::OrionDialect>();
+    // preprocessing.* ops are legal once their plaintext element types have
+    // been converted to cheddar's; --preprocessing-to-cheddar lowers them
+    // after.
+    target.addDynamicallyLegalDialect<preprocessing::PreprocessingDialect>(
+        [&](Operation* op) { return typeConverter.isLegal(op); });
     target
         .addIllegalOp<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp, lwe::RLWEEncodeOp,
                       lwe::RLWEDecodeOp, lwe::RAddOp, lwe::RSubOp, lwe::RMulOp,
@@ -780,6 +794,8 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     RewritePatternSet patterns(context);
     addStructuralConversionPatterns(typeConverter, patterns, target);
     addTensorConversionPatterns(typeConverter, patterns, target);
+    preprocessing::populatePreprocessingConversions(patterns, typeConverter,
+                                                    context);
 
     // BootContext and the rotation-key map (EvkMap) must be threaded
     // transitively: a function that (directly or indirectly) calls a function

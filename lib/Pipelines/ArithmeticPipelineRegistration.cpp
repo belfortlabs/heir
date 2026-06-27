@@ -19,6 +19,7 @@
 #include "lib/Dialect/Openfhe/Transforms/ConfigureCryptoContext.h"
 #include "lib/Dialect/Openfhe/Transforms/CountAddAndKeySwitch.h"
 #include "lib/Dialect/Openfhe/Transforms/FastRotationPrecompute.h"
+#include "lib/Dialect/Preprocessing/Conversions/PreprocessingToCheddar/PreprocessingToCheddar.h"
 #include "lib/Dialect/Preprocessing/Conversions/PreprocessingToLattigo/PreprocessingToLattigo.h"
 #include "lib/Dialect/Preprocessing/Conversions/PreprocessingToOpenfhe/PreprocessingToOpenfhe.h"
 #include "lib/Dialect/Preprocessing/Transforms/ValidatePreprocessing.h"
@@ -585,6 +586,10 @@ BackendPipelineBuilder toCheddarPipelineBuilder() {
 
     // Convert LWE to CHEDDAR
     pm.addPass(lwe::createLWEToCheddar());
+
+    // Lower split-preprocessing storage to memrefs of cheddar plaintexts
+    // (mirrors PreprocessingToLattigo/Openfhe in their backend builders).
+    pm.addPass(preprocessing::createPreprocessingToCheddar());
 
     // Simplify, in case the lowering revealed redundancy
     pm.addPass(createCanonicalizerPass());
