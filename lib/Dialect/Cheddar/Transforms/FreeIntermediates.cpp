@@ -60,6 +60,26 @@ struct CheddarFreeIntermediates
         top.walk([&](Operation *inner) {
           for (Value operand : inner->getOperands())
             if (localAllocs.contains(operand)) lastUse[operand] = &top;
+
+          // Split-preprocessing stores an encoded payload into persistent
+          // storage as bufferized `%v = memref.load %localAlloc[] ;
+          // memref.store %v, %storage[...]` (the rank-0 tensor.extract -> store
+          // from PreprocessingToCheddar). The store's operands are %v and
+          // %storage, NOT %localAlloc, so the operand sweep above would treat
+          // the memref.load as the alloc's last use and free it BEFORE the
+          // store -- leaving an EMPTY payload (NPInfo 0,0,0) in storage. Treat
+          // the store into a non-local payload memref as a use of the loaded
+          // local alloc so its dealloc lands after the store.
+          if (auto store = dyn_cast<memref::StoreOp>(inner)) {
+            Value dst = store.getMemref();
+            if (!localAllocs.contains(dst) && isPayloadMemRef(dst.getType())) {
+              if (auto load =
+                      store.getValueToStore().getDefiningOp<memref::LoadOp>()) {
+                Value src = load.getMemref();
+                if (localAllocs.contains(src)) lastUse[src] = &top;
+              }
+            }
+          }
         });
       }
 
