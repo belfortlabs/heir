@@ -990,6 +990,21 @@ struct ConvertLoadArray : public OpConversionPattern<mlir::memref::LoadOp> {
   }
 };
 
+// The dialect-conversion materialization for a payload memref.store's value
+// operand turns an `lvalue<opaque<T>>` producer (an emitc.variable holding the
+// payload) into the `opaque<T>` value form, via an unrealized_conversion_cast
+// (the type converter maps payloads to the value type). For a move-only payload
+// we want to `std::move` the LVALUE directly, so look through that cast.
+// (reconcile-unrealized-casts can't fold it -- there's no inverse -- and an
+// emitc.load would copy the move-only payload.)
+static Value payloadMoveSource(Value v) {
+  if (auto cast = v.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+      cast && cast.getInputs().size() == 1 &&
+      isa<emitc::LValueType>(cast.getInputs()[0].getType()))
+    return cast.getInputs()[0];
+  return v;
+}
+
 // memref.store into a std::array buffer -> `base[i...] = ...`. A payload
 // element is move-assigned (`arr[i] = std::move(src);`); a float element is a
 // plain `emitc.assign`.
@@ -1009,7 +1024,8 @@ struct ConvertStoreArray : public OpConversionPattern<mlir::memref::StoreOp> {
     if (adaptor.getIndices().empty()) {
       if (isa<emitc::LValueType>(baseTy) && isa<emitc::OpaqueType>(elt)) {
         VerbatimOp::create(rewriter, op.getLoc(), "{} = std::move({});",
-                           ValueRange{adaptor.getMemref(), adaptor.getValue()});
+                           ValueRange{adaptor.getMemref(),
+                                      payloadMoveSource(adaptor.getValue())});
         rewriter.eraseOp(op);
         return success();
       }
@@ -1019,8 +1035,9 @@ struct ConvertStoreArray : public OpConversionPattern<mlir::memref::StoreOp> {
         rewriter, op.getLoc(), emitc::LValueType::get(elt), adaptor.getMemref(),
         adaptor.getIndices());
     if (isa<emitc::OpaqueType>(elt)) {
-      VerbatimOp::create(rewriter, op.getLoc(), "{} = std::move({});",
-                         ValueRange{sub.getResult(), adaptor.getValue()});
+      VerbatimOp::create(
+          rewriter, op.getLoc(), "{} = std::move({});",
+          ValueRange{sub.getResult(), payloadMoveSource(adaptor.getValue())});
     } else {
       emitc::AssignOp::create(rewriter, op.getLoc(), sub.getResult(),
                               adaptor.getValue());
