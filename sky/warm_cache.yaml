@@ -2,6 +2,9 @@
 # REQUIRES THAT YOU HAVE A WRITE-ENABLED BUILDBUDDY API KEY IN YOUR  .bazelrc.user !!!
 # Usage: sky launch -y -c heir-warm-cache --down sky/warm_cache.yaml
 
+# If you want to warm the cache for macOS instead, you can (locally, on a mac) run the following command which (assuming a write-enabled key is available) will populate the caches required by a `uv sync` on macOS:
+# bazel build //tools:heir-opt.stripped //tools:heir-translate.stripped @abc//:abc_bin.stripped --compilation_mode=opt --strip=always --cxxopt=-std=c++20 --macos_minimum_os=10.15 --platforms=@build_bazel_apple_support//platforms:darwin_arm64 --remote_upload_local_results
+
 name: heir-warm-cache
 
 workdir: .
