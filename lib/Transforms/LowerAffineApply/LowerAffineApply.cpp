@@ -1,12 +1,12 @@
 #include "lib/Transforms/LowerAffineApply/LowerAffineApply.h"
 
-#include "llvm/include/llvm/ADT/SmallVector.h"             // from @llvm-project
+#include "llvm/include/llvm/ADT/SmallVector.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Affine/IR/AffineOps.h"  // from @llvm-project
-#include "mlir/include/mlir/Dialect/Affine/Utils.h"        // from @llvm-project
-#include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"      // from @llvm-project
-#include "mlir/include/mlir/IR/PatternMatch.h"             // from @llvm-project
-#include "mlir/include/mlir/IR/Value.h"                    // from @llvm-project
-#include "mlir/include/mlir/IR/Visitors.h"                 // from @llvm-project
+#include "mlir/include/mlir/Dialect/Affine/Utils.h"    // from @llvm-project
+#include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/PatternMatch.h"         // from @llvm-project
+#include "mlir/include/mlir/IR/Value.h"                // from @llvm-project
+#include "mlir/include/mlir/IR/Visitors.h"             // from @llvm-project
 
 namespace mlir {
 namespace heir {
@@ -29,9 +29,9 @@ struct LowerAffineApply : impl::LowerAffineApplyBase<LowerAffineApply> {
     IRRewriter rewriter(&getContext());
     for (affine::AffineApplyOp op : applyOps) {
       rewriter.setInsertionPoint(op);
-      std::optional<SmallVector<Value, 8>> expanded = affine::expandAffineMap(
-          rewriter, op.getLoc(), op.getAffineMap(),
-          llvm::to_vector(op.getMapOperands()));
+      std::optional<SmallVector<Value, 8>> expanded =
+          affine::expandAffineMap(rewriter, op.getLoc(), op.getAffineMap(),
+                                  llvm::to_vector(op.getMapOperands()));
       if (!expanded) {
         op.emitOpError("failed to expand affine map to arithmetic ops");
         return signalPassFailure();

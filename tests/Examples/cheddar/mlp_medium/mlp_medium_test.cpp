@@ -54,7 +54,7 @@ void mlpmedium(cheddar::Context<word>* ctx,
 namespace {
 
 constexpr int kSlots = 8192;
-constexpr int kInputLevel = 9;       // the model's input ciphertext level
+constexpr int kInputLevel = 9;        // the model's input ciphertext level
 constexpr int kDefaultEncLevel = 12;  // top of the 13-prime chain
 constexpr int kNumClasses = 10;
 
@@ -78,8 +78,9 @@ void ReadInto(std::ifstream& f, T* dst, size_t n) {
   f.read(reinterpret_cast<char*>(dst), n * sizeof(T));
 }
 
-// Build a StripedMatrix (centered idx -> diagonal) from diagonal-packed weights;
-// used here only to enumerate a LinearTransform's required rotation keys.
+// Build a StripedMatrix (centered idx -> diagonal) from diagonal-packed
+// weights; used here only to enumerate a LinearTransform's required rotation
+// keys.
 cheddar::StripedMatrix MakeStriped(const double w[][kSlots],
                                    const std::vector<int>& idx) {
   cheddar::StripedMatrix m(kSlots, kSlots);
@@ -123,11 +124,12 @@ TEST(CheddarMlpMediumE2E, GpuRun) {
   auto ctx = cheddar::Context<word>::Create(param);
   auto ui = std::make_unique<UI>(ctx);
 
-  // Rotation keys: the three LinearTransforms' BSGS fan-out + the rotate-and-sum
-  // reductions. The (bs, gs) mirror mlp_medium.mlir's explicit attrs (fc1/fc2
-  // dense 16/8; fc3 wrap-around -> pure diagonal 8192/1).
+  // Rotation keys: the three LinearTransforms' BSGS fan-out + the
+  // rotate-and-sum reductions. The (bs, gs) mirror mlp_medium.mlir's explicit
+  // attrs (fc1/fc2 dense 16/8; fc3 wrap-around -> pure diagonal 8192/1).
   cheddar::EvkRequest req;
-  auto add_lt = [&](const cheddar::StripedMatrix& m, int level, int bs, int gs) {
+  auto add_lt = [&](const cheddar::StripedMatrix& m, int level, int bs,
+                    int gs) {
     cheddar::LinearTransform<word> lt(ctx, m, level,
                                       ctx->param_.GetScale(level), bs, gs);
     lt.AddRequiredRotations(req);

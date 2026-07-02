@@ -48,7 +48,7 @@ void prepareForBufferize(OpPassManager& manager) {
 
 namespace {
 // Runs one-shot bufferization, but skips the (O(n^2)) in-place read-after-write
-// analysis for every function whose name contains "__preprocessing". 
+// analysis for every function whose name contains "__preprocessing".
 //
 // The stock pass only accepts an exact-match list of symbol names
 // (`noAnalysisFuncFilter`), which the pipeline builder cannot know up front

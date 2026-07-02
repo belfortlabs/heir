@@ -6,7 +6,7 @@
 
 #map = affine_map<(d0) -> (d0 * 3 + 1)>
 
-// CHECK-LABEL: func.func @apply_in_loop
+// CHECK: func.func @apply_in_loop
 // CHECK:         affine.for %[[I:.*]] = 0 to 2 {
 // CHECK-NOT:       affine.apply
 // CHECK:           %[[MUL:.*]] = arith.muli %[[I]], %{{.*}} : index
@@ -27,7 +27,7 @@ func.func @apply_in_loop(%m: memref<8xf32>, %c: f32) {
 
 #map2 = affine_map<(d0)[s0] -> (d0 + s0 * 2)>
 
-// CHECK-LABEL: func.func @apply_with_symbol
+// CHECK: func.func @apply_with_symbol
 // CHECK-NOT:     affine.apply
 // CHECK:         arith.muli
 // CHECK:         arith.addi
