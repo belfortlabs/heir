@@ -50,6 +50,11 @@ void oneShotBufferize(OpPassManager& manager, bool includeDeallocation) {
   bufferization::OneShotBufferizePassOptions bufferizationOptions;
   bufferizationOptions.bufferizeFunctionBoundaries = true;
   bufferizationOptions.allowReturnAllocsFromLoops = true;
+  // the O(n^2) in-place read-after-write analysis is
+  // pathological only on the fully-unrolled `@main__preprocessing` function. Skip the analysis for just that
+  // function (it gets copy-before-write instead) while every other function
+  // keeps the normal in-place analysis, minimizing extra buffer copies.
+  bufferizationOptions.noAnalysisFuncFilter = {"main__preprocessing"};
   manager.addPass(
       bufferization::createOneShotBufferizePass(bufferizationOptions));
   manager.addPass(memref::createExpandReallocPass());
