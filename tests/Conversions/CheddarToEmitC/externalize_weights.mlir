@@ -33,6 +33,6 @@ module {
 // Loader: blob load for the non-splat weight, a fill loop for the non-zero
 // splat, and nothing at all for the zero splat.
 // CHECK: func.func @__load_constants()
-// CHECK-DAG: heir_load_f32("data/weight_big.bin", reinterpret_cast<float*>(weight_big), 8)
+// CHECK-DAG: heir_load_f32(\22data/weight_big.bin\22, reinterpret_cast<float*>(weight_big), 8)
 // CHECK-DAG: reinterpret_cast<float*>(twos_big)[__i] = static_cast<float>(2)
 // CHECK-NOT: zeros_big
