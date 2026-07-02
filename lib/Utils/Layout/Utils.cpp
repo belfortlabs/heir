@@ -764,7 +764,16 @@ void getCtComplementPoints(const presburger::IntegerRelation& relation,
   assert(relation.getNumRangeVars() == 2 && "Expected 2 range vars.");
   assert(outputType.getRank() == 2 && "Expected 2D output type.");
 
-  // Get the range set for the ct var.
+  int64_t numCts = outputType.getDimSize(0);
+
+  // Project the range down to the ct coordinate and restrict it to the valid
+  // ct range [0, numCts). We then enumerate the present ct indices and take the
+  // complement in plain C++, rather than calling isl_set_complement. The latter
+  // falls back to isl_compute_divs / parametric integer programming on the
+  // existentially-quantified ct projection of a non-power-of-two layout, whose
+  // cost explodes (tens of minutes for the LoLA 28x28->14x14 conv). Enumerating
+  // integer points is cheap and, unlike enumerating the full (ct, slot)
+  // relation, stays correct even when slot is unbounded.
   auto* bmap = convertRelationToBasicMap(relation, collector.ctx);
   isl_set* set = isl_set_from_basic_set(isl_basic_map_range(bmap));
   isl_set* ctset = isl_set_project_out(set, isl_dim_set, 1, 1);
@@ -775,13 +784,28 @@ void getCtComplementPoints(const presburger::IntegerRelation& relation,
   bounding_box = isl_set_lower_bound_si(bounding_box, isl_dim_set, /*pos=*/0,
                                         /*value=*/0);
   bounding_box = isl_set_upper_bound_si(bounding_box, isl_dim_set, /*pos=*/0,
-                                        /*value=*/outputType.getDimSize(0) - 1);
+                                        /*value=*/numCts - 1);
+  isl_set* bounded_ctset = isl_set_intersect(ctset, bounding_box);
 
-  isl_set* complement = isl_set_complement(ctset);
-  isl_set* bounded_complement = isl_set_intersect(complement, bounding_box);
+  PointCollector presentCollector;
+  isl_set_foreach_point(bounded_ctset, &pointCallback, &presentCollector);
+  isl_set_free(bounded_ctset);
 
-  isl_set_foreach_point(bounded_complement, &pointCallback, &collector);
-  isl_set_free(bounded_complement);
+  std::vector<bool> present(numCts, false);
+  for (const auto& point : presentCollector.points) {
+    int64_t ct = point[0];
+    if (ct >= 0 && ct < numCts) {
+      present[ct] = true;
+    }
+  }
+
+  // The complement is every ct index in [0, numCts) that never appeared,
+  // emitted in ascending order.
+  for (int64_t ct = 0; ct < numCts; ++ct) {
+    if (!present[ct]) {
+      collector.points.push_back({ct});
+    }
+  }
 }
 
 presburger::IntegerRelation getCollapsedRelation(
