@@ -80,8 +80,9 @@ void ReadInto(std::ifstream& f, T* dst, size_t n) {
   f.read(reinterpret_cast<char*>(dst), n * sizeof(T));
 }
 
-// Build a StripedMatrix (centered idx -> diagonal) from diagonal-packed weights;
-// used here only to enumerate a LinearTransform's required rotation keys.
+// Build a StripedMatrix (centered idx -> diagonal) from diagonal-packed
+// weights; used here only to enumerate a LinearTransform's required rotation
+// keys.
 cheddar::StripedMatrix MakeStriped(const double w[][kSlots],
                                    const std::vector<int>& idx) {
   cheddar::StripedMatrix m(kSlots, kSlots);
@@ -127,13 +128,15 @@ TEST(CheddarOrionMlpLtE2E, GpuRun) {
   auto ctx = cheddar::Context<word>::Create(param);
   auto ui = std::make_unique<UI>(ctx);
 
-  // Rotation keys: the three LinearTransforms' BSGS fan-out + the rotate-and-sum
-  // reductions (hrot_add distances). The (bs, gs) here mirror the explicit
-  // attributes baked into orion_mlp_lt.mlir's cheddar.linear_transform ops --
-  // CHEDDAR derives the exact required rotations from them, so key generation
-  // matches what the emitted kernel rotates by.
+  // Rotation keys: the three LinearTransforms' BSGS fan-out + the
+  // rotate-and-sum reductions (hrot_add distances). The (bs, gs) here mirror
+  // the explicit attributes baked into orion_mlp_lt.mlir's
+  // cheddar.linear_transform ops -- CHEDDAR derives the exact required
+  // rotations from them, so key generation matches what the emitted kernel
+  // rotates by.
   cheddar::EvkRequest req;
-  auto add_lt = [&](const cheddar::StripedMatrix& m, int level, int bs, int gs) {
+  auto add_lt = [&](const cheddar::StripedMatrix& m, int level, int bs,
+                    int gs) {
     cheddar::LinearTransform<word> lt(ctx, m, level,
                                       ctx->param_.GetScale(level), bs, gs);
     lt.AddRequiredRotations(req);

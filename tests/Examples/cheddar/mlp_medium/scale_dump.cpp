@@ -4,7 +4,8 @@
 // bias-encode scales in mlp_medium.mlir (the emitter emits the scale verbatim;
 // CHEDDAR rejects mismatches beyond 1e-12).
 //
-//   bazel run //tests/Examples/cheddar/mlp_medium:scale_dump --//:enable_cheddar=1
+//   bazel run //tests/Examples/cheddar/mlp_medium:scale_dump
+//   --//:enable_cheddar=1
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
