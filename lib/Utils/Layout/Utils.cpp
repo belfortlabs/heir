@@ -5,6 +5,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -13,9 +14,11 @@
 
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/MathUtils.h"
-#include "llvm/include/llvm/ADT/STLExtras.h"  // from @llvm-project
+#include "llvm/include/llvm/ADT/DynamicAPInt.h"  // from @llvm-project
+#include "llvm/include/llvm/ADT/STLExtras.h"     // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/PresburgerSpace.h"  // from @llvm-project
+#include "mlir/include/mlir/Analysis/Presburger/Simplex.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/Utils/Utils.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"            // from @llvm-project
 #include "mlir/include/mlir/Support/LLVM.h"               // from @llvm-project
@@ -739,10 +742,60 @@ isl_stat pointPairCallback(__isl_take isl_point* pnt, void* user) {
 
 void enumeratePoints(const presburger::IntegerRelation& relation,
                      PointPairCollector& collector) {
-  auto* bmap = convertRelationToBasicMap(relation, collector.ctx);
-  isl_set* set = isl_set_from_basic_set(isl_basic_map_wrap(bmap));
-  isl_set_foreach_point(set, &pointPairCallback, &collector);
-  isl_set_free(set);
+  // The flat ISL enumeration, shared by both branches below.
+  auto enumerateFlat = [&](const presburger::IntegerRelation& rel) {
+    auto* bmap = convertRelationToBasicMap(rel, collector.ctx);
+    isl_set* set = isl_set_from_basic_set(isl_basic_map_wrap(bmap));
+    isl_set_foreach_point(set, &pointPairCallback, &collector);
+    isl_set_free(set);
+  };
+  // Existential-heavy (gap-structured) relations send the flat ISL
+  // enumeration's isl_map_compute_divs into parametric integer programming,
+  // which never finishes (LoLA's stride-2 conv2d gap layouts) and ignores
+  // ISL's operation budget. For those, walk the (small, explicitly bounded)
+  // domain box and enumerate each domain-fixed fiber instead: with the
+  // domain variables concrete, the existentials collapse and ISL enumerates
+  // the fiber without PIP. Simple layouts (a couple of mod-style divs at
+  // most, e.g. matvec diagonalizations) keep the flat enumeration.
+  unsigned numDomain = relation.getNumDomainVars();
+  if (relation.getNumLocalVars() > 2 && numDomain > 0) {
+    SmallVector<std::pair<int64_t, int64_t>> box;
+    int64_t boxSize = 1;
+    bool boxOk = true;
+    presburger::Simplex simplex(relation);
+    for (unsigned d = 0; d < numDomain && boxOk; ++d) {
+      llvm::SmallVector<llvm::DynamicAPInt> coeffs(relation.getNumVars() + 1,
+                                                   llvm::DynamicAPInt(0));
+      coeffs[d] = llvm::DynamicAPInt(1);
+      auto bounds = simplex.computeIntegerBounds(coeffs);
+      if (!bounds.first.isBounded() || !bounds.second.isBounded()) {
+        boxOk = false;
+        break;
+      }
+      box.push_back({int64_t(*bounds.first), int64_t(*bounds.second)});
+      boxSize *= box.back().second - box.back().first + 1;
+      if (boxSize > (int64_t(1) << 20)) boxOk = false;
+    }
+    if (boxOk) {
+      SmallVector<int64_t> pt(numDomain, 0);
+      std::function<void(unsigned)> walk = [&](unsigned d) {
+        if (d == numDomain) {
+          presburger::IntegerRelation fiber(relation);
+          for (unsigned k = 0; k < numDomain; ++k)
+            fiber.addBound(presburger::BoundType::EQ, k, pt[k]);
+          enumerateFlat(fiber);
+          return;
+        }
+        for (int64_t v = box[d].first; v <= box[d].second; ++v) {
+          pt[d] = v;
+          walk(d + 1);
+        }
+      };
+      walk(0);
+      return;
+    }
+  }
+  enumerateFlat(relation);
 }
 
 std::vector<int64_t> anyRangePoint(
@@ -783,23 +836,22 @@ void getCtComplementPoints(const presburger::IntegerRelation& relation,
 
   int64_t numCts = outputType.getDimSize(0);
 
-  isl_ctx* ctx = isl_ctx_alloc();
-  isl_basic_map* bmap = convertRelationToBasicMap(relation, ctx);
+  // Enumerate the relation's points and mark the ct coordinates seen.
+  // enumeratePoints handles gap-structured conv layouts (deep existential
+  // chains that send flat ISL enumeration into parametric integer
+  // programming) by walking domain-fixed fibers, so this stays fast on both
+  // plain matvec diagonalizations and strided/dilated conv packings.
+  PointPairCollector present(relation.getNumDomainVars(),
+                             relation.getNumRangeVars());
+  enumeratePoints(relation, present);
 
   std::vector<bool> seen(numCts, false);
-  for (int64_t ct = 0; ct < numCts; ++ct) {
-    isl_val* v = isl_val_int_from_si(ctx, ct);
-    // Copy bmap because fix_val consumes it.
-    isl_basic_map* fixedBmap =
-        isl_basic_map_fix_val(isl_basic_map_copy(bmap), isl_dim_out, 0, v);
-    isl_bool isEmpty = isl_basic_map_is_empty(fixedBmap);
-    isl_basic_map_free(fixedBmap);
-    if (isEmpty == isl_bool_false) {
+  for (const auto& point : present.points) {
+    int64_t ct = point.second[0];  // range var 0 == ct
+    if (ct >= 0 && ct < numCts) {
       seen[ct] = true;
     }
   }
-  isl_basic_map_free(bmap);
-  isl_ctx_free(ctx);
 
   // The complement is every ct index in [0, numCts) that never appeared,
   // emitted in ascending order.
@@ -978,6 +1030,12 @@ bool isRelationEqual(const presburger::IntegerRelation& relation1,
 
 bool isDenseLayout(const presburger::IntegerRelation& relation,
                    RankedTensorType type) {
+  // NOTE: the set-equality below needs isl_map_compute_divs on the image of
+  // the layout; on gap-structured conv layouts (strided/dilated packing)
+  // that falls into parametric integer programming that never finishes.
+  // Callers must not reach this check with such layouts unless the input is
+  // a scalar or splat constant that could actually use the dense fast path
+  // (see google/heir#3193 for the call-site guard).
   isl_ctx* ctx = isl_ctx_alloc();
   isl_basic_map* bmap = convertRelationToBasicMap(relation, ctx);
 
