@@ -14,6 +14,7 @@
 
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/MathUtils.h"
+#include "llvm/include/llvm/ADT/DenseSet.h"      // from @llvm-project
 #include "llvm/include/llvm/ADT/DynamicAPInt.h"  // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"     // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
@@ -557,6 +558,40 @@ bool isRelationRowMajor(RankedTensorType vectorType, int64_t numSlots,
   return relation.isEqual(rowMajorRelation);
 }
 
+bool isSingleCiphertextPermutation(const presburger::IntegerRelation& relation,
+                                   int64_t numElements) {
+  if (relation.getNumDomainVars() != 1 || relation.getNumRangeVars() != 2)
+    return false;
+
+  // Every point must have ct = 0.
+  unsigned ctPos = relation.getVarKindOffset(presburger::VarKind::Range);
+  std::optional<int64_t> ctLb =
+      relation.getConstantBound64(presburger::BoundType::LB, ctPos);
+  std::optional<int64_t> ctUb =
+      relation.getConstantBound64(presburger::BoundType::UB, ctPos);
+  if (!ctLb.has_value() || !ctUb.has_value() || ctLb.value() != 0 ||
+      ctUb.value() != 0)
+    return false;
+
+  // Enumerate the packing (fiber-based enumeratePoints stays fast on
+  // existential-heavy gap layouts): the packing is a permutation iff there
+  // are exactly numElements points whose indices and slots are each all
+  // distinct.
+  PointPairCollector points(relation.getNumDomainVars(),
+                            relation.getNumRangeVars());
+  enumeratePoints(relation, points);
+  if (static_cast<int64_t>(points.points.size()) != numElements) return false;
+
+  llvm::DenseSet<int64_t> indices;
+  llvm::DenseSet<int64_t> slots;
+  for (const auto& [domain, range] : points.points) {
+    indices.insert(domain[0]);
+    slots.insert(range[1]);
+  }
+  return static_cast<int64_t>(indices.size()) == numElements &&
+         static_cast<int64_t>(slots.size()) == numElements;
+}
+
 bool isRelationPerRow(RankedTensorType matrixType, int64_t ciphertextSize,
                       presburger::IntegerRelation relation) {
   IntegerRelation perRowRelation =
@@ -752,36 +787,44 @@ void enumeratePoints(const presburger::IntegerRelation& relation,
   // Existential-heavy (gap-structured) relations send the flat ISL
   // enumeration's isl_map_compute_divs into parametric integer programming,
   // which never finishes (LoLA's stride-2 conv2d gap layouts) and ignores
-  // ISL's operation budget. For those, walk the (small, explicitly bounded)
-  // domain box and enumerate each domain-fixed fiber instead: with the
-  // domain variables concrete, the existentials collapse and ISL enumerates
-  // the fiber without PIP. Simple layouts (a couple of mod-style divs at
-  // most, e.g. matvec diagonalizations) keep the flat enumeration.
+  // ISL's operation budget. For those, walk a (small, explicitly bounded)
+  // box over a SUFFIX of the domain variables and enumerate each fiber
+  // instead: with the trailing domain variables (the ones that carry the
+  // packing structure, e.g. the column of a matvec matrix layout composed
+  // with an input permutation) concrete, the existential chains collapse
+  // and ISL enumerates the fiber without PIP. The suffix is grown from the
+  // last domain variable while the walked box stays small, so a small
+  // domain (a conv filter) fixes every variable while a large one (a
+  // matrix) only fixes the structure-carrying inner variables and
+  // flat-enumerates the (cheap, div-free once the suffix is fixed) rest.
+  // Simple layouts (a couple of mod-style divs at most, e.g. plain matvec
+  // diagonalizations) keep the flat enumeration.
   unsigned numDomain = relation.getNumDomainVars();
   if (relation.getNumLocalVars() > 2 && numDomain > 0) {
-    SmallVector<std::pair<int64_t, int64_t>> box;
+    constexpr int64_t kMaxFibers = int64_t(1) << 12;
+    SmallVector<std::pair<int64_t, int64_t>> box(numDomain, {0, 0});
     int64_t boxSize = 1;
-    bool boxOk = true;
+    unsigned suffixStart = numDomain;
     presburger::Simplex simplex(relation);
-    for (unsigned d = 0; d < numDomain && boxOk; ++d) {
+    for (int d = numDomain - 1; d >= 0; --d) {
       llvm::SmallVector<llvm::DynamicAPInt> coeffs(relation.getNumVars() + 1,
                                                    llvm::DynamicAPInt(0));
       coeffs[d] = llvm::DynamicAPInt(1);
       auto bounds = simplex.computeIntegerBounds(coeffs);
-      if (!bounds.first.isBounded() || !bounds.second.isBounded()) {
-        boxOk = false;
-        break;
-      }
-      box.push_back({int64_t(*bounds.first), int64_t(*bounds.second)});
-      boxSize *= box.back().second - box.back().first + 1;
-      if (boxSize > (int64_t(1) << 20)) boxOk = false;
+      if (!bounds.first.isBounded() || !bounds.second.isBounded()) break;
+      int64_t lb = int64_t(*bounds.first);
+      int64_t ub = int64_t(*bounds.second);
+      if (boxSize * (ub - lb + 1) > kMaxFibers) break;
+      box[d] = {lb, ub};
+      boxSize *= ub - lb + 1;
+      suffixStart = d;
     }
-    if (boxOk) {
+    if (suffixStart < numDomain) {
       SmallVector<int64_t> pt(numDomain, 0);
       std::function<void(unsigned)> walk = [&](unsigned d) {
         if (d == numDomain) {
           presburger::IntegerRelation fiber(relation);
-          for (unsigned k = 0; k < numDomain; ++k)
+          for (unsigned k = suffixStart; k < numDomain; ++k)
             fiber.addBound(presburger::BoundType::EQ, k, pt[k]);
           enumerateFlat(fiber);
           return;
@@ -791,7 +834,7 @@ void enumeratePoints(const presburger::IntegerRelation& relation,
           walk(d + 1);
         }
       };
-      walk(0);
+      walk(suffixStart);
       return;
     }
   }
@@ -836,21 +879,77 @@ void getCtComplementPoints(const presburger::IntegerRelation& relation,
 
   int64_t numCts = outputType.getDimSize(0);
 
-  // Enumerate the relation's points and mark the ct coordinates seen.
-  // enumeratePoints handles gap-structured conv layouts (deep existential
-  // chains that send flat ISL enumeration into parametric integer
-  // programming) by walking domain-fixed fibers, so this stays fast on both
-  // plain matvec diagonalizations and strided/dilated conv packings.
-  PointPairCollector present(relation.getNumDomainVars(),
-                             relation.getNumRangeVars());
-  enumeratePoints(relation, present);
-
+  // Walk the (simplex-derived, explicitly bounded) domain box and enumerate
+  // each domain-fixed fiber, recording which ct coordinates appear — with an
+  // early exit once every ct in [0, numCts) has been seen. Dense layouts
+  // (e.g. matvec diagonalizations composed with an input permutation, one
+  // point per matrix entry) cover all cts within the first few fibers, while
+  // structurally sparse layouts (conv filter diagonalizations) have tiny
+  // domains, so the walk stays cheap on both. Fixing the domain variables
+  // collapses the existential chains of gap-structured layouts, which
+  // otherwise send both flat ISL enumeration (via isl_map_compute_divs) and
+  // presburger's GBR-based emptiness checks into blowups.
   std::vector<bool> seen(numCts, false);
-  for (const auto& point : present.points) {
-    int64_t ct = point.second[0];  // range var 0 == ct
-    if (ct >= 0 && ct < numCts) {
-      seen[ct] = true;
+  int64_t numSeen = 0;
+  auto markPoints = [&](const PointPairCollector& points) {
+    for (const auto& point : points.points) {
+      int64_t ct = point.second[0];  // range var 0 == ct
+      if (ct >= 0 && ct < numCts && !seen[ct]) {
+        seen[ct] = true;
+        ++numSeen;
+      }
     }
+  };
+
+  unsigned numDomain = relation.getNumDomainVars();
+  SmallVector<std::pair<int64_t, int64_t>> box;
+  int64_t boxSize = 1;
+  bool boxOk = numDomain > 0;
+  if (boxOk) {
+    presburger::Simplex simplex(relation);
+    for (unsigned d = 0; d < numDomain && boxOk; ++d) {
+      llvm::SmallVector<llvm::DynamicAPInt> coeffs(relation.getNumVars() + 1,
+                                                   llvm::DynamicAPInt(0));
+      coeffs[d] = llvm::DynamicAPInt(1);
+      auto bounds = simplex.computeIntegerBounds(coeffs);
+      if (!bounds.first.isBounded() || !bounds.second.isBounded()) {
+        boxOk = false;
+        break;
+      }
+      box.push_back({int64_t(*bounds.first), int64_t(*bounds.second)});
+      boxSize *= box.back().second - box.back().first + 1;
+      if (boxSize > (int64_t(1) << 24)) boxOk = false;
+    }
+  }
+
+  if (boxOk) {
+    SmallVector<int64_t> pt(numDomain, 0);
+    std::function<bool(unsigned)> walk = [&](unsigned d) -> bool {
+      if (numSeen == numCts) return true;  // all cts seen; complement empty
+      if (d == numDomain) {
+        presburger::IntegerRelation fiber(relation);
+        for (unsigned k = 0; k < numDomain; ++k)
+          fiber.addBound(presburger::BoundType::EQ, k, pt[k]);
+        PointPairCollector fiberPoints(relation.getNumDomainVars(),
+                                       relation.getNumRangeVars());
+        enumeratePoints(fiber, fiberPoints);
+        markPoints(fiberPoints);
+        return numSeen == numCts;
+      }
+      for (int64_t v = box[d].first; v <= box[d].second; ++v) {
+        pt[d] = v;
+        if (walk(d + 1)) return true;
+      }
+      return false;
+    };
+    walk(0);
+  } else {
+    // No usable domain box: fall back to full enumeration (fine for the
+    // simple mod-structured layouts this happens for).
+    PointPairCollector allPoints(relation.getNumDomainVars(),
+                                 relation.getNumRangeVars());
+    enumeratePoints(relation, allPoints);
+    markPoints(allPoints);
   }
 
   // The complement is every ct index in [0, numCts) that never appeared,
