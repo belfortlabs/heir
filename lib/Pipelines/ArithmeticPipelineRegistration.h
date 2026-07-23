@@ -90,6 +90,17 @@ struct MlirToRLWEPipelineOptions : public LoopOptions {
       llvm::cl::desc("The number of levels to keep until bootstrapping in CKKS "
                      "(c.f. --secret-insert-mgmt-ckks)"),
       llvm::cl::init(10)};
+  PassOptions::Option<int> ckksRingDim{
+      *this, "ckks-ring-dim",
+      llvm::cl::desc(
+          "Force the CKKS ring dimension instead of deriving it from the "
+          "security model (0 = derive; c.f. --generate-param-ckks)"),
+      llvm::cl::init(0)};
+  PassOptions::ListOption<int64_t> ckksBootstrapLogP{
+      *this, "ckks-bootstrap-logp",
+      llvm::cl::desc("Per-prime bit widths for the lattigo bootstrap "
+                     "circuit's auxiliary modulus (empty = backend defaults; "
+                     "c.f. --generate-param-ckks)")};
   PassOptions::Option<bool> useCompositeRelu{
       *this, "use-composite-relu",
       llvm::cl::desc("Approximate ReLU with the composite-sign method "
