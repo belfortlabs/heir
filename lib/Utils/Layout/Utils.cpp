@@ -101,7 +101,7 @@ bool sameRangeForDomainPoint(const std::vector<int64_t>& domainPoint,
   IntegerRelation fixedRel1 = fixDomainVars(rel1, domainPoint);
   IntegerRelation fixedRel2 = fixDomainVars(rel2, domainPoint);
 
-  if (fixedRel1.computeVolume() != fixedRel1.computeVolume()) return false;
+  if (fixedRel1.computeVolume() != fixedRel2.computeVolume()) return false;
 
   // If this is still too slow, would it be faster to sample or enumerate range
   // points?
@@ -114,7 +114,7 @@ bool sameDomainForRangePoint(const std::vector<int64_t>& rangePoint,
   IntegerRelation fixedRel1 = fixRangeVars(rel1, rangePoint);
   IntegerRelation fixedRel2 = fixRangeVars(rel2, rangePoint);
 
-  if (fixedRel1.computeVolume() != fixedRel1.computeVolume()) return false;
+  if (fixedRel1.computeVolume() != fixedRel2.computeVolume()) return false;
 
   // If this is still too slow, would it be faster to sample or enumerate range
   // points?

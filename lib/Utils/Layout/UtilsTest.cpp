@@ -88,6 +88,30 @@ TEST(UtilsTest, TestSameRangeForDomainPoint_DifferOnZeroZeroBySize) {
   EXPECT_FALSE(sameRangeForDomainPoint({0}, rel1, rel2));
 }
 
+TEST(UtilsTest, TestSameDomainForRangePoint_AgreeOnZeroZero) {
+  auto rel1 =
+      getIntegerRelationFromIslStr("{ [x] -> [y] : x = 0 and y = 0 }").value();
+  EXPECT_TRUE(sameDomainForRangePoint({0}, rel1, rel1));
+}
+
+TEST(UtilsTest, TestSameDomainForRangePoint_DifferOnZeroZeroByValue) {
+  auto rel1 =
+      getIntegerRelationFromIslStr("{ [x] -> [y] : x = 0 and y = 0 }").value();
+  auto rel2 =
+      getIntegerRelationFromIslStr("{ [x] -> [y] : x = 1 and y = 0 }").value();
+  EXPECT_FALSE(sameDomainForRangePoint({0}, rel1, rel2));
+}
+
+TEST(UtilsTest, TestSameDomainForRangePoint_DifferOnZeroZeroBySize) {
+  // (0, 0) is in both sets, but (1, 0), (2, 0), ... is in rel2.
+  auto rel1 =
+      getIntegerRelationFromIslStr("{ [x] -> [y] : x = 0 and y = 0 }").value();
+  auto rel2 = getIntegerRelationFromIslStr(
+                  "{ [x] -> [y] : 0 <= x <= 5 and 0 <= y <= 5 }")
+                  .value();
+  EXPECT_FALSE(sameDomainForRangePoint({0}, rel1, rel2));
+}
+
 TEST(UtilsTest, TestTryProveUnequal_DifferingDomainVars) {
   auto rel1 =
       getIntegerRelationFromIslStr("{ [x, z] -> [y] : x = 0 and y = 0 }")
