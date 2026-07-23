@@ -391,6 +391,8 @@ void mlirToRLWEPipeline(OpPassManager& pm,
       generateParamOptions.slotNumber = options.ciphertextDegree;
       generateParamOptions.usePublicKey = options.usePublicKey;
       generateParamOptions.ringDim = options.ckksRingDim;
+      generateParamOptions.allowInsecureRingDim =
+          options.ckksAllowInsecureRingDim;
       generateParamOptions.bootstrapLogP =
           llvm::to_vector(llvm::ArrayRef<int64_t>(options.ckksBootstrapLogP));
       pm.addPass(createGenerateParamCKKS(generateParamOptions));
@@ -720,6 +722,7 @@ void torchLinalgToCkksBuilder(OpPassManager& manager,
   suboptions.scalingModBits = options.scalingModBits;
   suboptions.firstModBits = options.firstModBits;
   suboptions.ckksRingDim = options.ckksRingDim;
+  suboptions.ckksAllowInsecureRingDim = options.ckksAllowInsecureRingDim;
   suboptions.ckksBootstrapLogP =
       llvm::to_vector(llvm::ArrayRef<int64_t>(options.ckksBootstrapLogP));
   suboptions.enableSplitPreprocessing = options.enableSplitPreprocessing;
