@@ -6735,7 +6735,9 @@ It supports all three variants of arith.select: scalar, shaped, and mixed types.
 In the latter case, it will broadcast/splat the scalar condition value to the required shape.&rdquo;</p><h3 id=-shape-inference><code>-shape-inference</code></h3><p><em>Infer shapes for shaped types</em></p><p>This pass infers the shapes of shaped types in a function,
 starting from function arguments annotated with a {shape.shape} attribute.
 Shape inference is only supported for operations that implement InferTypeOpInterface.</p><p>This is primarily intended to be used in conjunction with the Python frontend,
-which infers the rank, but not the length of each dimension, for tensor types.</p><h3 id=-split-preprocessing><code>-split-preprocessing</code></h3><p><em>Splits a function into a preprocessing and a main part</em></p><p>This pass splits a function into a preprocessing and a main part. The
+which infers the rank, but not the length of each dimension, for tensor types.</p><h3 id=-softmax-to-cgf-softmax><code>-softmax-to-cgf-softmax</code></h3><p><em>Lower math_ext.softmax to CGF-softmax approximation</em></p><p>Lowers <code>math_ext.softmax</code> to a sequence of operations implementing
+the second-order CGF-softmax approximation. This eliminates
+division and max operations.</p><p>For details on the approximation, see: <a href=https://arxiv.org/abs/2602.01621>https://arxiv.org/abs/2602.01621</a></p><h3 id=-split-preprocessing><code>-split-preprocessing</code></h3><p><em>Splits a function into a preprocessing and a main part</em></p><p>This pass splits a function into a preprocessing and a main part. The
 preprocessing part is executed before the main workload function (the
 preprocessed function) and its results are passed to the preprocessed
 function. This is used to allow packing of plaintexts to be done in advance
