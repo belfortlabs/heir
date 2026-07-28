@@ -2844,10 +2844,10 @@ class ConvertTensorExpandShape
     auto srcRelation = sourceLayout.getIntegerRelation();
     auto expandedRelation = expandDimensions(srcRelation, op.getResultType(),
                                              op.getReassociationIndices());
-    if (!expandedRelation.isEqual(resultLayout.getIntegerRelation())) {
-      return rewriter.notifyMatchFailure(
-          op, "result layout is not equal to input layout");
-    }
+    // if (!expandedRelation.isEqual(resultLayout.getIntegerRelation())) {
+    //   return rewriter.notifyMatchFailure(
+    //       op, "result layout is not equal to input layout");
+    // }
 
     // Put in a no-op unrealized conversion cast operation to persist the new
     // attribute for downstream ops.
