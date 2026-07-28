@@ -360,6 +360,87 @@ TEST(UtilsTest, TricyclicLayout2x5x7Repeated) {
   EXPECT_EQ(packedMatrix[0], expected);
 }
 
+// A genuine tricyclic layout must still be recognized after routing the check
+// through isRelationEqual (rather than IntegerRelation::isEqual directly).
+TEST(UtilsTest, IsRelationTricyclicAcceptsGenuineLayout) {
+  MLIRContext context;
+  int64_t h = 2, m = 5, n = 7;
+  int64_t numSlots = h * m * n;
+  RankedTensorType tensorType =
+      RankedTensorType::get({h, m, n}, IndexType::get(&context));
+
+  EXPECT_TRUE(isRelationTricyclic(
+      tensorType, numSlots, getTricyclicLayoutRelation(tensorType, numSlots)));
+}
+
+// A unit dim makes the CRT decomposition degenerate, and gcd(1, n) == 1 means
+// the coprimality filter cannot reject it -- so batch-of-1 activations (1xCxT)
+// used to reach a doubly-exponential set difference against a gap-structured
+// conv layout. The relation passed here IS the 1x5x7 tricyclic relation, so
+// without the unit-dim guard this returns true; the guard makes it false
+// before any Presburger work happens.
+TEST(UtilsTest, IsRelationTricyclicRejectsUnitDim) {
+  MLIRContext context;
+  int64_t h = 1, m = 5, n = 7;
+  int64_t numSlots = h * m * n;
+  RankedTensorType tensorType =
+      RankedTensorType::get({h, m, n}, IndexType::get(&context));
+
+  EXPECT_FALSE(isRelationTricyclic(
+      tensorType, numSlots, getTricyclicLayoutRelation(tensorType, numSlots)));
+}
+
+// Same degeneracy for the rank-2 CRT layout: gcd(1, cols) == 1 lets a unit-row
+// matrix through the coprimality filter.
+TEST(UtilsTest, IsRelationBicyclicRejectsUnitDim) {
+  MLIRContext context;
+  int64_t rows = 1, cols = 7;
+  int64_t numSlots = rows * cols;
+  RankedTensorType matrixType =
+      RankedTensorType::get({rows, cols}, IndexType::get(&context));
+
+  EXPECT_FALSE(isRelationBicyclic(
+      matrixType, numSlots, getBicyclicLayoutRelation(matrixType, numSlots)));
+}
+
+// A gap-structured conv layout (mod + floordiv locals, as produced by a strided
+// convolution) compared against itself. isObviouslyEqual does not fire once the
+// constraint systems differ syntactically, and the symbolic path
+// (PresburgerRelation::subtract) does not terminate on these -- so this test
+// hangs rather than fails if the enumeration tier in isRelationEqual is
+// removed. Shape/strides taken from TCResNet8's 1x40x101 input layout at
+// logN=13.
+TEST(UtilsTest, IsRelationEqualTerminatesOnGapStructuredConvLayout) {
+  auto rel = getIntegerRelationFromIslStr(
+      "{ [i0, i1, i2] -> [ct, slot] : i0 = 0 and ct = 0 and "
+      "(-101i1 - i2 + slot) mod 4096 = 0 and 0 <= i1 <= 39 and "
+      "0 <= i2 <= 8191 - 101i1 and i2 <= 100 and 0 <= slot <= 8191 and "
+      "8192*floor((4096 + 101i1 + i2)/8192) <= 101i1 + i2 }");
+  ASSERT_TRUE(succeeded(rel));
+
+  EXPECT_TRUE(isRelationEqual(rel.value(), rel.value()));
+}
+
+// The same layout with one bound changed must come back unequal, so the
+// enumeration tier is not just answering "true" for everything it can
+// enumerate.
+TEST(UtilsTest, IsRelationEqualDistinguishesGapStructuredConvLayouts) {
+  auto rel1 = getIntegerRelationFromIslStr(
+      "{ [i0, i1, i2] -> [ct, slot] : i0 = 0 and ct = 0 and "
+      "(-101i1 - i2 + slot) mod 4096 = 0 and 0 <= i1 <= 39 and "
+      "0 <= i2 <= 8191 - 101i1 and i2 <= 100 and 0 <= slot <= 8191 and "
+      "8192*floor((4096 + 101i1 + i2)/8192) <= 101i1 + i2 }");
+  auto rel2 = getIntegerRelationFromIslStr(
+      "{ [i0, i1, i2] -> [ct, slot] : i0 = 0 and ct = 0 and "
+      "(-101i1 - i2 + slot) mod 4096 = 0 and 0 <= i1 <= 38 and "
+      "0 <= i2 <= 8191 - 101i1 and i2 <= 100 and 0 <= slot <= 8191 and "
+      "8192*floor((4096 + 101i1 + i2)/8192) <= 101i1 + i2 }");
+  ASSERT_TRUE(succeeded(rel1));
+  ASSERT_TRUE(succeeded(rel2));
+
+  EXPECT_FALSE(isRelationEqual(rel1.value(), rel2.value()));
+}
+
 TEST(UtilsTest, TestGetRangePoints) {
   MLIRContext context;
   auto rel = getIntegerRelationFromIslStr(

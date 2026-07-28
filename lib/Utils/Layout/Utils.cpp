@@ -668,7 +668,11 @@ bool isRelationPerRow(RankedTensorType matrixType, int64_t ciphertextSize,
                       presburger::IntegerRelation relation) {
   IntegerRelation perRowRelation =
       getPerRowLayoutRelation(matrixType, ciphertextSize);
-  return relation.isEqual(perRowRelation);
+  // Via isRelationEqual, not isEqual directly: the cheap structural rejects
+  // (isObviouslyEqual / tryProveUnequal) keep gap-structured layouts out of
+  // the doubly-exponential set difference. No unit-dim guard here -- unlike
+  // the CRT layouts, a single-row per-row layout is meaningful.
+  return isRelationEqual(relation, perRowRelation);
 }
 
 bool isRelationBicyclic(RankedTensorType matrixType, int64_t numSlots,
@@ -677,10 +681,15 @@ bool isRelationBicyclic(RankedTensorType matrixType, int64_t numSlots,
   if (matrixType.getRank() != 2) return false;
   unsigned int rows = matrixType.getDimSize(0);
   unsigned int cols = matrixType.getDimSize(1);
+  // A unit dim makes the CRT decomposition degenerate (it is really a rank-1
+  // layout), and gcd(1, n) == 1 means the coprimality filter below cannot
+  // reject it -- so without this the set-equality runs on layouts that can
+  // never be bicyclic. See isRelationTricyclic for the cost of getting here.
+  if (rows == 1 || cols == 1) return false;
   if (std::gcd(rows, cols) != 1) return false;
   IntegerRelation bicyclicRelation =
       getBicyclicLayoutRelation(matrixType, numSlots);
-  return relation.isEqual(bicyclicRelation);
+  return isRelationEqual(relation, bicyclicRelation);
 }
 
 bool isRelationTricyclic(RankedTensorType tensorType, int64_t numSlots,
@@ -690,11 +699,18 @@ bool isRelationTricyclic(RankedTensorType tensorType, int64_t numSlots,
   int64_t h = tensorType.getDimSize(0);
   int64_t m = tensorType.getDimSize(1);
   int64_t n = tensorType.getDimSize(2);
+  // A unit dim makes the CRT decomposition degenerate (a 1xMxN tensor is
+  // really rank-2), and gcd(1, n) == 1 defeats the coprimality filter below.
+  // Batch-of-1 activations (1xCxT, i.e. every conv feature map) therefore
+  // reached the set-equality with a gap-structured strided-conv layout, where
+  // PresburgerRelation::subtract on the floordiv/mod locals is doubly
+  // exponential -- TCResNet8 spent >77min here rejecting six such layouts.
+  if (h == 1 || m == 1 || n == 1) return false;
   if (std::gcd(h, m) != 1 || std::gcd(m, n) != 1 || std::gcd(h, n) != 1)
     return false;
   IntegerRelation tricyclicRelation =
       getTricyclicLayoutRelation(tensorType, numSlots);
-  return relation.isEqual(tricyclicRelation);
+  return isRelationEqual(relation, tricyclicRelation);
 }
 
 presburger::IntegerRelation collapseDimensions(
@@ -1187,10 +1203,73 @@ FailureOr<presburger::IntegerRelation> getSliceExtractionRelation(
   return result;
 }
 
+// Upper bound on the enumerated point count per relation in
+// tryProveEqualByEnumeration. Layout domains are small in practice (a conv
+// feature map is a few thousand points), so this only has to be large enough to
+// cover real layouts while keeping a pathological one from enumerating forever.
+// Replicated layouts blow the point count up by their replication factor, which
+// is why the bound is on the (over-approximated) volume and not the domain
+// size.
+constexpr int64_t kMaxEnumeratedPoints = int64_t(1) << 22;
+
+// Decide equality by enumerating both relations as explicit (domain, range)
+// point sets, or return nullopt if either is too large to enumerate.
+//
+// This exists because IntegerRelation::isEqual goes through
+// PresburgerRelation::subtract, which is doubly exponential in the number of
+// floordiv/mod locals and does not terminate on the gap-structured layouts that
+// strided convolutions produce. enumeratePoints already has a fiber-walking
+// path for exactly those relations (see its comment re: LoLA stride-2 conv2d),
+// so enumeration decides in linear time what the symbolic path cannot decide at
+// all. Enumeration is exact, so unlike tryProveUnequal this settles BOTH
+// directions -- which matters because the layouts reaching here are usually
+// equal (a reshape that only relabels domain indices).
+static std::optional<bool> tryProveEqualByEnumeration(
+    const presburger::IntegerRelation& relation1,
+    const presburger::IntegerRelation& relation2) {
+  unsigned numDomain = relation1.getNumDomainVars();
+  unsigned numRange = relation1.getNumRangeVars();
+  if (numDomain != relation2.getNumDomainVars() ||
+      numRange != relation2.getNumRangeVars()) {
+    return false;
+  }
+
+  // computeVolume is a cheap bounding-box over-approximation; nullopt means
+  // unbounded. Bail (rather than answer) when either side is too big, so the
+  // caller falls back to the symbolic path.
+  std::optional<llvm::DynamicAPInt> volume1 = relation1.computeVolume();
+  std::optional<llvm::DynamicAPInt> volume2 = relation2.computeVolume();
+  if (!volume1.has_value() || !volume2.has_value()) return std::nullopt;
+  llvm::DynamicAPInt maxPoints(kMaxEnumeratedPoints);
+  if (*volume1 > maxPoints || *volume2 > maxPoints) return std::nullopt;
+
+  PointPairCollector collector1(numDomain, numRange);
+  PointPairCollector collector2(numDomain, numRange);
+  enumeratePoints(relation1, collector1);
+  enumeratePoints(relation2, collector2);
+
+  // Enumeration order is not guaranteed to agree between the two relations
+  // (fiber walking visits a different order than the flat path), so compare as
+  // sets.
+  auto points1 = collector1.points;
+  auto points2 = collector2.points;
+  if (points1.size() != points2.size()) return false;
+  std::sort(points1.begin(), points1.end());
+  std::sort(points2.begin(), points2.end());
+  return points1 == points2;
+}
+
 bool isRelationEqual(const presburger::IntegerRelation& relation1,
                      const presburger::IntegerRelation& relation2) {
   bool fastCheck = relation1.isObviouslyEqual(relation2);
   if (fastCheck) return true;
+
+  // Before the symbolic tests below: they all bottom out in isEqual (even
+  // tryProveUnequal, via sameRangeForDomainPoint), which does not terminate on
+  // gap-structured conv layouts.
+  std::optional<bool> enumerated =
+      tryProveEqualByEnumeration(relation1, relation2);
+  if (enumerated.has_value()) return *enumerated;
 
   LogicalResult inequalityTest = tryProveUnequal(relation2, relation1);
   if (succeeded(inequalityTest)) return false;
