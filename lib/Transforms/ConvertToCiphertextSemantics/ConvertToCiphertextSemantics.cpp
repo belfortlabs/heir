@@ -2229,7 +2229,10 @@ class ConvertTensorInsertSlice
     // layout, we don't need to insert a conversion.
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);
     Value convertedSource = adaptor.getSource();
-    if (!scalarRel.isEqual(shiftedSliceInsertionLayout)) {
+    // isRelationEqual for the fast structural rejects; see the reshape patterns
+    // below. This one only gates an optimization (skipping a layout
+    // conversion), so it must not cost more than the conversion it avoids.
+    if (!isRelationEqual(scalarRel, shiftedSliceInsertionLayout)) {
       LayoutAttr newScalarLayout =
           LayoutAttr::getFromIntegerRelation(ctx, shiftedSliceInsertionLayout);
       LLVM_DEBUG(llvm::dbgs()
@@ -2771,7 +2774,12 @@ class ConvertTensorCollapseShape
     auto srcRelation = tensorLayout.getIntegerRelation();
     auto collapsedRelation = collapseDimensions(srcRelation, op.getSrcType(),
                                                 op.getReassociationIndices());
-    if (!collapsedRelation.isEqual(resultLayout.getIntegerRelation())) {
+    // isRelationEqual, not isEqual: a reshape only relabels domain indices, so
+    // the cheap structural checks settle this. Calling isEqual directly runs a
+    // PresburgerRelation set difference, which is doubly exponential on the
+    // floordiv/mod locals of a gap-structured strided-conv layout.
+    if (!isRelationEqual(collapsedRelation,
+                         resultLayout.getIntegerRelation())) {
       return rewriter.notifyMatchFailure(
           op, "result layout is not equal to input layout");
     }
@@ -2844,7 +2852,10 @@ class ConvertTensorExpandShape
     auto srcRelation = sourceLayout.getIntegerRelation();
     auto expandedRelation = expandDimensions(srcRelation, op.getResultType(),
                                              op.getReassociationIndices());
-    if (!expandedRelation.isEqual(resultLayout.getIntegerRelation())) {
+    // See the collapse_shape twin above: isRelationEqual keeps gap-structured
+    // conv layouts out of the doubly-exponential set difference. This is the
+    // site TCResNet8's 1xCxT feature maps wedge on.
+    if (!isRelationEqual(expandedRelation, resultLayout.getIntegerRelation())) {
       return rewriter.notifyMatchFailure(
           op, "result layout is not equal to input layout");
     }
