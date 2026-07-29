@@ -668,10 +668,8 @@ bool isRelationPerRow(RankedTensorType matrixType, int64_t ciphertextSize,
                       presburger::IntegerRelation relation) {
   IntegerRelation perRowRelation =
       getPerRowLayoutRelation(matrixType, ciphertextSize);
-  // Via isRelationEqual, not isEqual directly: the cheap structural rejects
-  // (isObviouslyEqual / tryProveUnequal) keep gap-structured layouts out of
-  // the doubly-exponential set difference. No unit-dim guard here -- unlike
-  // the CRT layouts, a single-row per-row layout is meaningful.
+  // No unit-dim guard: unlike the CRT layouts below, a single-row per-row
+  // layout is meaningful.
   return isRelationEqual(relation, perRowRelation);
 }
 
@@ -681,10 +679,8 @@ bool isRelationBicyclic(RankedTensorType matrixType, int64_t numSlots,
   if (matrixType.getRank() != 2) return false;
   unsigned int rows = matrixType.getDimSize(0);
   unsigned int cols = matrixType.getDimSize(1);
-  // A unit dim makes the CRT decomposition degenerate (it is really a rank-1
-  // layout), and gcd(1, n) == 1 means the coprimality filter below cannot
-  // reject it -- so without this the set-equality runs on layouts that can
-  // never be bicyclic. See isRelationTricyclic for the cost of getting here.
+  // A unit dim makes the CRT decomposition degenerate, and gcd(1, n) == 1 slips
+  // past the coprimality filter below.
   if (rows == 1 || cols == 1) return false;
   if (std::gcd(rows, cols) != 1) return false;
   IntegerRelation bicyclicRelation =
@@ -699,12 +695,9 @@ bool isRelationTricyclic(RankedTensorType tensorType, int64_t numSlots,
   int64_t h = tensorType.getDimSize(0);
   int64_t m = tensorType.getDimSize(1);
   int64_t n = tensorType.getDimSize(2);
-  // A unit dim makes the CRT decomposition degenerate (a 1xMxN tensor is
-  // really rank-2), and gcd(1, n) == 1 defeats the coprimality filter below.
-  // Batch-of-1 activations (1xCxT, i.e. every conv feature map) therefore
-  // reached the set-equality with a gap-structured strided-conv layout, where
-  // PresburgerRelation::subtract on the floordiv/mod locals is doubly
-  // exponential -- TCResNet8 spent >77min here rejecting six such layouts.
+  // A 1xMxN tensor is really rank-2, and gcd(1, n) == 1 slips past the
+  // coprimality filter below, so every batch-of-1 conv feature map reached
+  // here.
   if (h == 1 || m == 1 || n == 1) return false;
   if (std::gcd(h, m) != 1 || std::gcd(m, n) != 1 || std::gcd(h, n) != 1)
     return false;
@@ -1203,27 +1196,14 @@ FailureOr<presburger::IntegerRelation> getSliceExtractionRelation(
   return result;
 }
 
-// Upper bound on the enumerated point count per relation in
-// tryProveEqualByEnumeration. Layout domains are small in practice (a conv
-// feature map is a few thousand points), so this only has to be large enough to
-// cover real layouts while keeping a pathological one from enumerating forever.
-// Replicated layouts blow the point count up by their replication factor, which
-// is why the bound is on the (over-approximated) volume and not the domain
-// size.
-constexpr int64_t kMaxEnumeratedPoints = int64_t(1) << 22;
+// Bound on the domain grid tryProveEqualByEnumeration will walk; real layout
+// domains are small (TCResNet8's largest is 1x40x101 = 4040 points).
+constexpr int64_t kMaxEnumeratedDomainPoints = int64_t(1) << 20;
 
-// Decide equality by enumerating both relations as explicit (domain, range)
-// point sets, or return nullopt if either is too large to enumerate.
-//
-// This exists because IntegerRelation::isEqual goes through
-// PresburgerRelation::subtract, which is doubly exponential in the number of
-// floordiv/mod locals and does not terminate on the gap-structured layouts that
-// strided convolutions produce. enumeratePoints already has a fiber-walking
-// path for exactly those relations (see its comment re: LoLA stride-2 conv2d),
-// so enumeration decides in linear time what the symbolic path cannot decide at
-// all. Enumeration is exact, so unlike tryProveUnequal this settles BOTH
-// directions -- which matters because the layouts reaching here are usually
-// equal (a reshape that only relabels domain indices).
+// Decides equality by enumerating both relations as point sets, or returns
+// nullopt when either domain is too large to walk. IntegerRelation::isEqual is
+// unusable here: its set difference is doubly exponential in the floordiv/mod
+// locals of a strided conv layout and does not terminate.
 static std::optional<bool> tryProveEqualByEnumeration(
     const presburger::IntegerRelation& relation1,
     const presburger::IntegerRelation& relation2) {
@@ -1234,29 +1214,33 @@ static std::optional<bool> tryProveEqualByEnumeration(
     return false;
   }
 
-  // computeVolume is a cheap bounding-box over-approximation; nullopt means
-  // unbounded. Bail (rather than answer) when either side is too big, so the
-  // caller falls back to the symbolic path.
-  std::optional<llvm::DynamicAPInt> volume1 = relation1.computeVolume();
-  std::optional<llvm::DynamicAPInt> volume2 = relation2.computeVolume();
-  if (!volume1.has_value() || !volume2.has_value()) return std::nullopt;
-  llvm::DynamicAPInt maxPoints(kMaxEnumeratedPoints);
-  if (*volume1 > maxPoints || *volume2 > maxPoints) return std::nullopt;
+  // Grids are checked per relation, not multiplied: enumeration walks each
+  // once. computeVolume() cannot size this, being a bounding box over every
+  // variable.
+  for (const presburger::IntegerRelation* rel : {&relation1, &relation2}) {
+    int64_t domainGrid = 1;
+    for (unsigned i = rel->getVarKindOffset(VarKind::Domain),
+                  end = rel->getVarKindEnd(VarKind::Domain);
+         i < end; ++i) {
+      std::optional<int64_t> lb = rel->getConstantBound64(BoundType::LB, i);
+      std::optional<int64_t> ub = rel->getConstantBound64(BoundType::UB, i);
+      if (!lb.has_value() || !ub.has_value()) return std::nullopt;
+      if (*ub < *lb) return std::nullopt;
+      domainGrid *= *ub - *lb + 1;
+      if (domainGrid > kMaxEnumeratedDomainPoints) return std::nullopt;
+    }
+  }
 
   PointPairCollector collector1(numDomain, numRange);
   PointPairCollector collector2(numDomain, numRange);
   enumeratePoints(relation1, collector1);
   enumeratePoints(relation2, collector2);
+  if (collector1.points.size() != collector2.points.size()) return false;
 
-  // Enumeration order is not guaranteed to agree between the two relations
-  // (fiber walking visits a different order than the flat path), so compare as
-  // sets.
-  auto points1 = collector1.points;
-  auto points2 = collector2.points;
-  if (points1.size() != points2.size()) return false;
-  std::sort(points1.begin(), points1.end());
-  std::sort(points2.begin(), points2.end());
-  return points1 == points2;
+  // The fiber-walk and flat enumeration paths visit points in different orders.
+  std::sort(collector1.points.begin(), collector1.points.end());
+  std::sort(collector2.points.begin(), collector2.points.end());
+  return collector1.points == collector2.points;
 }
 
 bool isRelationEqual(const presburger::IntegerRelation& relation1,
@@ -1264,9 +1248,8 @@ bool isRelationEqual(const presburger::IntegerRelation& relation1,
   bool fastCheck = relation1.isObviouslyEqual(relation2);
   if (fastCheck) return true;
 
-  // Before the symbolic tests below: they all bottom out in isEqual (even
-  // tryProveUnequal, via sameRangeForDomainPoint), which does not terminate on
-  // gap-structured conv layouts.
+  // Must precede the symbolic tests: they all bottom out in isEqual, even
+  // tryProveUnequal via sameRangeForDomainPoint.
   std::optional<bool> enumerated =
       tryProveEqualByEnumeration(relation1, relation2);
   if (enumerated.has_value()) return *enumerated;

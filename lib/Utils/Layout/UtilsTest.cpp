@@ -361,7 +361,7 @@ TEST(UtilsTest, TricyclicLayout2x5x7Repeated) {
 }
 
 // A genuine tricyclic layout must still be recognized after routing the check
-// through isRelationEqual (rather than IntegerRelation::isEqual directly).
+// through isRelationEqual.
 TEST(UtilsTest, IsRelationTricyclicAcceptsGenuineLayout) {
   MLIRContext context;
   int64_t h = 2, m = 5, n = 7;
@@ -373,12 +373,8 @@ TEST(UtilsTest, IsRelationTricyclicAcceptsGenuineLayout) {
       tensorType, numSlots, getTricyclicLayoutRelation(tensorType, numSlots)));
 }
 
-// A unit dim makes the CRT decomposition degenerate, and gcd(1, n) == 1 means
-// the coprimality filter cannot reject it -- so batch-of-1 activations (1xCxT)
-// used to reach a doubly-exponential set difference against a gap-structured
-// conv layout. The relation passed here IS the 1x5x7 tricyclic relation, so
-// without the unit-dim guard this returns true; the guard makes it false
-// before any Presburger work happens.
+// The relation passed here IS the 1x5x7 tricyclic relation, so this returns
+// true without the unit-dim guard.
 TEST(UtilsTest, IsRelationTricyclicRejectsUnitDim) {
   MLIRContext context;
   int64_t h = 1, m = 5, n = 7;
@@ -403,27 +399,35 @@ TEST(UtilsTest, IsRelationBicyclicRejectsUnitDim) {
       matrixType, numSlots, getBicyclicLayoutRelation(matrixType, numSlots)));
 }
 
-// A gap-structured conv layout (mod + floordiv locals, as produced by a strided
-// convolution) compared against itself. isObviouslyEqual does not fire once the
-// constraint systems differ syntactically, and the symbolic path
-// (PresburgerRelation::subtract) does not terminate on these -- so this test
-// hangs rather than fails if the enumeration tier in isRelationEqual is
-// removed. Shape/strides taken from TCResNet8's 1x40x101 input layout at
-// logN=13.
-TEST(UtilsTest, IsRelationEqualTerminatesOnGapStructuredConvLayout) {
-  auto rel = getIntegerRelationFromIslStr(
+// The pair from TCResNet8's first tensor.collapse_shape (1x40x101 -> 40x101 at
+// logN=13), equal but differing in domain rank so isObviouslyEqual cannot
+// settle it. Hangs rather than fails if the enumeration tier stops firing.
+TEST(UtilsTest, IsRelationEqualDecidesCollapsedGapStructuredConvLayout) {
+  MLIRContext context;
+  auto sourceRel = getIntegerRelationFromIslStr(
       "{ [i0, i1, i2] -> [ct, slot] : i0 = 0 and ct = 0 and "
       "(-101i1 - i2 + slot) mod 4096 = 0 and 0 <= i1 <= 39 and "
       "0 <= i2 <= 8191 - 101i1 and i2 <= 100 and 0 <= slot <= 8191 and "
       "8192*floor((4096 + 101i1 + i2)/8192) <= 101i1 + i2 }");
-  ASSERT_TRUE(succeeded(rel));
+  auto resultRel = getIntegerRelationFromIslStr(
+      "{ [i0, i1] -> [ct, slot] : ct = 0 and "
+      "(-101i0 - i1 + slot) mod 4096 = 0 and 0 <= i0 <= 39 and "
+      "0 <= i1 <= 100 and 0 <= slot <= 8191 and "
+      "8192*floor((4096 + 101i0 + i1)/8192) <= 101i0 + i1 }");
+  ASSERT_TRUE(succeeded(sourceRel));
+  ASSERT_TRUE(succeeded(resultRel));
 
-  EXPECT_TRUE(isRelationEqual(rel.value(), rel.value()));
+  RankedTensorType sourceType =
+      RankedTensorType::get({1, 40, 101}, IndexType::get(&context));
+  SmallVector<ReassociationIndices> reassociation = {{0, 1}, {2}};
+  IntegerRelation collapsed =
+      collapseDimensions(sourceRel.value(), sourceType, reassociation);
+
+  EXPECT_TRUE(isRelationEqual(collapsed, resultRel.value()));
 }
 
-// The same layout with one bound changed must come back unequal, so the
-// enumeration tier is not just answering "true" for everything it can
-// enumerate.
+// One bound changed, so the enumeration tier is not just answering "true" for
+// everything it can enumerate.
 TEST(UtilsTest, IsRelationEqualDistinguishesGapStructuredConvLayouts) {
   auto rel1 = getIntegerRelationFromIslStr(
       "{ [i0, i1, i2] -> [ct, slot] : i0 = 0 and ct = 0 and "

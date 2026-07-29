@@ -2229,9 +2229,8 @@ class ConvertTensorInsertSlice
     // layout, we don't need to insert a conversion.
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);
     Value convertedSource = adaptor.getSource();
-    // isRelationEqual for the fast structural rejects; see the reshape patterns
-    // below. This one only gates an optimization (skipping a layout
-    // conversion), so it must not cost more than the conversion it avoids.
+    // This only gates skipping a layout conversion, so it must not cost more
+    // than the conversion it avoids.
     if (!isRelationEqual(scalarRel, shiftedSliceInsertionLayout)) {
       LayoutAttr newScalarLayout =
           LayoutAttr::getFromIntegerRelation(ctx, shiftedSliceInsertionLayout);
@@ -2774,10 +2773,8 @@ class ConvertTensorCollapseShape
     auto srcRelation = tensorLayout.getIntegerRelation();
     auto collapsedRelation = collapseDimensions(srcRelation, op.getSrcType(),
                                                 op.getReassociationIndices());
-    // isRelationEqual, not isEqual: a reshape only relabels domain indices, so
-    // the cheap structural checks settle this. Calling isEqual directly runs a
-    // PresburgerRelation set difference, which is doubly exponential on the
-    // floordiv/mod locals of a gap-structured strided-conv layout.
+    // isRelationEqual, not isEqual: the latter's set difference is doubly
+    // exponential on the locals of a gap-structured strided-conv layout.
     if (!isRelationEqual(collapsedRelation,
                          resultLayout.getIntegerRelation())) {
       return rewriter.notifyMatchFailure(
@@ -2852,9 +2849,7 @@ class ConvertTensorExpandShape
     auto srcRelation = sourceLayout.getIntegerRelation();
     auto expandedRelation = expandDimensions(srcRelation, op.getResultType(),
                                              op.getReassociationIndices());
-    // See the collapse_shape twin above: isRelationEqual keeps gap-structured
-    // conv layouts out of the doubly-exponential set difference. This is the
-    // site TCResNet8's 1xCxT feature maps wedge on.
+    // See the collapse_shape twin above.
     if (!isRelationEqual(expandedRelation, resultLayout.getIntegerRelation())) {
       return rewriter.notifyMatchFailure(
           op, "result layout is not equal to input layout");
