@@ -7,10 +7,10 @@
 
 #include "gtest/gtest.h"  // from @googletest
 #include "lib/Utils/Layout/Convolution.h"
-#include "lib/Utils/MathUtils.h"
 #include "lib/Utils/Layout/ConvolutionTestUtil.h"
 #include "lib/Utils/Layout/Evaluate.h"
 #include "lib/Utils/Layout/Utils.h"
+#include "lib/Utils/MathUtils.h"
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/PresburgerSpace.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"      // from @llvm-project
@@ -955,10 +955,8 @@ void checkConv1dCwFcwDiagonalized(MLIRContext& context, int64_t outputChannels,
   auto colBound = expandedRelation.getConstantBound64(
       BoundType::UB, expandedRelation.getVarKindOffset(VarKind::Range) + 1);
   ASSERT_TRUE(rowBound.has_value() && colBound.has_value());
-  EXPECT_EQ(nextPowerOfTwo(rowBound.value() + 1),
-            nextPowerOfTwo(rows));
-  EXPECT_EQ(nextPowerOfTwo(colBound.value() + 1),
-            nextPowerOfTwo(cols));
+  EXPECT_EQ(nextPowerOfTwo(rowBound.value() + 1), nextPowerOfTwo(rows));
+  EXPECT_EQ(nextPowerOfTwo(colBound.value() + 1), nextPowerOfTwo(cols));
 
   // ... and so must the diagonalized relation that production actually uses.
   auto maybeRel = get1dConvCwFcwFilterDiagonalizedRelation(

@@ -43,19 +43,19 @@ func TestInPlaceRotation(t *testing.T) {
 
 	pInput := ObservedPointers[0]
 	pRotate := ObservedPointers[1]
-	pAdd := ObservedPointers[2]
+	pAddOp := ObservedPointers[2]
 	pResult := fmt.Sprintf("%p", resultCt[0])
 
 	if pInput == pRotate {
 		t.Errorf("Expected rotate to be out-of-place (different pointers), but got same pointer: %s", pInput)
 	}
 
-	if pRotate != pAdd {
-		t.Errorf("Expected add to be in-place (same pointer), but got different pointers: rotate=%s, add=%s", pRotate, pAdd)
+	if pRotate != pAddOp {
+		t.Errorf("Expected add to be in-place (same pointer), but got different pointers: rotate=%s, add=%s", pRotate, pAddOp)
 	}
 
-	if pAdd != pResult {
-		t.Errorf("Expected the result to alias the add (same pointer), but got different pointers: add=%s, result=%s", pAdd, pResult)
+	if pAddOp != pResult {
+		t.Errorf("Expected the result to alias the add (same pointer), but got different pointers: add=%s, result=%s", pAddOp, pResult)
 	}
 
 	// Verify that the result has the expected length

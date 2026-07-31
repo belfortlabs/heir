@@ -217,9 +217,8 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
 
   // Express the unpadded operand in the conv's own rank-3 space; this is what
   // the Toeplitz builder needs (it asserts rank 3, N=1).
-  auto unpaddedType =
-      RankedTensorType::get({1, dataType.getDimSize(1), unpaddedWidth},
-                            dataType.getElementType());
+  auto unpaddedType = RankedTensorType::get(
+      {1, dataType.getDimSize(1), unpaddedWidth}, dataType.getElementType());
 
   // The layout we expect on the padded value: the unpadded row-major layout
   // with the width index shifted by `p`. If the actual layout is anything else
@@ -1048,7 +1047,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
   IntegerRelation targetDataRelation =
       getRowMajorLayoutRelation(dataType, ciphertextSize);
   if (auto folded = tryFoldPadIntoConvPadding(data, dataType, dataLayout,
-                                             ciphertextSize)) {
+                                              ciphertextSize)) {
     convPadding = folded->padding;
     matrixDataType = folded->unpaddedType;
     targetDataRelation = folded->targetRelation;

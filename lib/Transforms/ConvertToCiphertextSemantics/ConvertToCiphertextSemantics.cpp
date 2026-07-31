@@ -1734,11 +1734,12 @@ struct ConvertLinalgConv2DNchwFchw
 
     // The original matrix shape is the shape of the expanded filter before
     // diagonalization.
-    // NOTE: `padding=0` is only correct because nothing folds a `tensor.pad` into
-    // a 2-D conv's padding parameter. If that changes, derive the shape from the
-    // folded padding the way ConvertLinalgConv1DNcwFcw::expandedFilterShape
-    // does: the padded and unpadded column counts can round to different powers
-    // of two, which mis-sizes the squat-diagonal collapse.
+    // NOTE: `padding=0` is only correct because nothing folds a `tensor.pad`
+    // into a 2-D conv's padding parameter. If that changes, derive the shape
+    // from the folded padding the way
+    // ConvertLinalgConv1DNcwFcw::expandedFilterShape does: the padded and
+    // unpadded column counts can round to different powers of two, which
+    // mis-sizes the squat-diagonal collapse.
     RankedTensorType expandedMatrixType = get2dConvChwFchwFilterExpandedType(
         cast<RankedTensorType>(op.getInputs()[1].getType()), dataType,
         /*padding=*/0, llvm::to_vector(op.getStrides().getValues<int64_t>()));
@@ -1802,11 +1803,12 @@ struct ConvertLinalgConv2DNchwFchw
       dataType =
           RankedTensorType::get(info->inputShape, dataType.getElementType());
     }
-    // NOTE: `padding=0` is only correct because nothing folds a `tensor.pad` into
-    // a 2-D conv's padding parameter. If that changes, derive the shape from the
-    // folded padding the way ConvertLinalgConv1DNcwFcw::expandedFilterShape
-    // does: the padded and unpadded column counts can round to different powers
-    // of two, which mis-sizes the squat-diagonal collapse.
+    // NOTE: `padding=0` is only correct because nothing folds a `tensor.pad`
+    // into a 2-D conv's padding parameter. If that changes, derive the shape
+    // from the folded padding the way
+    // ConvertLinalgConv1DNcwFcw::expandedFilterShape does: the padded and
+    // unpadded column counts can round to different powers of two, which
+    // mis-sizes the squat-diagonal collapse.
     RankedTensorType expandedMatrixType = get2dConvChwFchwFilterExpandedType(
         cast<RankedTensorType>(op.getInputs()[1].getType()), dataType,
         /*padding=*/0, llvm::to_vector(op.getStrides().getValues<int64_t>()));
