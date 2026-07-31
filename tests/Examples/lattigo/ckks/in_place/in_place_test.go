@@ -24,7 +24,7 @@ func TestInPlaceRotation(t *testing.T) {
 	expectedOps := []string{
 		"input",
 		"rotate",
-		"mul",
+		"add",
 	}
 
 	if len(ObservedOps) < len(expectedOps) {
@@ -43,19 +43,19 @@ func TestInPlaceRotation(t *testing.T) {
 
 	pInput := ObservedPointers[0]
 	pRotate := ObservedPointers[1]
-	pMul := ObservedPointers[2]
+	pAdd := ObservedPointers[2]
 	pResult := fmt.Sprintf("%p", resultCt[0])
 
 	if pInput == pRotate {
 		t.Errorf("Expected rotate to be out-of-place (different pointers), but got same pointer: %s", pInput)
 	}
 
-	if pRotate != pMul {
-		t.Errorf("Expected mul to be in-place (same pointer), but got different pointers: rotate=%s, mul=%s", pRotate, pMul)
+	if pRotate != pAdd {
+		t.Errorf("Expected add to be in-place (same pointer), but got different pointers: rotate=%s, add=%s", pRotate, pAdd)
 	}
 
-	if pMul != pResult {
-		t.Errorf("Expected rescale to be in-place (same pointer), but got different pointers: mul=%s, result=%s", pMul, pResult)
+	if pAdd != pResult {
+		t.Errorf("Expected the result to alias the add (same pointer), but got different pointers: add=%s, result=%s", pAdd, pResult)
 	}
 
 	// Verify that the result has the expected length
