@@ -7,6 +7,7 @@
 
 #include "gtest/gtest.h"  // from @googletest
 #include "lib/Utils/Layout/Convolution.h"
+#include "lib/Utils/MathUtils.h"
 #include "lib/Utils/Layout/ConvolutionTestUtil.h"
 #include "lib/Utils/Layout/Evaluate.h"
 #include "lib/Utils/Layout/Utils.h"
@@ -827,13 +828,6 @@ TEST(ConvolutionTest, TestConv1dCwFcwDiagonalizedRowInterchange) {
   EXPECT_EQ(withInterchange.size(), 3);
 }
 
-// Rounds up to the next power of two (identity if already a power of two).
-int64_t roundUpToPowerOfTwo(int64_t n) {
-  int64_t p = 1;
-  while (p < n) p *= 2;
-  return p;
-}
-
 // Reference dense expanded Toeplitz matrix for a 1-D multichannel convolution
 // with the given stride and a symmetric zero padding of `padding` on the width
 // dim. Rows are (f, ow) row-major; columns index the *unpadded* data as (c, w)
@@ -871,8 +865,8 @@ std::vector<std::vector<int>> reference1dConvCwFcwMatrix(
 // than dropped.
 std::vector<std::vector<int>> undiagonalizeMatrix(
     const std::vector<std::vector<int>>& packed, int64_t rows, int64_t cols) {
-  int64_t paddedRows = roundUpToPowerOfTwo(rows);
-  int64_t paddedCols = roundUpToPowerOfTwo(cols);
+  int64_t paddedRows = (int64_t)nextPowerOfTwo(rows);
+  int64_t paddedCols = (int64_t)nextPowerOfTwo(cols);
   std::vector<std::vector<int>> dense(paddedRows,
                                       std::vector<int>(paddedCols, 0));
   for (int64_t ct = 0; ct < (int64_t)packed.size(); ++ct) {
@@ -886,8 +880,8 @@ std::vector<std::vector<int>> undiagonalizeMatrix(
 // Pads `matrix` out to paddedRows x paddedCols with zeros.
 std::vector<std::vector<int>> padMatrixToPowerOfTwo(
     const std::vector<std::vector<int>>& matrix) {
-  int64_t paddedRows = roundUpToPowerOfTwo(matrix.size());
-  int64_t paddedCols = roundUpToPowerOfTwo(matrix[0].size());
+  int64_t paddedRows = (int64_t)nextPowerOfTwo(matrix.size());
+  int64_t paddedCols = (int64_t)nextPowerOfTwo(matrix[0].size());
   std::vector<std::vector<int>> result(paddedRows,
                                        std::vector<int>(paddedCols, 0));
   for (size_t i = 0; i < matrix.size(); ++i) {
@@ -961,10 +955,10 @@ void checkConv1dCwFcwDiagonalized(MLIRContext& context, int64_t outputChannels,
   auto colBound = expandedRelation.getConstantBound64(
       BoundType::UB, expandedRelation.getVarKindOffset(VarKind::Range) + 1);
   ASSERT_TRUE(rowBound.has_value() && colBound.has_value());
-  EXPECT_EQ(roundUpToPowerOfTwo(rowBound.value() + 1),
-            roundUpToPowerOfTwo(rows));
-  EXPECT_EQ(roundUpToPowerOfTwo(colBound.value() + 1),
-            roundUpToPowerOfTwo(cols));
+  EXPECT_EQ(nextPowerOfTwo(rowBound.value() + 1),
+            nextPowerOfTwo(rows));
+  EXPECT_EQ(nextPowerOfTwo(colBound.value() + 1),
+            nextPowerOfTwo(cols));
 
   // ... and so must the diagonalized relation that production actually uses.
   auto maybeRel = get1dConvCwFcwFilterDiagonalizedRelation(
@@ -989,11 +983,13 @@ TEST(ConvolutionTest, TestConv1dCwFcwDiagonalizedStride2WithPadding) {
   }
 }
 
-TEST(ConvolutionTest, TestConv1dCwFcwDiagonalizedTCResNetShape) {
-  // The shape family TCResNet8Small actually uses: kernel 9, stride 2,
-  // padding 4 (so the padding exceeds the stride and the first windows are
-  // mostly padding), 16 -> 24 channels over width 48, at the model's
-  // ciphertext degree.
+TEST(ConvolutionTest, TestConv1dCwFcwDiagonalizedPaddingExceedsStride) {
+  // Padding larger than the stride, so the leading windows are mostly
+  // padding and no window starts at data index 0. These are the dimensions
+  // TCResNet8Small uses (kernel 9, stride 2, padding 4, 16 -> 24 channels
+  // over width 48, at the model's ciphertext degree); keep them full size
+  // rather than shrinking for speed -- enumerating the real 1024x1024
+  // packing is the point, and costs ~3s.
   MLIRContext context;
   checkConv1dCwFcwDiagonalized(context, /*outputChannels=*/24,
                                /*inputChannels=*/16, /*filterWidth=*/9,
