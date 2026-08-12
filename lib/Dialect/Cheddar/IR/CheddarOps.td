@@ -375,6 +375,21 @@ class Cheddar_BinaryCtCtOp<string mnemonic, list<Trait> traits = []>
   let results = (outs Cheddar_CtResult:$result);
 }
 
+def Cheddar_CopyOp : Cheddar_DpsOp<"copy"> {
+  let summary = "Deep-copy a ciphertext";
+  let description = [{
+    Calls context->Copy(res, input). This operation represents a genuine
+    semantic copy, primarily for copies that One-Shot Bufferize cannot remove
+    at function and region boundaries.
+  }];
+  let arguments = (ins
+    Cheddar_AnyContext:$ctx,
+    Cheddar_CtLike:$input,
+    Cheddar_CtLike:$output
+  );
+  let results = (outs Cheddar_CtResult:$result);
+}
+
 def Cheddar_AddOp : Cheddar_BinaryCtCtOp<"add"> {
   let summary = "Add two ciphertexts";
   let description = [{
