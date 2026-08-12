@@ -114,6 +114,16 @@ func.func @test_decrypt(
 
 // --- Binary ct-ct operations ---
 
+// CHECK: @test_copy
+func.func @test_copy(
+    %ctx: !cheddar.context,
+    %input: tensor<!cheddar.ciphertext>,
+    %out: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
+  // CHECK: cheddar.copy
+  %result = cheddar.copy %ctx, %input, %out : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
+  return %result : tensor<!cheddar.ciphertext>
+}
+
 // CHECK: @test_add
 func.func @test_add(
     %ctx: !cheddar.context,
