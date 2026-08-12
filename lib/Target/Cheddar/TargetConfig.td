@@ -5,9 +5,9 @@ def Cheddar : CompilationTarget<"cheddar"> {
   // compute modulus chain, so a bootstrap consumes no compute levels.
   let bootstrapLevelsConsumed = 0;
 
-  // TODO(#3429): enable both kernels when cheddar backend gets them
-  let has_kernel_linear_transform = 0;
-  let has_kernel_chebyshev = 0;
+  let has_kernel_linear_transform = 1;
+  let supports_single_diagonal_prepared_linear_transform = 0;
+  let has_kernel_chebyshev = 1;
 
   // Cheddar rejects ciphertext-plaintext operations with different prime sets.
   let requires_matching_ciphertext_plaintext_levels = 1;

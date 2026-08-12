@@ -23,7 +23,12 @@ def PrepareLinearTransforms : Pass<"prepare-linear-transforms", "ModuleOp"> {
     mismatch silently evaluates a wrongly-scaled transform; carrying them in
     the type makes a mismatch a verifier error instead.
   }];
-  let dependentDialects = ["mlir::heir::kernel::KernelDialect"];
+  let dependentDialects = [
+    "mlir::heir::ckks::CKKSDialect",
+    "mlir::heir::kernel::KernelDialect",
+    "mlir::heir::lwe::LWEDialect",
+    "mlir::tensor::TensorDialect"
+  ];
 }
 
 #endif  // LIB_DIALECT_KERNEL_TRANSFORMS_PASSES_TD_
