@@ -14,9 +14,11 @@
 
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/MathUtils.h"
+#include "llvm/include/llvm/ADT/DenseMap.h"      // from @llvm-project
 #include "llvm/include/llvm/ADT/DenseSet.h"      // from @llvm-project
 #include "llvm/include/llvm/ADT/DynamicAPInt.h"  // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"     // from @llvm-project
+#include "llvm/include/llvm/Support/Debug.h"     // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/PresburgerSpace.h"  // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/Simplex.h"  // from @llvm-project
@@ -34,6 +36,8 @@
 #include "include/isl/space_type.h"  // from @isl
 #include "include/isl/val.h"         // from @isl
 #include "include/isl/val_type.h"    // from @isl
+
+#define DEBUG_TYPE "layout-utils"
 
 namespace mlir {
 namespace heir {
@@ -345,7 +349,7 @@ presburger::IntegerRelation getDiagonalLayoutRelation(
 
 FailureOr<presburger::IntegerRelation> diagonalize2dMatrix(
     presburger::IntegerRelation relation, RankedTensorType originalType,
-    int64_t ciphertextSize) {
+    int64_t ciphertextSize, std::optional<int64_t> numColumns) {
   // Get size of the matrix.
   auto rowBound = relation.getConstantBound64(
       BoundType::UB, relation.getVarKindOffset(VarKind::Range));
@@ -354,9 +358,10 @@ FailureOr<presburger::IntegerRelation> diagonalize2dMatrix(
   if (!rowBound.has_value() || !colBound.has_value()) {
     return failure();
   }
-  RankedTensorType matrixType =
-      RankedTensorType::get({rowBound.value() + 1, colBound.value() + 1},
-                            originalType.getElementType());
+  int64_t columns = numColumns.value_or(colBound.value() + 1);
+  if (columns <= colBound.value()) return failure();
+  RankedTensorType matrixType = RankedTensorType::get(
+      {rowBound.value() + 1, columns}, originalType.getElementType());
   auto diagonalRelation = getDiagonalLayoutRelation(matrixType, ciphertextSize);
 
   // Compose these relations.
@@ -633,6 +638,60 @@ bool isOneToOneSingleCiphertextPacking(
   isl_basic_map_free(map);
   isl_ctx_free(ctx);
   return singleCiphertext && oneToOne == isl_bool_true;
+}
+
+FailureOr<IntegerRelation> getDiagonalColumnRepresentative(
+    const IntegerRelation& relation, int64_t numSlots) {
+  if (relation.getNumDomainVars() != 1 || relation.getNumRangeVars() != 2)
+    return failure();
+
+  PointPairCollector points(relation.getNumDomainVars(),
+                            relation.getNumRangeVars());
+  enumeratePoints(relation, points);
+  if (points.points.empty()) return failure();
+
+  // Collect the slots that hold each element.
+  llvm::DenseMap<int64_t, SmallVector<int64_t>> copiesOf;
+  for (const auto& [domain, range] : points.points) {
+    if (range[0] != 0) return failure();
+    copiesOf[domain[0]].push_back(range[1]);
+  }
+
+  int64_t numCopies = copiesOf.begin()->second.size();
+  if (numCopies <= 0 || numSlots % numCopies != 0) return failure();
+  int64_t period = numSlots / numCopies;
+  LLVM_DEBUG(llvm::dbgs() << "representative: points=" << points.points.size()
+                          << " elements=" << copiesOf.size()
+                          << " copies=" << numCopies << " period=" << period
+                          << " numSlots=" << numSlots << "\n");
+
+  int64_t maxRepresentative = 0;
+  llvm::DenseSet<int64_t> representatives;
+  for (auto& entry : copiesOf) {
+    SmallVector<int64_t>& slots = entry.second;
+    if (static_cast<int64_t>(slots.size()) != numCopies) return failure();
+    llvm::sort(slots);
+    // Every element must repeat on the same grid. If it does not, no single
+    // slot bound separates the representatives from the copies.
+    for (int64_t i = 1; i < numCopies; ++i) {
+      if (slots[i] - slots[i - 1] != period) return failure();
+    }
+    // Two elements must not share a representative slot.
+    if (!representatives.insert(slots[0]).second) return failure();
+    maxRepresentative = std::max(maxRepresentative, slots[0]);
+  }
+
+  LLVM_DEBUG(llvm::dbgs() << "representative: maxRep=" << maxRepresentative
+                          << " -> ACCEPT\n");
+
+  IntegerRelation result(relation);
+  if (numCopies > 1) {
+    result.addBound(BoundType::UB, result.getVarKindOffset(VarKind::Range) + 1,
+                    maxRepresentative);
+    result.removeRedundantConstraints();
+    result.simplify();
+  }
+  return result;
 }
 
 IntegerRelation foldVectorPermutationIntoMatrixLayout(

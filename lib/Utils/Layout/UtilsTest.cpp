@@ -746,6 +746,91 @@ TEST(UtilsTest, TestIsOneToOneSingleCiphertextPacking) {
   EXPECT_FALSE(isOneToOneSingleCiphertextPacking(multipleCiphertexts));
 }
 
+// Returns the [idx] -> slot pairs of a single-ciphertext packing.
+std::vector<std::pair<int64_t, int64_t>> collectSlots(
+    const IntegerRelation& relation) {
+  PointPairCollector collector(/*domainDims=*/1, /*rangeDims=*/2);
+  enumeratePoints(relation, collector);
+  std::vector<std::pair<int64_t, int64_t>> result;
+  for (const auto& [domain, range] : collector.points) {
+    result.push_back({domain[0], range[1]});
+  }
+  llvm::sort(result);
+  return result;
+}
+
+TEST(UtilsTest, TestGetDiagonalColumnRepresentativeNotReplicated) {
+  // slot = 3i mod 8 fills all 8 slots, so the packing already reads one slot
+  // per element and passes through unchanged.
+  auto permutation = getIntegerRelationFromIslStr(
+                         "{ [i] -> [ct, slot] : ct = 0 and (slot - 3i) mod 8 "
+                         "= 0 and 0 <= i <= 7 and 0 <= slot <= 7 }")
+                         .value();
+  auto result = getDiagonalColumnRepresentative(permutation, /*numSlots=*/8);
+  ASSERT_TRUE(succeeded(result));
+  EXPECT_EQ(collectSlots(result.value()), collectSlots(permutation));
+}
+
+TEST(UtilsTest, TestGetDiagonalColumnRepresentativeReplicated) {
+  // Two copies of [0, 8) in 16 slots. The representative keeps the low copy.
+  auto replicated = getIntegerRelationFromIslStr(
+                        "{ [i] -> [ct, slot] : ct = 0 and (slot - i) mod 8 = "
+                        "0 and 0 <= i <= 7 and 0 <= slot <= 15 }")
+                        .value();
+  auto result = getDiagonalColumnRepresentative(replicated, /*numSlots=*/16);
+  ASSERT_TRUE(succeeded(result));
+  std::vector<std::pair<int64_t, int64_t>> expected;
+  for (int64_t i = 0; i < 8; ++i) expected.push_back({i, i});
+  EXPECT_EQ(collectSlots(result.value()), expected);
+}
+
+TEST(UtilsTest, TestGetDiagonalColumnRepresentativePartialDomain) {
+  // A zero-padding region gets no slot at all, so the packing is defined on
+  // part of the index space only. That is still absorbable.
+  auto partial = getIntegerRelationFromIslStr(
+                     "{ [i] -> [ct, slot] : ct = 0 and slot = i and 2 <= i <= "
+                     "9 }")
+                     .value();
+  auto result = getDiagonalColumnRepresentative(partial, /*numSlots=*/16);
+  ASSERT_TRUE(succeeded(result));
+  EXPECT_EQ(collectSlots(result.value()).size(), 8u);
+}
+
+TEST(UtilsTest, TestGetDiagonalColumnRepresentativeSparseReplicated) {
+  // Four elements replicated on a period-8 grid in 16 slots. The
+  // representatives span only a quarter of the ciphertext, which is fine as
+  // long as the caller builds the matrix at full ciphertext width.
+  auto sparse = getIntegerRelationFromIslStr(
+                    "{ [i] -> [ct, slot] : ct = 0 and (slot - i) mod 8 = 0 "
+                    "and 0 <= i <= 3 and 0 <= slot <= 15 }")
+                    .value();
+  auto result = getDiagonalColumnRepresentative(sparse, /*numSlots=*/16);
+  ASSERT_TRUE(succeeded(result));
+  std::vector<std::pair<int64_t, int64_t>> expected;
+  for (int64_t i = 0; i < 4; ++i) expected.push_back({i, i});
+  EXPECT_EQ(collectSlots(result.value()), expected);
+}
+
+TEST(UtilsTest, TestGetDiagonalColumnRepresentativeRejectsSharedSlot) {
+  // Elements 0 and 2 both land on slot 0, and 1 and 3 both on slot 1. The
+  // column substitution would be ambiguous, so the packing must be rejected.
+  auto shared = getIntegerRelationFromIslStr(
+                    "{ [i] -> [ct, slot] : ct = 0 and (slot - i) mod 2 = 0 "
+                    "and 0 <= i <= 3 and 0 <= slot <= 3 }")
+                    .value();
+  EXPECT_TRUE(failed(getDiagonalColumnRepresentative(shared, /*numSlots=*/4)));
+}
+
+TEST(UtilsTest, TestGetDiagonalColumnRepresentativeRejectsMultipleCiphertexts) {
+  auto multipleCiphertexts = getIntegerRelationFromIslStr(
+                                 "{ [i] -> [ct, slot] : i = 4ct + slot and 0 "
+                                 "<= i <= 7 and 0 <= ct <= 1 and 0 <= slot <= "
+                                 "3 }")
+                                 .value();
+  EXPECT_TRUE(failed(getDiagonalColumnRepresentative(multipleCiphertexts,
+                                                     /*numSlots=*/4)));
+}
+
 TEST(UtilsTest, TestFoldVectorPermutationIntoMatrixLayout) {
   // The vector's slot = 3i permutation is folded into the matrix's column
   // indexing (col -> 3col), so a diagonal matvec can consume the un-permuted

@@ -945,7 +945,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
 
   // A non-row-major single-ciphertext data input does not need an online layout
   // conversion. Encode the input-slot permutation directly into the public
-  // diagonal filter packing instead. 
+  // diagonal filter packing instead.
   std::optional<IntegerRelation> dataColumnPermutation;
   if (!dataLayout.getIntegerRelation().isEqual(targetDataRelation) &&
       !isSecret(filter, solver)) {
@@ -957,13 +957,17 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
     auto filterConstantOp = logicalFilter.getDefiningOp<arith::ConstantOp>();
     if (filterConstantOp &&
         dyn_cast<ElementsAttr>(filterConstantOp.getValue())) {
-      // Replicated packings are rejected here: with an element in more than one
-      // slot the column substitution is not well defined.
+      // A replicated packing holds each element in several slots. Reduce it to
+      // one representative slot per element first, so that the column
+      // substitution is well defined.
       auto columnPermutation = get1dConvDataColumnPermutation(
           dataType, dataLayout.getIntegerRelation());
-      if (succeeded(columnPermutation) &&
-          isOneToOneSingleCiphertextPacking(columnPermutation.value())) {
-        dataColumnPermutation = columnPermutation.value();
+      if (succeeded(columnPermutation)) {
+        auto representative = getDiagonalColumnRepresentative(
+            columnPermutation.value(), ciphertextSize);
+        if (succeeded(representative)) {
+          dataColumnPermutation = representative.value();
+        }
       }
     }
   }

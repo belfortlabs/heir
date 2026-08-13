@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -546,8 +547,13 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
     expandedFilterRelation.simplify();
   }
 
-  return diagonalize2dMatrix(expandedFilterRelation, filterType,
-                             ciphertextSize);
+  // When the columns are ciphertext slots, build the matrix at full ciphertext
+  // width. The diagonal layout indexes columns modulo the width rounded up to
+  // a power of two, and the transform rotates modulo the ciphertext size
+  return diagonalize2dMatrix(expandedFilterRelation, filterType, ciphertextSize,
+                             dataSlotPermutation
+                                 ? std::optional<int64_t>(ciphertextSize)
+                                 : std::nullopt);
 }
 
 FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
