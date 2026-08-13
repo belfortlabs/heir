@@ -943,13 +943,42 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
   IntegerRelation targetDataRelation =
       getRowMajorLayoutRelation(dataType, ciphertextSize);
 
-  if (!dataLayout.getIntegerRelation().isEqual(targetDataRelation)) {
+  // A non-row-major single-ciphertext data input does not need an online layout
+  // conversion. Encode the input-slot permutation directly into the public
+  // diagonal filter packing instead. 
+  std::optional<IntegerRelation> dataColumnPermutation;
+  if (!dataLayout.getIntegerRelation().isEqual(targetDataRelation) &&
+      !isSecret(filter, solver)) {
+    Value logicalFilter = filter;
+    if (auto assignLayout =
+            logicalFilter.getDefiningOp<tensor_ext::AssignLayoutOp>()) {
+      logicalFilter = assignLayout.getValue();
+    }
+    auto filterConstantOp = logicalFilter.getDefiningOp<arith::ConstantOp>();
+    if (filterConstantOp &&
+        dyn_cast<ElementsAttr>(filterConstantOp.getValue())) {
+      // Replicated packings are rejected here: with an element in more than one
+      // slot the column substitution is not well defined.
+      auto columnPermutation = get1dConvDataColumnPermutation(
+          dataType, dataLayout.getIntegerRelation());
+      if (succeeded(columnPermutation) &&
+          isOneToOneSingleCiphertextPacking(columnPermutation.value())) {
+        dataColumnPermutation = columnPermutation.value();
+      }
+    }
+  }
+
+  if (!dataColumnPermutation.has_value() &&
+      !dataLayout.getIntegerRelation().isEqual(targetDataRelation)) {
     LLVM_DEBUG(llvm::dbgs() << "conv_1d data input is not row major, "
                                "inserting layout conversion.\n");
     auto [toReplace, newDataLayoutAttr] =
         convertToLayout(ctx, builder, op, data, dataLayout, targetDataRelation);
     debugAssignLayout(toReplace, newDataLayoutAttr);
     assignedLayouts.insert({toReplace, newDataLayoutAttr});
+  } else if (dataColumnPermutation.has_value()) {
+    LLVM_DEBUG(llvm::dbgs() << "conv_1d absorbing data packing into the "
+                               "diagonal filter layout.\n");
   }
 
   // The kernel for this operation requires expanding the conv filter matrix
@@ -957,7 +986,9 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
   LayoutAttr filterLayout = getComposedLayoutAttr(filter);
   auto convRelation = get1dConvCwFcwFilterDiagonalizedRelation(
       filterType, dataType, stride, /*padding=*/0, ciphertextSize,
-      /*interchangeRows=*/interchangeRows);
+      /*interchangeRows=*/interchangeRows,
+      dataColumnPermutation.has_value() ? &dataColumnPermutation.value()
+                                        : nullptr);
   if (failed(convRelation)) {
     return failure();
   }
