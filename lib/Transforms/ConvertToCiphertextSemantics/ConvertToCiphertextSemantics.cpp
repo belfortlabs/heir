@@ -1466,6 +1466,24 @@ struct ConvertLinalgConv1DNcwFcw
         unrollKernels(unrollKernels),
         useLintransKernels(useLintransKernels) {}
 
+  // The width of the matrix that the filter's diagonal layout was built with.
+  //
+  // Normally that is the expanded Toeplitz width, C*W. But when layout
+  // propagation absorbs the data's slot packing into the filter's column
+  // space, the columns become ciphertext slots and the layout is built at full
+  // ciphertext width, which layout propagation records on the op. The kernel
+  // folds partial sums using this width, so it must be the same number the
+  // layout was built with.
+  std::vector<int64_t> layoutMatrixShape(
+      linalg::Conv1DNcwFcwOp op, RankedTensorType expandedMatrixType) const {
+    std::vector<int64_t> shape = expandedMatrixType.getShape().vec();
+    if (auto width =
+            op->getAttrOfType<IntegerAttr>(kAbsorbedMatrixWidthAttrName)) {
+      shape[1] = width.getInt();
+    }
+    return shape;
+  }
+
   bool supportsExpandedHaleviShoup(linalg::Conv1DNcwFcwOp op,
                                    OpAdaptor adaptor) const {
     Value filter = adaptor.getInputs().back();
@@ -1532,7 +1550,7 @@ struct ConvertLinalgConv1DNcwFcw
                                              data.getType().getShape().back());
     std::shared_ptr<ArithmeticDagNode<SSAValue>> implementedKernel =
         implementHaleviShoup(vectorLeaf, matrixLeaf,
-                             expandedMatrixType.getShape(), dagType,
+                             layoutMatrixShape(op, expandedMatrixType), dagType,
                              zeroDiagonals,
                              /*unroll=*/unrollKernels);
 
@@ -1588,9 +1606,9 @@ struct ConvertLinalgConv1DNcwFcw
     rewriter.setInsertionPointAfter(op);
     auto layoutAttr = cast<LayoutAttr>(op->getAttr(kLayoutAttrName));
 
-    Value finalOutput = emitLintransKernel(rewriter, op.getLoc(), data, filter,
-                                           expandedMatrixType.getShape(),
-                                           layoutAttr, zeroDiagonals);
+    Value finalOutput = emitLintransKernel(
+        rewriter, op.getLoc(), data, filter,
+        layoutMatrixShape(op, expandedMatrixType), layoutAttr, zeroDiagonals);
 
     // Add the initial accumulator value.
     Value result = adaptor.getOutputs()[0];
