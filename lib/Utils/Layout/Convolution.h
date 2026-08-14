@@ -84,9 +84,24 @@ RankedTensorType get2dConvChwFchwFilterExpandedType(
 // input vector. Each row corresponds to one filter multiplication. The filter
 // type is assumed to be 3-D with dimensions (f, c, w) and the data type is
 // assumed to be 3-D with dimensions (1, c, w).
+// `dataSlotPermutation`, when non-null, maps the row-major flattened data index
+// [j] (j = c * W + w, the expanded matrix's own column coordinate) to the
+// [ct, slot] the data element actually occupies. Passing it re-indexes the
+// expanded matrix's column space by that packing, so the same Halevi-Shoup
+// diagonal kernel consumes the data in its actual (e.g. stride-gapped) packing
+// without an online ciphertext layout conversion. It must be a bijection on the
+// column range; see isOneToOneSingleCiphertextPacking.
 FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
     RankedTensorType filterType, RankedTensorType dataType, int64_t stride,
-    int64_t padding, int64_t ciphertextSize, bool interchangeRows = true);
+    int64_t padding, int64_t ciphertextSize, bool interchangeRows = true,
+    const presburger::IntegerRelation* dataSlotPermutation = nullptr);
+
+// Flattens a 3-D (1, C, W) data layout `[n, c, w] -> [ct, slot]` into the
+// column-space permutation `[j] -> [ct, slot]` with j = c * W + w, as accepted
+// by `get1dConvCwFcwFilterDiagonalizedRelation`'s `dataSlotPermutation`. Fails
+// if the layout does not pack the data into ciphertext zero.
+FailureOr<presburger::IntegerRelation> get1dConvDataColumnPermutation(
+    RankedTensorType dataType, const presburger::IntegerRelation& dataLayout);
 
 // Returns a sequence of IntegerRelations that represents the layout mapping as
 // a series of simple steps (Toeplitz expansion, row interchange, flattening,

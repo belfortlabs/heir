@@ -74,9 +74,15 @@ presburger::IntegerRelation getDiagonalLayoutRelation(
     RankedTensorType matrixType, int64_t ciphertextSize);
 
 // Applies a diagonal layout onto a given 2-D matrix layout.
+//
+// By default the matrix width comes from the relation's own column bound.
+// `numColumns` overrides it, which matters when the columns are ciphertext
+// slots: the diagonal layout indexes columns modulo the width rounded up to a
+// power of two, while the transform that consumes it rotates modulo the
+// ciphertext size. Passing the ciphertext size keeps the two moduli equal.
 FailureOr<presburger::IntegerRelation> diagonalize2dMatrix(
     presburger::IntegerRelation relation, RankedTensorType originalType,
-    int64_t ciphertextSize);
+    int64_t ciphertextSize, std::optional<int64_t> numColumns = std::nullopt);
 
 // Returns an IntegerRelation that represents a bicyclic layout for a matrix.
 // See https://eprint.iacr.org/2024/1762 for details.
@@ -116,6 +122,19 @@ bool isSingleCiphertextPermutation(const presburger::IntegerRelation& relation,
 // vector element occupying exactly one distinct slot.
 bool isOneToOneSingleCiphertextPacking(
     const presburger::IntegerRelation& relation);
+
+// Reduces a possibly replicated single-ciphertext packing [idx] -> [ct, slot]
+// to one representative slot per element, so that the packing can serve as the
+// column substitution of a Halevi-Shoup diagonal matvec.
+//
+// Fails if the packing spans more than one ciphertext, if the copies of an
+// element do not sit on a common grid, or if two elements share a
+// representative slot.
+//
+// Elements with no slot stay out of the result. The diagonal matvec then drops
+// their matrix columns, which is correct exactly when those elements are zero.
+FailureOr<presburger::IntegerRelation> getDiagonalColumnRepresentative(
+    const presburger::IntegerRelation& relation, int64_t numSlots);
 
 // Folds a single-ciphertext vector permutation (as accepted by
 // isOneToOneSingleCiphertextPacking) into a matrix layout, returning the matrix

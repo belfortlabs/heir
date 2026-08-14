@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -462,9 +463,45 @@ FailureOr<presburger::IntegerRelation> getConvFilterDiagonalizedRelation(
   return diagonalize2dMatrix(filterRelation, filterType, ciphertextSize);
 }
 
+FailureOr<presburger::IntegerRelation> get1dConvDataColumnPermutation(
+    RankedTensorType dataType, const presburger::IntegerRelation& dataLayout) {
+  assert(dataType.getRank() == 3 && "expected 3-D data matrix");
+  assert(dataType.getDimSize(0) == 1 && "expected N=1 batch size");
+  int64_t channels = dataType.getDimSize(1);
+  int64_t width = dataType.getDimSize(2);
+
+  // Unflatten [j] -> [n, c, w] with j = c * W + w, matching the expanded
+  // matrix's column coordinate embedCol = c * totalColSize + singleCol.
+  std::string unflattenStr = llvm::formatv(
+      "{{ [j] -> [n, c, w] : n = 0 and 0 <= c < {0} and 0 <= w < {1} and "
+      "j = c * {1} + w }",
+      channels, width);
+  auto unflatten = getIntegerRelationFromIslStr(unflattenStr);
+  if (failed(unflatten)) return failure();
+
+  // [j] -> [n, c, w] -> [ct, slot]
+  presburger::IntegerRelation result(unflatten.value());
+  result.compose(dataLayout);
+
+  // Require a single ciphertext. The ct coordinate is kept so the result stays
+  // in the [j] -> [ct, slot] shape that isOneToOneSingleCiphertextPacking
+  // validates; the consumer drops it before composing.
+  unsigned ctPos = result.getVarKindOffset(presburger::VarKind::Range);
+  auto ctLb = result.getConstantBound64(presburger::BoundType::LB, ctPos);
+  auto ctUb = result.getConstantBound64(presburger::BoundType::UB, ctPos);
+  if (!ctLb.has_value() || !ctUb.has_value() || ctLb.value() != 0 ||
+      ctUb.value() != 0) {
+    return failure();
+  }
+  result.removeRedundantConstraints();
+  result.simplify();
+  return result;
+}
+
 FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
     RankedTensorType filterType, RankedTensorType dataType, int64_t stride,
-    int64_t padding, int64_t ciphertextSize, bool interchangeRows) {
+    int64_t padding, int64_t ciphertextSize, bool interchangeRows,
+    const presburger::IntegerRelation* dataSlotPermutation) {
   auto expandedFilterRelation =
       get1dConvCwFcwFilterRelation(filterType, dataType, stride, padding);
   // Permutate the rows of the matrix to minimize the number of non-zero
@@ -489,8 +526,34 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
         /*equality=*/true);
     expandedFilterRelation.compose(rowInterchangeRelation);
   }
-  return diagonalize2dMatrix(expandedFilterRelation, filterType,
-                             ciphertextSize);
+
+  // Absorb the data's actual slot packing into the matrix's column space:
+  // lift [j] -> [slot] to [row, j] -> [row, slot] with a row passthrough, then
+  // compose so that logical column j lands where the diagonal kernel reads the
+  // slot the data element really occupies.
+  if (dataSlotPermutation) {
+    presburger::IntegerRelation colRemap(*dataSlotPermutation);
+    // Drop the constant ct output, leaving the pure [j] -> [slot] permutation.
+    colRemap.projectOut(colRemap.getVarKindOffset(presburger::VarKind::Range),
+                        1);
+    colRemap.insertVar(presburger::VarKind::Domain, 0, 1);
+    colRemap.insertVar(presburger::VarKind::Range, 0, 1);
+    SmallVector<int64_t> rowEq(colRemap.getNumCols(), 0);
+    rowEq[colRemap.getVarKindOffset(presburger::VarKind::Domain)] = 1;
+    rowEq[colRemap.getVarKindOffset(presburger::VarKind::Range)] = -1;
+    colRemap.addEquality(rowEq);
+    expandedFilterRelation.compose(colRemap);
+    expandedFilterRelation.removeRedundantConstraints();
+    expandedFilterRelation.simplify();
+  }
+
+  // When the columns are ciphertext slots, build the matrix at full ciphertext
+  // width. The diagonal layout indexes columns modulo the width rounded up to
+  // a power of two, and the transform rotates modulo the ciphertext size
+  return diagonalize2dMatrix(expandedFilterRelation, filterType, ciphertextSize,
+                             dataSlotPermutation
+                                 ? std::optional<int64_t>(ciphertextSize)
+                                 : std::nullopt);
 }
 
 FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(

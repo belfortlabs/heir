@@ -14,6 +14,15 @@ namespace mlir {
 namespace heir {
 
 constexpr StringLiteral kKernelInfoAttrName = "heir.kernel_info";
+
+// Set by layout propagation on a conv op whose filter layout absorbed the data
+// operand's slot packing into its column space. The value is the matrix width
+// that layout was built with, which is the ciphertext size rather than the
+// expanded Toeplitz matrix's own C*W. The kernel folds partial sums using this
+// width, so it must read the same number the layout was built with. Absent
+// means the filter layout uses the expanded Toeplitz width.
+constexpr StringLiteral kAbsorbedMatrixWidthAttrName =
+    "heir.absorbed_matrix_width";
 constexpr StringLiteral kKernelInputShapeKey = "input_shape";
 constexpr StringLiteral kKernelShapeKey = "result_shape";
 constexpr StringLiteral kGapFactorKey = "gap_factor";
