@@ -1,4 +1,4 @@
-// RUN: heir-opt --split-input-file --secret-to-ckks --mlir-elide-elementsattrs-if-larger=4 %s | FileCheck %s
+// RUN: heir-opt --split-input-file --secret-to-ckks --prepare-linear-transforms --mlir-elide-elementsattrs-if-larger=4 %s | FileCheck %s
 
 // The diagonals of a linear transform are padded to the slot count the
 // ciphertext is *encoded* for, not to the ring's capacity. With logN = 14 the
@@ -8,7 +8,8 @@
 // prepare-linear-transforms records, which its verifier then rejects
 // CHECK: @lintrans_sparse_packing
 // CHECK: arith.constant dense_resource<__elided__> : tensor<2x1024xf32>
-// CHECK: kernel.linear_transform
+// CHECK: kernel.prepare_linear_transform
+// CHECK-SAME: tensor<2x1024xf32> -> <{{.*}}slots = 1024
 // CHECK-NOT: tensor<2x8192xf32>
 module attributes {
   backend.lattigo,
@@ -37,7 +38,8 @@ module attributes {
 
 // CHECK: @lintrans_full_ring
 // CHECK: arith.constant dense_resource<__elided__> : tensor<2x8192xf32>
-// CHECK: kernel.linear_transform
+// CHECK: kernel.prepare_linear_transform
+// CHECK-SAME: tensor<2x8192xf32> -> <{{.*}}slots = 8192
 module attributes {
   backend.lattigo,
   ckks.schemeParam = #ckks.scheme_param<logN = 14, Q = [36028797017456641, 35184371138561, 35184372121601], P = [1152921504607338497, 1152921504608747521], logDefaultScale = 45, encryptionTechnique = extended>,
