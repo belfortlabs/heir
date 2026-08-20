@@ -3,9 +3,19 @@
 import argparse
 import datetime
 import os
+import pathlib
 import re
 import sys
+import tomllib
+
 import requests
+
+
+def get_package_name():
+  """Read the package name from pyproject.toml (single source of truth)."""
+  pyproject = pathlib.Path(__file__).resolve().parent.parent / "pyproject.toml"
+  with open(pyproject, "rb") as f:
+    return tomllib.load(f)["project"]["name"]
 
 
 def get_pypi_versions(package_name):
@@ -48,7 +58,7 @@ def calculate_version(event, ref, tag, package):
         # Manual release of existing tag; use for example when release
         # workflow fails to trigger wheel upload.
         version = tag.lstrip("v")
-      elif ref == "refs/heads/main":
+      elif ref == "refs/heads/ml-pipeline":
         # For dev releases
         version = get_next_dev_version(package)
 
@@ -81,14 +91,21 @@ def main():
       help="GitHub ref (e.g., refs/heads/main)",
   )
   parser.add_argument("--tag", help="Release tag name")
-  parser.add_argument("--package", default="heir_py", help="PyPI package name")
+  parser.add_argument(
+      "--package",
+      default=None,
+      help="PyPI package name (defaults to the name in pyproject.toml)",
+  )
   parser.add_argument(
       "--gha", action="store_true", help="Output for GitHub Actions"
   )
 
   args = parser.parse_args()
 
-  version = calculate_version(args.event, args.ref, args.tag, args.package)
+  package = args.package or get_package_name()
+  version = calculate_version(
+      args.event, args.ref, args.tag, package
+  )
 
   if args.gha:
     # Writing to GITHUB_OUTPUT if available

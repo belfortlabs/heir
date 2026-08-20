@@ -34,9 +34,9 @@ jobs:
       - name: Create Archive
         id: archive
         env:
-          VERSION: ${{ needs.build-wheels.outputs.version }}
+          RELEASE_VERSION: ${{ needs.build-wheels.outputs.version }}
         run: |
-          TAG_NAME="$VERSION"
+          TAG_NAME="$RELEASE_VERSION"
           if [[ ! "$TAG_NAME" =~ ^v ]]; then
             TAG_NAME="v$TAG_NAME"
           fi
@@ -107,9 +107,9 @@ jobs:
         id: tag
         shell: bash
         env:
-          VERSION: ${{ needs.build-wheels.outputs.version }}
+          RELEASE_VERSION: ${{ needs.build-wheels.outputs.version }}
         run: |
-          TAG_NAME="$VERSION"
+          TAG_NAME="$RELEASE_VERSION"
           if [[ ! "$TAG_NAME" =~ ^v ]]; then
             TAG_NAME="v$TAG_NAME"
           fi
