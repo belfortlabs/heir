@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -86,6 +87,7 @@ namespace heir {
 namespace {
 using kernel::ArithmeticDagNode;
 using kernel::implementHaleviShoup;
+using kernel::implementSquatDiagonalFold;
 using kernel::IRMaterializingVisitor;
 using kernel::SSAValue;
 using ::mlir::heir::kernel::ArithmeticDagNode;
@@ -940,6 +942,41 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
   bool unrollKernels;
 };
 
+// Returns a reader for the elements of a constant tensor, by flat row-major
+// index, or an empty function when the constant cannot be read.
+//
+// A DenseElementsAttr hands out attributes directly. A model imported from
+// torch or onnx instead holds its weights in a dense_resource blob, which
+// implements ElementsAttr but does not support attribute-valued access at all,
+// so its raw data has to be read and wrapped.
+//
+// Only the float resource blobs are handled, which is what torch and onnx
+// produce and what the CKKS lowerings behind kernel.linear_transform accept.
+std::function<Attribute(int64_t)> constantElementReader(
+    ElementsAttr elementsAttr) {
+  if (auto valuesBegin = elementsAttr.try_value_begin<Attribute>()) {
+    return
+        [begin = *valuesBegin](int64_t i) -> Attribute { return *(begin + i); };
+  }
+  auto floatType = dyn_cast<FloatType>(elementsAttr.getElementType());
+  if (!floatType) return nullptr;
+  if (auto resource = dyn_cast<DenseF32ResourceElementsAttr>(elementsAttr)) {
+    if (auto data = resource.tryGetAsArrayRef()) {
+      return [data = *data, floatType](int64_t i) -> Attribute {
+        return FloatAttr::get(floatType, data[i]);
+      };
+    }
+  } else if (auto resource =
+                 dyn_cast<DenseF64ResourceElementsAttr>(elementsAttr)) {
+    if (auto data = resource.tryGetAsArrayRef()) {
+      return [data = *data, floatType](int64_t i) -> Attribute {
+        return FloatAttr::get(floatType, data[i]);
+      };
+    }
+  }
+  return nullptr;
+}
+
 struct PreserveLinalgMatvecAsLinearTransform
     : public ConversionBase<linalg::MatvecOp> {
  public:
@@ -973,10 +1010,15 @@ struct PreserveLinalgMatvecAsLinearTransform
     if (!constantMatrixOp) {
       return rewriter.notifyMatchFailure(op, "matrix is not a constant");
     }
-    auto denseAttr = dyn_cast<DenseElementsAttr>(constantMatrixOp.getValue());
-    if (!denseAttr) {
+    auto elementsAttr = dyn_cast<ElementsAttr>(constantMatrixOp.getValue());
+    if (!elementsAttr) {
+      return rewriter.notifyMatchFailure(op, "matrix is not an ElementsAttr");
+    }
+    std::function<Attribute(int64_t)> readElement =
+        constantElementReader(elementsAttr);
+    if (!readElement) {
       return rewriter.notifyMatchFailure(op,
-                                         "matrix is not a DenseElementsAttr");
+                                         "matrix elements are not readable");
     }
 
     auto matrixType = cast<RankedTensorType>(matrix.getType());
@@ -1009,8 +1051,7 @@ struct PreserveLinalgMatvecAsLinearTransform
       int64_t s = pointPair.second[1];
 
       int64_t flatIndex = row * numCols + col;
-      Attribute val = denseAttr.getValues<Attribute>()[flatIndex];
-      diagonalValues[d * slots + s] = val;
+      diagonalValues[d * slots + s] = readElement(flatIndex);
     }
 
     std::vector<int64_t> nonZeroDiagonalIndices;
@@ -1109,29 +1150,23 @@ static Value emitCompactLinearTransform(
   rar->setAttr(kLayoutAttrName, layoutAttr);
   setMaterializedAttr(rar);
 
-  int64_t matrixNumRows = nextPowerOfTwo(matrixShape[0]);
-  int64_t matrixNumCols = nextPowerOfTwo(matrixShape[1]);
-  int64_t numShifts = (int64_t)(log2(matrixNumCols) - log2(matrixNumRows));
+  auto transformed = cast<TypedValue<RankedTensorType>>(rar.getResult());
+  auto leaf = ArithmeticDagNode<SSAValue>::leaf(SSAValue(transformed));
+  auto foldKernel = implementSquatDiagonalFold<SSAValue>(
+      leaf, std::vector<int64_t>(matrixShape.begin(), matrixShape.end()),
+      kernel::mlirTypeToDagType(transformed.getType()), /*unroll=*/true);
+  // A square packing needs no fold, and the builder hands the leaf straight
+  // back.
+  if (foldKernel == leaf) return transformed;
 
-  Value finalOutput = rar.getResult();
-  if (numShifts > 0) {
-    using NodeTy = ArithmeticDagNode<SSAValue>;
-    auto summedShifts = NodeTy::leaf(SSAValue(finalOutput));
-    int64_t shift = matrixNumCols / 2;
-    for (int64_t i = 0; i < numShifts; ++i) {
-      auto rotated = NodeTy::leftRotate(summedShifts, shift);
-      summedShifts = NodeTy::add(summedShifts, rotated);
-      shift /= 2;
-    }
-    IRMaterializingVisitor visitor(input.getType(), [&](Operation* createdOp) {
-      setMaterializedAttr(createdOp);
-    });
-    ImplicitLocOpBuilder b(loc, rewriter);
-    finalOutput = visitor.process(summedShifts, b)[0];
-    auto* finalOutputOp = finalOutput.getDefiningOp();
-    finalOutputOp->setAttr(kLayoutAttrName, layoutAttr);
-    setMaterializedAttr(finalOutputOp);
-  }
+  IRMaterializingVisitor visitor(input.getType(), [&](Operation* createdOp) {
+    setMaterializedAttr(createdOp);
+  });
+  ImplicitLocOpBuilder b(loc, rewriter);
+  Value finalOutput = visitor.process(foldKernel, b)[0];
+  auto* finalOutputOp = finalOutput.getDefiningOp();
+  finalOutputOp->setAttr(kLayoutAttrName, layoutAttr);
+  setMaterializedAttr(finalOutputOp);
   return finalOutput;
 }
 

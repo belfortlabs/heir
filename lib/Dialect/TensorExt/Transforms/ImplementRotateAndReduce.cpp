@@ -16,16 +16,18 @@
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"    // from @llvm-project
 #include "mlir/include/mlir/Dialect/SCF/IR/SCF.h"        // from @llvm-project
 #include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/AsmState.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/Diagnostics.h"            // from @llvm-project
-#include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
-#include "mlir/include/mlir/IR/OpDefinition.h"           // from @llvm-project
-#include "mlir/include/mlir/IR/OperationSupport.h"       // from @llvm-project
-#include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
-#include "mlir/include/mlir/IR/Value.h"                  // from @llvm-project
-#include "mlir/include/mlir/Support/LLVM.h"              // from @llvm-project
-#include "mlir/include/mlir/Support/LogicalResult.h"     // from @llvm-project
+#include "mlir/include/mlir/IR/DialectResourceBlobManager.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/Matchers.h"            // from @llvm-project
+#include "mlir/include/mlir/IR/OpDefinition.h"        // from @llvm-project
+#include "mlir/include/mlir/IR/OperationSupport.h"    // from @llvm-project
+#include "mlir/include/mlir/IR/PatternMatch.h"        // from @llvm-project
+#include "mlir/include/mlir/IR/Value.h"               // from @llvm-project
+#include "mlir/include/mlir/Support/LLVM.h"           // from @llvm-project
+#include "mlir/include/mlir/Support/LogicalResult.h"  // from @llvm-project
 
 #define DEBUG_TYPE "implement-rotate-and-reduce"
 
@@ -72,6 +74,56 @@ static DenseElementsAttr gatherConstantRows(DenseElementsAttr attr,
   return DenseElementsAttr::getFromRawBuffer(compactType, compact);
 }
 
+// Gathers the given rows of a resource-backed constant into a new resource of
+// compactType. Returns nullptr when the element type is not byte-aligned, since
+// a raw byte slice would then split an element.
+static TypedAttr gatherResourceRows(DenseResourceElementsAttr attr,
+                                    RankedTensorType compactType,
+                                    ArrayRef<int64_t> indices) {
+  Type elementType = compactType.getElementType();
+  if (!elementType.isIntOrFloat() ||
+      elementType.getIntOrFloatBitWidth() % 8 != 0) {
+    return nullptr;
+  }
+  ArrayRef<char> raw = attr.getData();
+  if (raw.empty()) return nullptr;
+
+  int64_t numRows = cast<ShapedType>(attr.getType()).getDimSize(0);
+  int64_t rowBytes = raw.size() / numRows;
+  SmallVector<char> compact;
+  compact.reserve(indices.size() * rowBytes);
+  for (int64_t index : indices) {
+    llvm::append_range(compact, raw.slice(index * rowBytes, rowBytes));
+  }
+
+  AsmResourceBlob* blob = attr.getRawHandle().getBlob();
+  if (!blob) return nullptr;
+  auto compactBlob = HeapAsmResourceBlob::allocateAndCopyWithAlign(
+      ArrayRef<char>(compact.data(), compact.size()), blob->getDataAlignment(),
+      /*dataIsMutable=*/false);
+  std::string name = attr.getRawHandle().getKey().str() + "_gathered";
+  return DenseResourceElementsAttr::get(compactType, name,
+                                        std::move(compactBlob));
+}
+
+// Gathers the named rows of the packed matrix at compile time, or returns
+// nullptr when the producer is not a constant these can read.
+static TypedAttr gatherRowsIfConstant(Value diagonals,
+                                      RankedTensorType compactType,
+                                      ArrayRef<int64_t> indices) {
+  DenseElementsAttr denseAttr;
+  if (matchPattern(diagonals, m_Constant(&denseAttr))) {
+    return gatherConstantRows(denseAttr, compactType, indices);
+  }
+  auto constantOp = diagonals.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp) return nullptr;
+  if (auto resourceAttr =
+          dyn_cast<DenseResourceElementsAttr>(constantOp.getValue())) {
+    return gatherResourceRows(resourceAttr, compactType, indices);
+  }
+  return nullptr;
+}
+
 // A rotate_and_reduce marked as a linear transform maps directly onto
 // kernel.linear_transform: the plaintexts are the generalized diagonals and
 // tensor_ext.diagonal_indices records which ones are present (absent means
@@ -101,9 +153,9 @@ LogicalResult convertToLinearTransform(RotateAndReduceOp op) {
   // kernel.linear_transform's contract is positional: row k of the diagonals
   // operand is the diagonal named by diagonal_indices[k]. When the indices
   // name a subset of the packed matrix's rows, gather those rows out. For a
-  // constant the gather folds into a compact constant immediately, which is
-  // then all a later resource externalization retains; otherwise it is an
-  // explicit cleartext gather.
+  // constant, dense or resource-backed, the gather folds into a compact
+  // constant of the same form immediately, which is then all a later resource
+  // externalization retains; otherwise it is an explicit cleartext gather.
   Value diagonals = op.getPlaintexts();
   auto diagonalsType = cast<RankedTensorType>(diagonals.getType());
   int64_t numRows = diagonalsType.getDimSize(0);
@@ -111,11 +163,9 @@ LogicalResult convertToLinearTransform(RotateAndReduceOp op) {
     auto compactType = RankedTensorType::get(
         {static_cast<int64_t>(indices.size()), diagonalsType.getDimSize(1)},
         diagonalsType.getElementType());
-    DenseElementsAttr diagonalsAttr;
-    if (matchPattern(diagonals, m_Constant(&diagonalsAttr))) {
-      diagonals = arith::ConstantOp::create(
-          builder, op.getLoc(),
-          gatherConstantRows(diagonalsAttr, compactType, indices));
+    if (TypedAttr gathered =
+            gatherRowsIfConstant(diagonals, compactType, indices)) {
+      diagonals = arith::ConstantOp::create(builder, op.getLoc(), gathered);
     } else {
       auto rowType = RankedTensorType::get({1, diagonalsType.getDimSize(1)},
                                            diagonalsType.getElementType());

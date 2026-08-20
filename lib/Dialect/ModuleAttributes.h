@@ -27,6 +27,11 @@ constexpr const static ::llvm::StringLiteral kRequestedSlotCountAttrName =
 constexpr const static ::llvm::StringLiteral kActualSlotCountAttrName =
     "scheme.actual_slot_count";
 
+// Returns the number of slots ciphertexts in this module are encoded for:
+// `ringCapacity`, capped by the module's requested slot count when it asked for
+// a sparser packing.
+int64_t getEncodedSlotCount(Operation* moduleOp, int64_t ringCapacity);
+
 bool moduleIsBGV(Operation* moduleOp);
 bool moduleIsBFV(Operation* moduleOp);
 bool moduleIsBGVOrBFV(Operation* moduleOp);

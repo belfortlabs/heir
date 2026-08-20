@@ -56,22 +56,18 @@ struct PrepareLinearTransforms
       if (!level.has_value()) return;
 
       // The slot count the diagonals are encoded for is the ciphertext's
-      // *encoded* width: ciphertexts are sparsely packed at the module's
-      // requested slot count when one is set, and at the ring's capacity
-      // otherwise.
+      // *encoded* width, which getEncodedSlotCount derives from the ring's
+      // capacity and the module's requested count.
       auto plaintextSpace = ctType.getPlaintextSpace();
-      int64_t slots = plaintextSpace.getRing()
-                          .getPolynomialModulus()
-                          .getPolynomial()
-                          .getDegree();
+      int64_t ringCapacity = plaintextSpace.getRing()
+                                 .getPolynomialModulus()
+                                 .getPolynomial()
+                                 .getDegree();
       if (isa<lwe::InverseCanonicalEncodingAttr>(
               plaintextSpace.getEncoding())) {
-        slots /= 2;
+        ringCapacity /= 2;
       }
-      if (auto requested = dyn_cast_or_null<IntegerAttr>(
-              module->getAttr(kRequestedSlotCountAttrName))) {
-        slots = std::min(slots, requested.getInt());
-      }
+      int64_t slots = getEncodedSlotCount(module, ringCapacity);
 
       OpBuilder builder(op);
       // kernel.linear_transform's bsgs_ratio is a baby-step/giant-step
