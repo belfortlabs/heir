@@ -9,6 +9,7 @@
 #include "lib/Dialect/LWE/Conversions/LWEToLattigo/LWEToLattigo.h"
 #include "lib/Dialect/LWE/Conversions/LWEToOpenfhe/LWEToOpenfhe.h"
 #include "lib/Dialect/LWE/Transforms/AddDebugPort.h"
+#include "lib/Dialect/Kernel/Transforms/PrepareLinearTransforms.h"
 #include "lib/Dialect/LWE/Transforms/AnnotatePlaintextLevel.h"
 #include "lib/Dialect/LWE/Transforms/ImplementTrivialEncryptionAsAddition.h"
 #include "lib/Dialect/Lattigo/Transforms/AllocToInPlace.h"
@@ -557,6 +558,11 @@ void mlirToRLWEPipeline(OpPassManager& pm,
   // encode ops, and before split-preprocessing, which severs the use chain
   // from an encode op to the ciphertext op consuming it.
   pm.addPass(lwe::createAnnotatePlaintextLevel());
+
+  // Split each linear transform into a cleartext preparation (which
+  // split-preprocessing below hoists out of the hot path) and an application
+  // that only needs the ciphertext, for backends that support it.
+  pm.addPass(kernel::createPrepareLinearTransforms());
 
   // Add a __preprocessed helper for offline pre-packing of plaintexts
   if (options.enableSplitPreprocessing) {

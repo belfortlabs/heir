@@ -158,6 +158,8 @@ cc_library(
         "ImplementRotateAndReduce.h",
     ],
     deps = [
+        "@heir//lib/Dialect/Kernel/IR:Dialect",
+        "@heir//lib/Target/CompilationTarget",
         ":pass_inc_gen",
         "@heir//lib/Dialect/TensorExt/IR:Dialect",
         "@heir//lib/Kernel:AbstractValue",

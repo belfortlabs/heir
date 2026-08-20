@@ -34,6 +34,7 @@
 #include "lib/Dialect/LWE/Transforms/Passes.h"
 #include "lib/Dialect/Lattigo/IR/LattigoDialect.h"
 #include "lib/Dialect/Lattigo/Transforms/BufferizableOpInterfaceImpl.h"
+#include "lib/Dialect/Kernel/Transforms/Passes.h"
 #include "lib/Dialect/Lattigo/Transforms/Passes.h"
 #include "lib/Dialect/MathExt/IR/MathExtDialect.h"
 #include "lib/Dialect/Mgmt/IR/MgmtDialect.h"
@@ -381,6 +382,7 @@ int main(int argc, char** argv) {
   cggi::registerCGGIPasses();
   debug::registerDebugPasses();
   ckks::registerCKKSPasses();
+  kernel::registerKernelPasses();
   lattigo::registerLattigoPasses();
   lwe::registerLWEPasses();
   mgmt::registerMgmtPasses();

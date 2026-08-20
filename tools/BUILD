@@ -75,6 +75,7 @@ cc_binary(
         "@heir//lib/Dialect/LWE/IR:Dialect",
         "@heir//lib/Dialect/LWE/Transforms",
         "@heir//lib/Dialect/Lattigo/IR:Dialect",
+        "@heir//lib/Dialect/Kernel/Transforms",
         "@heir//lib/Dialect/Lattigo/Transforms",
         "@heir//lib/Dialect/Lattigo/Transforms:AllocToInPlace",
         "@heir//lib/Dialect/Lattigo/Transforms:BufferizableOpInterfaceImpl",

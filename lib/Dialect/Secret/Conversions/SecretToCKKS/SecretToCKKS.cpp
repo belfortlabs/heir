@@ -39,6 +39,7 @@
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/Diagnostics.h"            // from @llvm-project
+#include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/TypeUtilities.h"          // from @llvm-project
 #include "mlir/include/mlir/IR/Value.h"                  // from @llvm-project
@@ -293,51 +294,55 @@ struct LinearTransformOpConversion
       attrsToPreserve.push_back(namedAttr);
     }
     for (auto attrName : ltOp.getAttributeNames()) {
-      if (attrName == "diagonals")
-        continue;  // We will handle diagonals separately
       if (auto attr = ltOp->getAttr(attrName)) {
         attrsToPreserve.push_back(rewriter.getNamedAttr(attrName, attr));
       }
     }
 
-    // Pad diagonals
-    auto diagonalsAttr = cast<DenseElementsAttr>(ltOp.getDiagonals());
-    auto diagonalsType = cast<RankedTensorType>(diagonalsAttr.getType());
+    // Pad diagonals. They are only paddable here when they are a compile-time
+    // constant; diagonals produced by preprocessing are passed through, which
+    // requires the producer to have packed them at slot width already.
+    DenseElementsAttr diagonalsAttr;
+    bool diagonalsAreConstant =
+        matchPattern(ltOp.getDiagonals(), m_Constant(&diagonalsAttr));
+    auto diagonalsType = cast<RankedTensorType>(ltOp.getDiagonals().getType());
     auto shape = diagonalsType.getShape();
     int64_t numDiagonals = shape[0];
     int64_t numCols = shape[1];
 
     int64_t actualSlots = ringDim / 2;  // CKKS assumption
 
-    DenseElementsAttr newDiagonalsAttr;
-    if (numCols == actualSlots) {
-      newDiagonalsAttr = diagonalsAttr;
-    } else {
+    if (numCols != actualSlots) {
       if (numCols > actualSlots) {
         return ltOp.emitOpError("diagonals slot size (")
                << numCols << ") is larger than actual slots (" << actualSlots
                << ")";
       }
-      SmallVector<Attribute> paddedValues;
-      auto elementValues = diagonalsAttr.getValues<Attribute>();
-      auto elemType = diagonalsType.getElementType();
-      Attribute zeroAttr = rewriter.getZeroAttr(elemType);
-
-      for (int64_t i = 0; i < numDiagonals; ++i) {
-        for (int64_t j = 0; j < numCols; ++j) {
-          paddedValues.push_back(elementValues[i * numCols + j]);
+      // A constant is padded here so the emitted diagonals are slot-width.
+      // Non-constant diagonals are left alone: the backend slices each row by
+      // its own stride and its encoder zero-fills the remaining slots.
+      if (diagonalsAreConstant) {
+        SmallVector<Attribute> paddedValues;
+        auto elementValues = diagonalsAttr.getValues<Attribute>();
+        auto elemType = diagonalsType.getElementType();
+        Attribute zeroAttr = rewriter.getZeroAttr(elemType);
+        for (int64_t i = 0; i < numDiagonals; ++i) {
+          for (int64_t j = 0; j < numCols; ++j) {
+            paddedValues.push_back(elementValues[i * numCols + j]);
+          }
+          for (int64_t j = numCols; j < actualSlots; ++j) {
+            paddedValues.push_back(zeroAttr);
+          }
         }
-        for (int64_t j = numCols; j < actualSlots; ++j) {
-          paddedValues.push_back(zeroAttr);
-        }
+        auto newDiagonalsType =
+            RankedTensorType::get({numDiagonals, actualSlots}, elemType);
+        // The diagonals are an operand, so the padded values are materialized
+        // as a constant that replaces it.
+        inputs[1] = arith::ConstantOp::create(
+            rewriter, ltOp.getLoc(),
+            DenseElementsAttr::get(newDiagonalsType, paddedValues));
       }
-
-      auto newDiagonalsType =
-          RankedTensorType::get({numDiagonals, actualSlots}, elemType);
-      newDiagonalsAttr = DenseElementsAttr::get(newDiagonalsType, paddedValues);
     }
-    attrsToPreserve.push_back(
-        rewriter.getNamedAttr("diagonals", newDiagonalsAttr));
 
     // Handle mgmt attrs
     convertArrayOfDicts(op.getAllResultAttrsAttr(), attrsToPreserve);
