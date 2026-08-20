@@ -87,10 +87,9 @@ static Value materializeZeroCiphertextTensor(OpBuilder& builder, Location loc,
   // A single ciphertext holds the trailing (slot) dimensions of the cleartext
   // tensor; the leading dimensions index ciphertexts.
   auto cleartextTensorTy = cast<RankedTensorType>(cleartextTy);
-  auto zeroTy =
-      RankedTensorType::get(cleartextTensorTy.getShape().drop_front(
-                                resultTy.getShape().size()),
-                            cleartextTensorTy.getElementType());
+  auto zeroTy = RankedTensorType::get(
+      cleartextTensorTy.getShape().drop_front(resultTy.getShape().size()),
+      cleartextTensorTy.getElementType());
   Value zero = arith::ConstantOp::create(builder, loc, zeroTy,
                                          builder.getZeroAttr(zeroTy));
 
@@ -502,8 +501,8 @@ FailureOr<Operation*> ConvertInsertSlice::matchAndRewriteInner(
     if (auto emptyOp = dyn_cast_or_null<tensor::EmptyOp>(
             initOp.getOperand().getDefiningOp())) {
       dest = materializeZeroCiphertextTensor(rewriter, op.getLoc(),
-                                            initOp.getOperand().getType(),
-                                            resultTensorOfCtsTy);
+                                             initOp.getOperand().getType(),
+                                             resultTensorOfCtsTy);
       if (initOp.use_empty()) rewriter.eraseOp(initOp);
       if (emptyOp.use_empty()) rewriter.eraseOp(emptyOp);
     }
@@ -551,10 +550,9 @@ LogicalResult ConvertEmpty::matchAndRewrite(
     return rewriter.notifyMatchFailure(
         op, "failed to convert empty tensor type to tensor of ciphertext");
 
-  rewriter.replaceOp(op,
-                     materializeZeroCiphertextTensor(
-                         rewriter, op.getLoc(), op.getOperand().getType(),
-                         ciphertextType));
+  rewriter.replaceOp(op, materializeZeroCiphertextTensor(
+                             rewriter, op.getLoc(), op.getOperand().getType(),
+                             ciphertextType));
   return success();
 }
 

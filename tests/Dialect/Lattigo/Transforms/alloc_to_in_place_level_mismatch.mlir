@@ -23,7 +23,7 @@
 // `drop_level %rot, %rot` and pins the depth-4 value into a depth-0 buffer;
 // the depth-4 result must keep its own allocation instead.
 //
-// CHECK-LABEL: func.func @no_reuse_across_levels
+// CHECK: func.func @no_reuse_across_levels
 func.func @no_reuse_across_levels(%evaluator: !evaluator, %ct: !ct) -> !ct {
   // CHECK: %[[rot:.*]] = lattigo.ckks.rotate_new
   %rot = lattigo.ckks.rotate_new %evaluator, %ct {static_shift = 4} : (!evaluator, !ct) -> !ct
@@ -44,7 +44,7 @@ func.func @no_reuse_across_levels(%evaluator: !evaluator, %ct: !ct) -> !ct {
 // destination whose runtime level no longer matches the level analysis, and the
 // rescale below is the op that panics.
 //
-// CHECK-LABEL: func.func @no_reuse_across_levels_before_rescale
+// CHECK: func.func @no_reuse_across_levels_before_rescale
 func.func @no_reuse_across_levels_before_rescale(%evaluator: !evaluator, %ct: !ct) -> !ct {
   // CHECK: %[[rot2:.*]] = lattigo.ckks.rotate_new
   %rot = lattigo.ckks.rotate_new %evaluator, %ct {static_shift = 4} : (!evaluator, !ct) -> !ct

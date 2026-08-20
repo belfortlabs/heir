@@ -95,7 +95,6 @@ FlatMemrefPreprocessingTypeConverter::FlatMemrefPreprocessingTypeConverter(
   });
 }
 
-
 namespace {
 
 // Since a preprocessing.storage can store multiple element types, and this
@@ -396,7 +395,6 @@ struct LoadOpPattern : public OpConversionPattern<LoadOp> {
   const PreprocessingStorageLayoutAnalysis& analysis;
 };
 
-
 }  // namespace
 
 FailureOr<Value> getLinearIndex(OpBuilder& builder, Location loc, Operation* op,
@@ -499,14 +497,12 @@ void populatePreprocessingConversions(RewritePatternSet& patterns,
                                                               context);
 }
 
-
 void populatePreprocessingToFlatMemrefPatterns(
     const TypeConverter& typeConverter, RewritePatternSet& patterns,
     const PreprocessingStorageLayoutAnalysis& analysis) {
   MLIRContext* context = patterns.getContext();
   patterns.add<EmptyOpPattern>(typeConverter, context);
-  patterns.add<StoreOpPattern, LoadOpPattern>(typeConverter, context,
-                                              analysis);
+  patterns.add<StoreOpPattern, LoadOpPattern>(typeConverter, context, analysis);
 }
 
 }  // namespace preprocessing

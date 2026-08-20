@@ -45,8 +45,7 @@ static DenseElementsAttr gatherConstantRows(DenseElementsAttr attr,
                                             RankedTensorType compactType,
                                             ArrayRef<int64_t> indices) {
   if (attr.isSplat()) {
-    return DenseElementsAttr::get(compactType,
-                                  attr.getSplatValue<Attribute>());
+    return DenseElementsAttr::get(compactType, attr.getSplatValue<Attribute>());
   }
   auto attrType = cast<ShapedType>(attr.getType());
   int64_t numCols = attrType.getDimSize(1);
@@ -139,8 +138,8 @@ LogicalResult convertToLinearTransform(RotateAndReduceOp op) {
   }
 
   auto linearTransformOp = kernel::LinearTransformOp::create(
-      builder, op.getLoc(), op.getOutput().getType(), op.getTensor(),
-      diagonals, builder.getDenseI64ArrayAttr(indices),
+      builder, op.getLoc(), op.getOutput().getType(), op.getTensor(), diagonals,
+      builder.getDenseI64ArrayAttr(indices),
       /*bsgs_ratio=*/nullptr);
   if (auto layout = op->getAttr(TensorExtDialect::kLayoutAttrName)) {
     linearTransformOp->setAttr(TensorExtDialect::kLayoutAttrName, layout);

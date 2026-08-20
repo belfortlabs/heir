@@ -93,8 +93,8 @@ bool emitCompilationTargetRegistration(const llvm::RecordKeeper& records,
           "CompilationTargetRegistry::registerTarget(CompilationTarget{"
           "BackendName::"
        << name << ", " << bootstrapLevelsConsumed << ", " << hasKernelChebyshev
-       << ", " << hasKernelLinearTransform << ", "
-       << hasPreparedLinearTransform << "});\n"
+       << ", " << hasKernelLinearTransform << ", " << hasPreparedLinearTransform
+       << "});\n"
        << "}\n\n";
   }
   return false;

@@ -2472,8 +2472,8 @@ LogicalResult LattigoEmitter::printOperation(CKKSApplyLinearTransformOp op) {
   std::string errName = getErrName();
 
   os << ltEvalName << " := lintrans.NewEvaluator(" << evaluatorName << ")\n";
-  os << outputName << ", " << errName << " := " << ltEvalName
-     << ".EvaluateNew(" << inputName << ", " << ltName << ")\n";
+  os << outputName << ", " << errName << " := " << ltEvalName << ".EvaluateNew("
+     << inputName << ", " << ltName << ")\n";
   printErrPanic(errName);
   if (outputName != "_") {
     declaredVars.insert(outputName);
