@@ -19,6 +19,7 @@
 #include "lib/Dialect/Mgmt/IR/MgmtDialect.h"
 #include "lib/Dialect/Mgmt/IR/MgmtOps.h"
 #include "lib/Dialect/ModArith/IR/ModArithTypes.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Polynomial/IR/PolynomialAttributes.h"
 #include "lib/Dialect/RNS/IR/RNSTypes.h"
 #include "lib/Dialect/Secret/Conversions/Patterns.h"
@@ -39,6 +40,7 @@
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/Diagnostics.h"            // from @llvm-project
+#include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/TypeUtilities.h"          // from @llvm-project
 #include "mlir/include/mlir/IR/Value.h"                  // from @llvm-project
@@ -252,10 +254,12 @@ class SecretGenericPlaintextDivision
 
 struct LinearTransformOpConversion
     : public ContextAwareOpConversionPattern<secret::GenericOp> {
-  LinearTransformOpConversion(const ContextAwareTypeConverter& typeConverter_,
-                              MLIRContext* context, PatternBenefit benefit = 1)
-      : ContextAwareOpConversionPattern<secret::GenericOp>(typeConverter_,
-                                                           context, benefit) {}
+  LinearTransformOpConversion(const ContextAwareTypeConverter& typeConverter,
+                              MLIRContext* context, int64_t encodedSlots,
+                              PatternBenefit benefit = 1)
+      : ContextAwareOpConversionPattern<secret::GenericOp>(typeConverter,
+                                                           context, benefit),
+        encodedSlots(encodedSlots) {}
 
   LogicalResult matchAndRewrite(
       secret::GenericOp op, OpAdaptor adaptor,
@@ -298,6 +302,49 @@ struct LinearTransformOpConversion
       }
     }
 
+    // Pad diagonals. They are only paddable here when they are a compile-time
+    // constant; diagonals produced by preprocessing are passed through, which
+    // requires the producer to have packed them at slot width already.
+    DenseElementsAttr diagonalsAttr;
+    bool diagonalsAreConstant =
+        matchPattern(ltOp.getDiagonals(), m_Constant(&diagonalsAttr));
+    auto diagonalsType = cast<RankedTensorType>(ltOp.getDiagonals().getType());
+    auto shape = diagonalsType.getShape();
+    int64_t numDiagonals = shape[0];
+    int64_t numCols = shape[1];
+
+    if (numCols != encodedSlots) {
+      if (numCols > encodedSlots) {
+        return ltOp.emitOpError("diagonals slot size (")
+               << numCols << ") is larger than the encoded slot count ("
+               << encodedSlots << ")";
+      }
+      // A constant is padded here so the emitted diagonals are slot-width.
+      // Non-constant diagonals are left alone: the backend slices each row by
+      // its own stride and its encoder zero-fills the remaining slots.
+      if (diagonalsAreConstant) {
+        SmallVector<Attribute> paddedValues;
+        auto elementValues = diagonalsAttr.getValues<Attribute>();
+        auto elemType = diagonalsType.getElementType();
+        Attribute zeroAttr = rewriter.getZeroAttr(elemType);
+        for (int64_t i = 0; i < numDiagonals; ++i) {
+          for (int64_t j = 0; j < numCols; ++j) {
+            paddedValues.push_back(elementValues[i * numCols + j]);
+          }
+          for (int64_t j = numCols; j < encodedSlots; ++j) {
+            paddedValues.push_back(zeroAttr);
+          }
+        }
+        auto newDiagonalsType =
+            RankedTensorType::get({numDiagonals, encodedSlots}, elemType);
+        // The diagonals are an operand, so the padded values are materialized
+        // as a constant that replaces it.
+        inputs[1] = arith::ConstantOp::create(
+            rewriter, ltOp.getLoc(),
+            DenseElementsAttr::get(newDiagonalsType, paddedValues));
+      }
+    }
+
     // Handle mgmt attrs
     convertArrayOfDicts(op.getAllResultAttrsAttr(), attrsToPreserve);
     convertArrayOfDicts(op.getAllOperandAttrsAttr(), attrsToPreserve);
@@ -315,6 +362,9 @@ struct LinearTransformOpConversion
     rewriter.replaceOp(op, newLtOp->getResults());
     return success();
   }
+
+ private:
+  int64_t encodedSlots;
 };
 
 struct SecretToCKKS : public impl::SecretToCKKSBase<SecretToCKKS> {
@@ -380,8 +430,18 @@ struct SecretToCKKS : public impl::SecretToCKKSBase<SecretToCKKS> {
         SecretGenericOpRotateConversion<ckks::RotateOp>,
         SecretGenericPlaintextDivision,
         SecretGenericOpConversion<kernel::EvalChebyshevOp>,
-        SecretGenericOpLevelReduceConversion<ckks::LevelReduceOp>,
-        LinearTransformOpConversion>(typeConverter, context);
+        SecretGenericOpLevelReduceConversion<ckks::LevelReduceOp>>(
+        typeConverter, context);
+
+    // CKKS packs ringDim/2 slots, but the module may have asked for a sparser
+    // packing, and that narrower width is the one the backend encodes and reads
+    // back as LogDimensions. Pad the diagonals to it, not to the ring capacity,
+    // so that this width, the slot count prepare-linear-transforms records, and
+    // the runtime ciphertext all agree.
+    int64_t ringDim = 1 << schemeParamAttr.getLogN();
+    int64_t encodedSlots = getEncodedSlotCount(module, ringDim / 2);
+    patterns.add<LinearTransformOpConversion>(typeConverter, context,
+                                              encodedSlots);
 
     patterns.add<ConvertClientConceal>(typeConverter, context, usePublicKey,
                                        rlweRing.value());
