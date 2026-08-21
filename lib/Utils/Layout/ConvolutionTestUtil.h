@@ -54,10 +54,10 @@ std::vector<std::vector<int>> reference2dConvChwFchwMatrix(
 // diagonalized 2-D Toeplitz matrix that is used to compute a 2-D multichannel
 // convolution filter.
 FailureOr<presburger::IntegerRelation>
-get2dConvChwFchwFilterDiagonalizedRelation(RankedTensorType filterType,
-                                           const ConvPacking& packing,
-                                           ArrayRef<int64_t> strides,
-                                           int64_t minSlotCount);
+get2dConvChwFchwFilterDiagonalizedRelation(
+    RankedTensorType filterType, const ConvPacking& packing,
+    ArrayRef<int64_t> strides, int64_t minSlotCount,
+    const presburger::IntegerRelation* dataSlotPermutation = nullptr);
 
 }  // namespace heir
 }  // namespace mlir

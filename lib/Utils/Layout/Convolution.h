@@ -195,6 +195,17 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
 FailureOr<presburger::IntegerRelation> getConvDataColumnPermutation(
     const ConvPacking& packing, const presburger::IntegerRelation& dataLayout);
 
+// Whether every conv matrix column that `mappedColumns` leaves out sits in the
+// zero border a symmetric `padding` puts around `matrixDataType`.
+//
+// The diagonal kernel drops an unmapped column from the plaintext matrix, which
+// is correct exactly when that element is zero. A column is provably zero only
+// inside that border, so this is what a caller must check before absorbing a
+// partial packing. Full coverage trivially qualifies.
+bool unmappedConvColumnsAreInZeroBorder(
+    RankedTensorType matrixDataType, int64_t padding,
+    const llvm::DenseSet<int64_t>& mappedColumns);
+
 // The columns j = c * W + w that `columnPermutation` gives a slot to read. The
 // diagonal kernel drops any column outside this set from the plaintext matrix,
 // so a caller that absorbs a packing must check that those elements are zero.

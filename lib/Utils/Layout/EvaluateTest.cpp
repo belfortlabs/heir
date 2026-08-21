@@ -695,6 +695,104 @@ void checkConv2dFilterRelationsEquivalence(MLIRContext& context,
   EXPECT_THAT(resultComposed, Eq(resultSingle));
 }
 
+// The absorbed 2-D layout is built as a sequence with an extra step, while the
+// reference builds one relation. They must still describe the same packing, so
+// this checks the new step against the reference rather than only against the
+// numbers a kernel produces.
+void checkAbsorbedConv2dRelationsEquivalence(MLIRContext& context,
+                                             int64_t outputChannels,
+                                             int64_t inputChannels,
+                                             int64_t dataSize, int64_t stride,
+                                             bool interchangeRows,
+                                             int64_t minSlotCount) {
+  SCOPED_TRACE("outputChannels = " + std::to_string(outputChannels) +
+               " inputChannels = " + std::to_string(inputChannels) +
+               " dataSize = " + std::to_string(dataSize) +
+               " stride = " + std::to_string(stride) +
+               " interchangeRows = " + std::to_string(interchangeRows));
+  RankedTensorType filterType = RankedTensorType::get(
+      {outputChannels, inputChannels, 2, 2}, IndexType::get(&context));
+  RankedTensorType dataType = RankedTensorType::get(
+      {1, inputChannels, dataSize, dataSize}, IndexType::get(&context));
+  SmallVector<int64_t> strides = {stride, stride};
+
+  // A gap-2 packing of the data operand: element j sits in slot 2j.
+  int64_t elements = inputChannels * dataSize * dataSize;
+  std::string layoutStr =
+      "{ [n, c, h, w] -> [ct, slot] : n = 0 and ct = 0 and 0 <= c < " +
+      std::to_string(inputChannels) + " and 0 <= h < " +
+      std::to_string(dataSize) + " and 0 <= w < " + std::to_string(dataSize) +
+      " and slot = 2 * (c * " + std::to_string(dataSize * dataSize) +
+      " + h * " + std::to_string(dataSize) + " + w) }";
+  ASSERT_LE(2 * elements, minSlotCount);
+  auto gappedLayout = getIntegerRelationFromIslStr(layoutStr);
+  ASSERT_TRUE(succeeded(gappedLayout));
+
+  ConvPacking packing{dataType, /*padding=*/0, interchangeRows};
+  auto columnPermutation =
+      getConvDataColumnPermutation(packing, gappedLayout.value());
+  ASSERT_TRUE(succeeded(columnPermutation));
+  auto representative =
+      getDiagonalColumnRepresentative(columnPermutation.value(), minSlotCount);
+  ASSERT_TRUE(succeeded(representative));
+
+  ConvPacking absorbed = packing;
+  absorbed.absorbedMatrixWidth = minSlotCount;
+
+  auto singleRel = get2dConvChwFchwFilterDiagonalizedRelation(
+      filterType, absorbed, strides, minSlotCount, &representative.value());
+  ASSERT_TRUE(succeeded(singleRel));
+
+  auto sequenceRels = get2dConvChwFchwFilterAsSequence(
+      filterType, absorbed, strides, minSlotCount, &representative.value());
+  ASSERT_TRUE(succeeded(sequenceRels));
+  auto rels = sequenceRels.value();
+  // The absorb step is one more relation than the unabsorbed sequence has.
+  ASSERT_THAT(rels.size(), Eq(interchangeRows ? 6 : 5));
+
+  IntegerRelation composed = rels[0];
+  for (size_t i = 1; i < rels.size(); ++i) composed.compose(rels[i]);
+
+  std::vector<std::vector<std::vector<std::vector<int>>>> filter(
+      outputChannels, std::vector<std::vector<std::vector<int>>>(
+                          inputChannels, std::vector<std::vector<int>>(
+                                             2, std::vector<int>(2))));
+  int val = 1;
+  for (int f = 0; f < outputChannels; ++f) {
+    for (int c = 0; c < inputChannels; ++c) {
+      for (int kh = 0; kh < 2; ++kh) {
+        for (int kw = 0; kw < 2; ++kw) {
+          filter[f][c][kh][kw] = val++;
+        }
+      }
+    }
+  }
+  std::function<int(const std::vector<int64_t>&)> getValueFn =
+      [&](const std::vector<int64_t>& domainPoint) -> int {
+    return filter[domainPoint[0]][domainPoint[1]][domainPoint[2]]
+                 [domainPoint[3]];
+  };
+
+  EXPECT_THAT(evaluateLayout(composed, getValueFn),
+              Eq(evaluateLayout(singleRel.value(), getValueFn)));
+}
+
+TEST(EvaluateTest, AbsorbedConvFilterRelationsEquivalence) {
+  MLIRContext context;
+  // Strided, so the rows interchange and the sequence gains its step 2.
+  checkAbsorbedConv2dRelationsEquivalence(context, /*outputChannels=*/4,
+                                          /*inputChannels=*/1, /*dataSize=*/4,
+                                          /*stride=*/2,
+                                          /*interchangeRows=*/true,
+                                          /*minSlotCount=*/64);
+  // Unstrided, so the sequence has no interchange step.
+  checkAbsorbedConv2dRelationsEquivalence(context, /*outputChannels=*/4,
+                                          /*inputChannels=*/1, /*dataSize=*/4,
+                                          /*stride=*/1,
+                                          /*interchangeRows=*/false,
+                                          /*minSlotCount=*/64);
+}
+
 TEST(EvaluateTest, TallConvFilterDiagonalizedRelationsEquivalence) {
   MLIRContext context;
   checkConv2dFilterRelationsEquivalence(context, /*outputChannels=*/8,

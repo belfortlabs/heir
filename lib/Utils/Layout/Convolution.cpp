@@ -614,6 +614,33 @@ FailureOr<presburger::IntegerRelation> getConvDataColumnPermutation(
   return result;
 }
 
+bool unmappedConvColumnsAreInZeroBorder(
+    RankedTensorType matrixDataType, int64_t padding,
+    const llvm::DenseSet<int64_t>& mappedColumns) {
+  ArrayRef<int64_t> extents = matrixDataType.getShape().drop_front(2);
+  int64_t elementsPerChannel = 1;
+  for (int64_t extent : extents) elementsPerChannel *= extent;
+  int64_t numColumns = matrixDataType.getDimSize(1) * elementsPerChannel;
+  if (static_cast<int64_t>(mappedColumns.size()) == numColumns) return true;
+  // A border needs a padding to live in.
+  if (padding <= 0) return false;
+
+  // Column j is the row-major index of the padded operand, so unflatten it and
+  // require every unmapped one to sit in the border on some spatial dim.
+  for (int64_t column = 0; column < numColumns; ++column) {
+    if (mappedColumns.contains(column)) continue;
+    int64_t rest = column % elementsPerChannel;
+    bool inBorder = false;
+    for (int64_t dim = extents.size() - 1; dim >= 0; --dim) {
+      int64_t coord = rest % extents[dim];
+      rest /= extents[dim];
+      if (coord < padding || coord >= extents[dim] - padding) inBorder = true;
+    }
+    if (!inBorder) return false;
+  }
+  return true;
+}
+
 llvm::DenseSet<int64_t> getMappedConvMatrixColumns(
     const presburger::IntegerRelation& columnPermutation) {
   PointPairCollector collector(/*domainDims=*/1, /*rangeDims=*/2);

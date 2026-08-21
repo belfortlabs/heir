@@ -1185,6 +1185,94 @@ IntegerRelation gappedDataLayout(int64_t low) {
       .value();
 }
 
+// Every column of `matrixDataType` except those listed.
+llvm::DenseSet<int64_t> allColumnsExcept(RankedTensorType matrixDataType,
+                                         ArrayRef<int64_t> holes) {
+  int64_t numColumns = matrixDataType.getNumElements();
+  llvm::DenseSet<int64_t> mapped;
+  for (int64_t column = 0; column < numColumns; ++column) {
+    if (!llvm::is_contained(holes, column)) mapped.insert(column);
+  }
+  return mapped;
+}
+
+TEST(ConvolutionTest, UnmappedColumnsFullCoverage) {
+  MLIRContext context;
+  auto dataType = RankedTensorType::get({1, 2, 5}, IndexType::get(&context));
+
+  // Nothing is dropped, so there is nothing to justify -- with or without a
+  // padding to justify it against.
+  EXPECT_TRUE(unmappedConvColumnsAreInZeroBorder(
+      dataType, /*padding=*/0, allColumnsExcept(dataType, {})));
+  EXPECT_TRUE(unmappedConvColumnsAreInZeroBorder(
+      dataType, /*padding=*/1, allColumnsExcept(dataType, {})));
+}
+
+TEST(ConvolutionTest, UnmappedColumnsNeedAPaddingToLiveIn) {
+  MLIRContext context;
+  auto dataType = RankedTensorType::get({1, 2, 5}, IndexType::get(&context));
+
+  // With no padding there is no zero border, so a dropped column would drop
+  // live data.
+  EXPECT_FALSE(unmappedConvColumnsAreInZeroBorder(
+      dataType, /*padding=*/0, allColumnsExcept(dataType, {0})));
+}
+
+TEST(ConvolutionTest, UnmappedColumns1dBorderVersusInterior) {
+  MLIRContext context;
+  // (1, 2, 5) with padding 1: the border is w == 0 and w == 4, so columns
+  // 0, 4, 5 and 9 are zero and columns 1..3 and 6..8 are live.
+  auto dataType = RankedTensorType::get({1, 2, 5}, IndexType::get(&context));
+
+  EXPECT_TRUE(unmappedConvColumnsAreInZeroBorder(
+      dataType, /*padding=*/1, allColumnsExcept(dataType, {0, 4, 5, 9})));
+  // A hole in the middle of the window is real data.
+  EXPECT_FALSE(unmappedConvColumnsAreInZeroBorder(
+      dataType, /*padding=*/1, allColumnsExcept(dataType, {2})));
+  // One live hole is enough to disqualify, even beside legitimate ones.
+  EXPECT_FALSE(unmappedConvColumnsAreInZeroBorder(
+      dataType, /*padding=*/1, allColumnsExcept(dataType, {0, 2, 4})));
+}
+
+TEST(ConvolutionTest, UnmappedColumns2dBorderVersusInterior) {
+  MLIRContext context;
+  // (1, 1, 4, 4) with padding 1: the border is the outer ring, so only the
+  // 2x2 centre (h, w in {1, 2}) is live -- columns 5, 6, 9 and 10.
+  auto dataType = RankedTensorType::get({1, 1, 4, 4}, IndexType::get(&context));
+
+  // The whole ring may be dropped.
+  SmallVector<int64_t> ring;
+  for (int64_t h = 0; h < 4; ++h) {
+    for (int64_t w = 0; w < 4; ++w) {
+      if (h == 0 || h == 3 || w == 0 || w == 3) ring.push_back(h * 4 + w);
+    }
+  }
+  EXPECT_TRUE(unmappedConvColumnsAreInZeroBorder(
+      dataType, /*padding=*/1, allColumnsExcept(dataType, ring)));
+
+  // A hole on one spatial dim's border still counts as border, even when the
+  // other coordinate is interior.
+  EXPECT_TRUE(unmappedConvColumnsAreInZeroBorder(
+      dataType, /*padding=*/1, allColumnsExcept(dataType, {1, 12})));
+
+  // Each centre column is live.
+  for (int64_t column : {5, 6, 9, 10}) {
+    EXPECT_FALSE(unmappedConvColumnsAreInZeroBorder(
+        dataType, /*padding=*/1, allColumnsExcept(dataType, {column})))
+        << "column " << column << " is interior and must not be droppable";
+  }
+}
+
+TEST(ConvolutionTest, UnmappedColumns2dPerChannel) {
+  MLIRContext context;
+  // Two channels of (2, 3): the column index is c * 6 + h * 3 + w, so the
+  // border repeats per channel. With padding 1 every position is border, since
+  // no interior survives a 2x3 spatial extent.
+  auto dataType = RankedTensorType::get({1, 2, 2, 3}, IndexType::get(&context));
+  EXPECT_TRUE(unmappedConvColumnsAreInZeroBorder(
+      dataType, /*padding=*/1, allColumnsExcept(dataType, {0, 7, 11})));
+}
+
 // A gap-2 packing of a (1, 2, 2, 3) operand: element (c, h, w) sits in slot
 // 2 * (6c + 3h + w). `low` shifts both spatial domains, which is what a
 // symmetric tensor.pad does to the layout of the value it pads.

@@ -123,15 +123,21 @@ std::vector<std::vector<int>> reference2dConvChwFchwMatrix(
 }
 
 FailureOr<presburger::IntegerRelation>
-get2dConvChwFchwFilterDiagonalizedRelation(RankedTensorType filterType,
-                                           const ConvPacking& packing,
-                                           ArrayRef<int64_t> strides,
-                                           int64_t minSlotCount) {
+get2dConvChwFchwFilterDiagonalizedRelation(
+    RankedTensorType filterType, const ConvPacking& packing,
+    ArrayRef<int64_t> strides, int64_t minSlotCount,
+    const presburger::IntegerRelation* dataSlotPermutation) {
   RankedTensorType dataType = packing.matrixDataType;
   int64_t padding = packing.padding;
   bool interchangeRows = packing.interchangeRows;
   auto expandedFilterRelation =
       get2dConvChwFchwFilterRelation(filterType, packing, strides);
+  // Absorbing re-indexes the columns by the slot each data element occupies, so
+  // the column space below is the ciphertext rather than the Toeplitz width.
+  if (dataSlotPermutation) {
+    expandedFilterRelation.compose(
+        liftVectorPermutationToMatrixColumns(*dataSlotPermutation));
+  }
   // Permutate the rows of the matrix to minimize the number of non-zero
   // diagonals.
   if (interchangeRows) {
@@ -154,7 +160,8 @@ get2dConvChwFchwFilterDiagonalizedRelation(RankedTensorType filterType,
     auto singleResultType = get2dConvFilterExpandedType(
         singleFilterType, singleDataType, padding, strides);
     int64_t totalColSize = singleResultType.getDimSize(1);
-    int64_t maxCol = inputChannels * totalColSize;
+    int64_t maxCol =
+        dataSlotPermutation ? minSlotCount : inputChannels * totalColSize;
 
     auto rowInterchangeRelation = get2dConvRowInterchangeRelation(
         filterType.getDimSize(0), outputH, outputW, strides[0]);
@@ -184,14 +191,26 @@ get2dConvChwFchwFilterDiagonalizedRelation(RankedTensorType filterType,
     // rows for padding channels that no filter entry reaches.
     auto expandedType =
         get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
-    auto diagonalizedInterchange =
-        diagonalize2dMatrix(rowInterchangeRelation, filterType, minSlotCount,
-                            expandedType.getShape());
+    SmallVector<int64_t> matrixShape(expandedType.getShape());
+    if (dataSlotPermutation) matrixShape[1] = minSlotCount;
+    auto diagonalizedInterchange = diagonalize2dMatrix(
+        rowInterchangeRelation, filterType, minSlotCount, matrixShape);
     if (failed(diagonalizedInterchange)) return failure();
 
     expandedFilterRelation.compose(diagonalizedInterchange.value());
     return expandedFilterRelation;
   }
+  if (dataSlotPermutation) {
+    auto expandedType =
+        get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
+    SmallVector<int64_t> matrixShape(expandedType.getShape());
+    matrixShape[1] = minSlotCount;
+    return diagonalize2dMatrix(expandedFilterRelation, filterType, minSlotCount,
+                               matrixShape);
+  }
+  // Without absorption the relation's own bounds decide the shape, which can be
+  // tighter than the expanded type; keep that, so this stays the reference the
+  // unabsorbed sequence is checked against.
   auto res =
       diagonalize2dMatrix(expandedFilterRelation, filterType, minSlotCount);
   return res;

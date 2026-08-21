@@ -206,32 +206,12 @@ std::optional<int64_t> getConvSpatialZeroPad(Value data,
 // path, where getConvDataColumnPermutation already rejected one.
 bool droppedConvColumnsAreZero(Value data, const ConvPacking& packing,
                                const IntegerRelation& columnPermutation) {
-  ArrayRef<int64_t> extents = packing.matrixDataType.getShape().drop_front(2);
-  int64_t elementsPerChannel = 1;
-  for (int64_t extent : extents) elementsPerChannel *= extent;
-  int64_t numColumns =
-      packing.matrixDataType.getDimSize(1) * elementsPerChannel;
   llvm::DenseSet<int64_t> mapped =
       getMappedConvMatrixColumns(columnPermutation);
-  if (static_cast<int64_t>(mapped.size()) == numColumns) return true;
-
-  std::optional<int64_t> pad =
-      getConvSpatialZeroPad(data, /*numSpatialDims=*/extents.size());
-  if (!pad) return false;
-  // Column j is the row-major index of the padded operand, so unflatten it and
-  // require every dropped one to sit in the zero border on some spatial dim.
-  for (int64_t column = 0; column < numColumns; ++column) {
-    if (mapped.contains(column)) continue;
-    int64_t rest = column % elementsPerChannel;
-    bool inBorder = false;
-    for (int64_t dim = extents.size() - 1; dim >= 0; --dim) {
-      int64_t coord = rest % extents[dim];
-      rest /= extents[dim];
-      if (coord < *pad || coord >= extents[dim] - *pad) inBorder = true;
-    }
-    if (!inBorder) return false;
-  }
-  return true;
+  size_t numSpatialDims = packing.matrixDataType.getRank() - 2;
+  std::optional<int64_t> pad = getConvSpatialZeroPad(data, numSpatialDims);
+  return unmappedConvColumnsAreInZeroBorder(packing.matrixDataType,
+                                            pad.value_or(0), mapped);
 }
 
 // Try to fold a zero `tensor.pad` on the spatial dims of a conv's `data`
