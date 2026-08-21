@@ -535,31 +535,55 @@ FailureOr<presburger::IntegerRelation> getConvFilterDiagonalizedRelation(
   return diagonalize2dMatrix(filterRelation, filterType, minSlotCount);
 }
 
-FailureOr<presburger::IntegerRelation> get1dConvDataColumnPermutation(
+FailureOr<presburger::IntegerRelation> getConvDataColumnPermutation(
     const ConvPacking& packing, const presburger::IntegerRelation& dataLayout) {
   RankedTensorType matrixDataType = packing.matrixDataType;
   int64_t padding = packing.padding;
+  int64_t rank = matrixDataType.getRank();
 
-  assert(matrixDataType.getRank() == 3 && "expected 3-D data matrix");
+  assert((rank == 3 || rank == 4) && "expected a 3-D or 4-D data matrix");
   assert(matrixDataType.getDimSize(0) == 1 && "expected N=1 batch size");
   if (padding < 0) return failure();
   int64_t channels = matrixDataType.getDimSize(1);
-  int64_t width = matrixDataType.getDimSize(2);
 
-  // Unflatten [j] -> [n, c, w] with j = c * W + w, matching the expanded
-  // matrix's column coordinate embedCol = c * totalColSize + singleCol. W is
-  // the matrix operand's width, so when a pad folded into the conv's own
-  // padding the column count excludes the padding. The layout still indexes the
-  // padded value, so offset the spatial index by `padding`: column j reads the
-  // slot of padded index (c, w + padding).
+  // Spatial extents of the operand the matrix is built against, and the stride
+  // each one carries in the flattened column index.
+  SmallVector<int64_t> extents(matrixDataType.getShape().drop_front(2));
+  SmallVector<int64_t> columnStrides(extents.size(), 1);
+  for (int64_t dim = extents.size() - 2; dim >= 0; --dim) {
+    columnStrides[dim] = columnStrides[dim + 1] * extents[dim + 1];
+  }
+  int64_t elementsPerChannel = columnStrides[0] * extents[0];
+
+  // Unflatten [j] -> [n, c, spatial...], matching the expanded matrix's column
+  // coordinate embedCol = c * elementsPerChannel + singleCol, where singleCol
+  // is the row-major index of the spatial position. The extents come from the
+  // matrix operand, so when a pad folded into the conv's own padding the column
+  // count excludes the padding. The layout still indexes the padded value, so
+  // offset every spatial index by `padding`: column j reads the slot of padded
+  // index (c, x0 + padding, ...).
+  SmallVector<std::string> spatialNames;
+  SmallVector<std::string> bounds;
+  SmallVector<std::string> terms;
+  for (size_t dim = 0; dim < extents.size(); ++dim) {
+    std::string name = llvm::formatv("x{0}", dim).str();
+    spatialNames.push_back(name);
+    bounds.push_back(
+        llvm::formatv("{0} <= {1} < {2} + {0}", padding, name, extents[dim])
+            .str());
+    terms.push_back(
+        llvm::formatv("({0} - {1}) * {2}", name, padding, columnStrides[dim])
+            .str());
+  }
   std::string unflattenStr = llvm::formatv(
-      "{{ [j] -> [n, c, w] : n = 0 and 0 <= c < {0} and {2} <= w < {1} + {2} "
-      "and j = c * {1} + w - {2} }",
-      channels, width, padding);
+      "{{ [j] -> [n, c, {0}] : n = 0 and 0 <= c < {1} and {2} and "
+      "j = c * {3} + {4} }",
+      llvm::join(spatialNames, ", "), channels, llvm::join(bounds, " and "),
+      elementsPerChannel, llvm::join(terms, " + "));
   auto unflatten = getIntegerRelationFromIslStr(unflattenStr);
   if (failed(unflatten)) return failure();
 
-  // [j] -> [n, c, w] -> [ct, slot]
+  // [j] -> [n, c, spatial...] -> [ct, slot]
   presburger::IntegerRelation result(unflatten.value());
   result.compose(dataLayout);
 
@@ -582,7 +606,7 @@ FailureOr<presburger::IntegerRelation> get1dConvDataColumnPermutation(
   // purpose, so leave that case to the caller.
   if (padding > 0 &&
       static_cast<int64_t>(getMappedConvMatrixColumns(result).size()) !=
-          channels * width) {
+          channels * elementsPerChannel) {
     return failure();
   }
   result.removeRedundantConstraints();
@@ -662,7 +686,8 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
 
 FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
     RankedTensorType filterType, const ConvPacking& packing,
-    ArrayRef<int64_t> strides, int64_t minSlotCount) {
+    ArrayRef<int64_t> strides, int64_t minSlotCount,
+    const presburger::IntegerRelation* dataSlotPermutation) {
   RankedTensorType dataType = packing.matrixDataType;
   int64_t padding = packing.padding;
   bool interchangeRows = packing.interchangeRows;
@@ -701,7 +726,13 @@ FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
   int64_t maxCol = inputChannels * totalColSize;
 
   int64_t paddedRows = isPowerOfTwo(maxRow) ? maxRow : nextPowerOfTwo(maxRow);
-  int64_t paddedCols = isPowerOfTwo(maxCol) ? maxCol : nextPowerOfTwo(maxCol);
+  // Absorbing the data's slot packing re-indexes the columns by ciphertext
+  // slot, so the matrix spans the whole ciphertext and the diagonalization
+  // wraps columns modulo the size the kernel rotates modulo. Otherwise the
+  // Toeplitz width applies.
+  int64_t diagonalCols = dataSlotPermutation ? minSlotCount : maxCol;
+  int64_t paddedCols =
+      isPowerOfTwo(diagonalCols) ? diagonalCols : nextPowerOfTwo(diagonalCols);
   int64_t numDiagonals = std::min(paddedRows, paddedCols);
 
   int64_t step3F =
@@ -765,6 +796,24 @@ FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
   if (failed(step4Rel)) return failure();
   relations.push_back(step4Rel.value());
 
+  // Step 4b: Absorb the data's slot packing into the column space (2D -> 2D).
+  // Column `col` becomes the ciphertext slot the element really occupies, so
+  // the kernel reads the data where it already sits.
+  if (dataSlotPermutation) {
+    IntegerRelation absorbColumns =
+        liftVectorPermutationToMatrixColumns(*dataSlotPermutation);
+    // Every step here is materialized as a layout in its own right, so the
+    // passthrough row dim needs explicit bounds instead of inheriting them
+    // from the relation it gets composed with.
+    addBounds(absorbColumns,
+              absorbColumns.getVarKindOffset(presburger::VarKind::Domain), 0,
+              maxRow - 1);
+    addBounds(absorbColumns,
+              absorbColumns.getVarKindOffset(presburger::VarKind::Range), 0,
+              maxRow - 1);
+    relations.push_back(std::move(absorbColumns));
+  }
+
   // Step 5: Diagonalize (2D -> 2D)
   std::string step5Str = llvm::formatv(
       "{{ [row, col] -> [ct, slot] : "
@@ -772,7 +821,7 @@ FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
       "(slot - row) mod {2} = 0 and "
       "(ct + slot - col) mod {3} = 0 and "
       "0 <= ct < {5} and 0 <= slot < {4} }}",
-      maxRow, maxCol, paddedRows, paddedCols, minSlotCount, numDiagonals);
+      maxRow, diagonalCols, paddedRows, paddedCols, minSlotCount, numDiagonals);
   auto step5Rel = getIntegerRelationFromIslStr(step5Str);
   if (failed(step5Rel)) return failure();
   relations.push_back(step5Rel.value());

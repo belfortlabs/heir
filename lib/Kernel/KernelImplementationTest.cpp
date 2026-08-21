@@ -358,6 +358,94 @@ TEST_P(KernelImplementationTest, Test2DConvWithLayout) {
   EXPECT_EQ(extractedResult, expected);
 }
 
+// End-to-end Halevi-Shoup matvec for a 2-D conv whose data arrives gap-packed:
+// element (c, h, w) sits in slot 2 * (c*H*W + h*W + w). Absorbing that packing
+// into the plaintext filter lets the kernel read the data where it already
+// sits, with no online layout conversion. The matrix columns become ciphertext
+// slots, so the kernel folds its partial sums over the ciphertext width rather
+// than over the Toeplitz C*H*W.
+TEST_P(KernelImplementationTest, TestConv2dNchwFchwAbsorbedPackingWidth) {
+  MLIRContext context;
+  int64_t channels = 1;
+  int64_t dataSize = 4;
+  int64_t outputChannels = 4;
+  int numSlots = 64;
+  SmallVector<int64_t> strides = {1, 1};
+
+  RankedTensorType dataType = RankedTensorType::get(
+      {1, channels, dataSize, dataSize}, mlir::IndexType::get(&context));
+  RankedTensorType filterType = RankedTensorType::get(
+      {outputChannels, channels, 2, 2}, mlir::IndexType::get(&context));
+
+  tensor4d data(1, std::vector<std::vector<std::vector<int>>>(
+                       channels, std::vector<std::vector<int>>(
+                                     dataSize, std::vector<int>(dataSize, 0))));
+  for (int64_t h = 0; h < dataSize; ++h) {
+    for (int64_t w = 0; w < dataSize; ++w) {
+      data[0][0][h][w] = (int)((h * 7 + w * 3) % 13);
+    }
+  }
+  tensor4d filter = deterministicConvFilter(outputChannels, channels, 2, 2);
+  std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
+      [&](const std::vector<int64_t>& domainPoint) -> int {
+    return filter[domainPoint[0]][domainPoint[1]][domainPoint[2]]
+                 [domainPoint[3]];
+  };
+
+  auto gappedLayout =
+      getIntegerRelationFromIslStr(
+          "{ [n, c, h, w] -> [ct, slot] : n = 0 and ct = 0 and c = 0 and "
+          "0 <= h <= 3 and 0 <= w <= 3 and slot = 2 * (4h + w) }")
+          .value();
+
+  ConvPacking packing{dataType, /*padding=*/0, /*interchangeRows=*/false};
+  auto columnPermutation = getConvDataColumnPermutation(packing, gappedLayout);
+  ASSERT_TRUE(succeeded(columnPermutation));
+  auto representative =
+      getDiagonalColumnRepresentative(columnPermutation.value(), numSlots);
+  ASSERT_TRUE(succeeded(representative));
+
+  // Absorbing is recorded on the packing, exactly as LayoutPropagation does.
+  ConvPacking absorbed = packing;
+  absorbed.absorbedMatrixWidth = numSlots;
+  auto maybeRels = get2dConvChwFchwFilterAsSequence(
+      filterType, absorbed, strides, numSlots, &representative.value());
+  ASSERT_TRUE(succeeded(maybeRels));
+  auto rels = maybeRels.value();
+  presburger::IntegerRelation filterLayout = rels.front();
+  for (size_t i = 1; i < rels.size(); ++i) filterLayout.compose(rels[i]);
+
+  std::vector<std::vector<int>> packedFilter =
+      evaluateLayout(filterLayout, getFilterValueFn);
+  // The gap packing leaves the odd slots empty, so state the ciphertext shape
+  // rather than letting it come from the relation's tightest slot bound.
+  std::vector<std::vector<int>> gappedData = evaluateLayout<int>(
+      gappedLayout, getDataValueFn4D(data), SmallVector<int64_t>{1, numSlots});
+
+  auto expandedType = absorbed.expanded2dFilterType(filterType, strides);
+  std::vector<int64_t> matrixShape = absorbed.layoutMatrixShape(expandedType);
+  ASSERT_EQ(matrixShape[1], numSlots);
+
+  auto dag = implementHaleviShoup(
+      LiteralValue(gappedData[0]), LiteralValue(packedFilter), matrixShape,
+      DagType::intTensor(32, {numSlots}),
+      /*zeroDiagonals=*/{}, /*unroll=*/std::get<0>(GetParam()));
+  auto actual = std::get<std::vector<int>>(evalKernel(dag)[0].get());
+
+  tensor4d expected = reference2dConv(data, filter, /*stride=*/1,
+                                      /*padding=*/0);
+  int64_t outputH = expected[0][0].size();
+  int64_t outputW = expected[0][0][0].size();
+  RankedTensorType outputType = RankedTensorType::get(
+      {1, outputChannels, outputH, outputW}, mlir::IndexType::get(&context));
+  auto resultLayout =
+      get2dConvResultRelation(outputType, strides, /*padding=*/0, numSlots,
+                              /*interchangeRows=*/false);
+  EXPECT_EQ(unpackLayoutTo4DTensor<int>(resultLayout, {actual},
+                                        {1, outputChannels, outputH, outputW}),
+            expected);
+}
+
 TEST_P(KernelImplementationTest, TestIssue3003) {
   MLIRContext context;
   RankedTensorType dataType =
@@ -1031,8 +1119,7 @@ TEST(KernelImplementationTest, TestConv1dCwFcwAbsorbedPackingWidth) {
           "{ [n, c, w] -> [ct, slot] : n = 0 and ct = 0 and 0 <= c <= 1 and "
           "0 <= w <= 5 and slot = 12c + 2w }")
           .value();
-  auto columnPermutation =
-      get1dConvDataColumnPermutation(packing, gappedLayout);
+  auto columnPermutation = getConvDataColumnPermutation(packing, gappedLayout);
   ASSERT_TRUE(succeeded(columnPermutation));
   auto representative =
       getDiagonalColumnRepresentative(columnPermutation.value(), numSlots);

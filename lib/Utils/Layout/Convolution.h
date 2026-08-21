@@ -175,9 +175,11 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
     int64_t minSlotCount,
     const presburger::IntegerRelation* dataSlotPermutation = nullptr);
 
-// Flattens a 3-D (1, C, W) data layout `[n, c, w] -> [ct, slot]` into the
-// column-space permutation `[j] -> [ct, slot]` with j = c * W + w, as accepted
-// by `get1dConvCwFcwFilterDiagonalizedRelation`'s `dataSlotPermutation`.
+// Flattens a conv data layout `[n, c, spatial...] -> [ct, slot]` into the
+// column-space permutation `[j] -> [ct, slot]`, where j is the row-major index
+// of the matrix operand: j = c * W + w for a 3-D (1, C, W) operand and
+// j = c * H * W + h * W + w for a 4-D (1, C, H, W) one. Accepted as the
+// `dataSlotPermutation` of the diagonalized relation of either rank.
 //
 // `packing.matrixDataType` is the operand the Toeplitz matrix is built against,
 // so it fixes W and therefore the column space. `packing.padding` is nonzero
@@ -190,7 +192,7 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
 // slot. Every column is real data in that case, so dropping one would drop
 // data.
 // Reads only the operand and its padding from `packing`.
-FailureOr<presburger::IntegerRelation> get1dConvDataColumnPermutation(
+FailureOr<presburger::IntegerRelation> getConvDataColumnPermutation(
     const ConvPacking& packing, const presburger::IntegerRelation& dataLayout);
 
 // The columns j = c * W + w that `columnPermutation` gives a slot to read. The
@@ -204,10 +206,13 @@ llvm::DenseSet<int64_t> getMappedConvMatrixColumns(
 // diagonalization). This is preferred for compilation performance to avoid ISL
 // hangs when generating loops.
 FailureOr<std::vector<presburger::IntegerRelation>>
-get2dConvChwFchwFilterAsSequence(RankedTensorType filterType,
-                                 const ConvPacking& packing,
-                                 ArrayRef<int64_t> strides,
-                                 int64_t minSlotCount);
+// `dataSlotPermutation` carries the same meaning as it does for the 1-D
+// diagonalized relation: when non-null it re-indexes the matrix's column space
+// by the slot each data element occupies.
+get2dConvChwFchwFilterAsSequence(
+    RankedTensorType filterType, const ConvPacking& packing,
+    ArrayRef<int64_t> strides, int64_t minSlotCount,
+    const presburger::IntegerRelation* dataSlotPermutation = nullptr);
 
 // Returns an IntegerRelation for a row-interchange map that optimizes the
 // diagonal structure of a convolution's Toeplitz matrix.
