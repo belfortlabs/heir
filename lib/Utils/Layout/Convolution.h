@@ -194,7 +194,7 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
 // Every column is real data in that case, so dropping one would drop data.
 FailureOr<presburger::IntegerRelation> get1dConvDataColumnPermutation(
     RankedTensorType matrixDataType,
-    const presburger::IntegerRelation& dataLayout, int64_t padding = 0);
+    const presburger::IntegerRelation& dataLayout, int64_t padding);
 
 // The columns j = c * W + w that `columnPermutation` gives a slot to read. The
 // diagonal kernel drops any column outside this set from the plaintext matrix,

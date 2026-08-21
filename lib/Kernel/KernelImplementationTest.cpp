@@ -1032,7 +1032,7 @@ TEST(KernelImplementationTest, TestConv1dCwFcwAbsorbedPackingWidth) {
           "0 <= w <= 5 and slot = 12c + 2w }")
           .value();
   auto columnPermutation =
-      get1dConvDataColumnPermutation(dataType, gappedLayout);
+      get1dConvDataColumnPermutation(dataType, gappedLayout, /*padding=*/0);
   ASSERT_TRUE(succeeded(columnPermutation));
   auto representative =
       getDiagonalColumnRepresentative(columnPermutation.value(), numSlots);
