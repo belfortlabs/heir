@@ -1504,9 +1504,8 @@ struct ConvertLinalgConv1DNcwFcw
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << matrix << "\n");
 
-    std::vector<int64_t> matrixShapeForLayout(
-        expandedMatrixType->getShape().begin(),
-        expandedMatrixType->getShape().end());
+    std::vector<int64_t> matrixShapeForLayout =
+        layoutMatrixShape(op, expandedMatrixType.value());
     // Layout propagation can record the result layout as a list of layouts to
     // compose, as the expanded kernel below also handles.
     Attribute resultLayout = op->getAttr(kLayoutAttrName);
@@ -1529,8 +1528,7 @@ struct ConvertLinalgConv1DNcwFcw
     auto dagType = kernel::mlirTypeToDagType(data.getType(),
                                              data.getType().getShape().back());
     std::shared_ptr<ArithmeticDagNode<SSAValue>> implementedKernel =
-        implementHaleviShoup(vectorLeaf, matrixLeaf,
-                             layoutMatrixShape(op, expandedMatrixType.value()),
+        implementHaleviShoup(vectorLeaf, matrixLeaf, matrixShapeForLayout,
                              dagType, zeroDiagonals,
                              /*unroll=*/unrollKernels);
 
