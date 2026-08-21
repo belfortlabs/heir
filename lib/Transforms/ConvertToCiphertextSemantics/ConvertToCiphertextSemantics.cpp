@@ -1335,9 +1335,12 @@ struct ConvertLinalgConv2D : public ConversionBase<linalg::Conv2DOp> {
 
     // The original matrix shape is the shape of the expanded filter before
     // diagonalization.
+    // linalg.conv_2d is the unstrided variant, so it carries no strides
+    // attribute and the expansion is always against a unit stride.
     RankedTensorType expandedMatrixType = get2dConvFilterExpandedType(
         cast<RankedTensorType>(op.getInputs()[1].getType()),
-        cast<RankedTensorType>(op.getInputs()[0].getType()), /*padding=*/0);
+        cast<RankedTensorType>(op.getInputs()[0].getType()), /*padding=*/0,
+        /*strides=*/{1, 1});
 
     // Collect any zero diagonals of the filter matrix.
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);

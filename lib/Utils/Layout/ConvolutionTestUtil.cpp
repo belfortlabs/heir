@@ -124,13 +124,14 @@ std::vector<std::vector<int>> reference2dConvChwFchwMatrix(
 
 FailureOr<presburger::IntegerRelation>
 get2dConvChwFchwFilterDiagonalizedRelation(RankedTensorType filterType,
-                                           RankedTensorType dataType,
+                                           const ConvPacking& packing,
                                            ArrayRef<int64_t> strides,
-                                           int64_t padding,
-                                           int64_t minSlotCount,
-                                           bool interchangeRows) {
+                                           int64_t minSlotCount) {
+  RankedTensorType dataType = packing.matrixDataType;
+  int64_t padding = packing.padding;
+  bool interchangeRows = packing.interchangeRows;
   auto expandedFilterRelation =
-      get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
+      get2dConvChwFchwFilterRelation(filterType, packing, strides);
   // Permutate the rows of the matrix to minimize the number of non-zero
   // diagonals.
   if (interchangeRows) {
@@ -181,8 +182,8 @@ get2dConvChwFchwFilterDiagonalizedRelation(RankedTensorType filterType,
     // Diagonalize against the shape the Halevi-Shoup kernel is sized from. The
     // interchange relation's own bounds can be tighter: the layout reserves
     // rows for padding channels that no filter entry reaches.
-    auto expandedType = get2dConvChwFchwFilterExpandedType(
-        filterType, dataType, padding, strides, /*interchangeRows=*/true);
+    auto expandedType =
+        get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
     auto diagonalizedInterchange =
         diagonalize2dMatrix(rowInterchangeRelation, filterType, minSlotCount,
                             expandedType.getShape());

@@ -291,10 +291,12 @@ RankedTensorType get2dConvFilterExpandedType(RankedTensorType filterType,
 }
 
 RankedTensorType get1dConvCwFcwFilterExpandedType(RankedTensorType filterType,
-                                                  RankedTensorType dataType,
-                                                  int64_t stride,
-                                                  int64_t padding,
-                                                  bool interchangeRows) {
+                                                  const ConvPacking& packing,
+                                                  int64_t stride) {
+  RankedTensorType dataType = packing.matrixDataType;
+  int64_t padding = packing.padding;
+  bool interchangeRows = packing.interchangeRows;
+
   // Get the filter relation for a single input and output channel and multiply
   // the dimensions by the number of input and output channels for the row and
   // column dimensions respectively.
@@ -319,10 +321,12 @@ RankedTensorType get1dConvCwFcwFilterExpandedType(RankedTensorType filterType,
 }
 
 RankedTensorType get2dConvChwFchwFilterExpandedType(RankedTensorType filterType,
-                                                    RankedTensorType dataType,
-                                                    int64_t padding,
-                                                    ArrayRef<int64_t> strides,
-                                                    bool interchangeRows) {
+                                                    const ConvPacking& packing,
+                                                    ArrayRef<int64_t> strides) {
+  RankedTensorType dataType = packing.matrixDataType;
+  int64_t padding = packing.padding;
+  bool interchangeRows = packing.interchangeRows;
+
   // Get the filter relation for a single input and output channel and multiply
   // the dimensions by the number of input and output channels for the row and
   // column dimensions respectively.
@@ -351,14 +355,12 @@ RankedTensorType get2dConvChwFchwFilterExpandedType(RankedTensorType filterType,
 
 RankedTensorType ConvPacking::expanded1dFilterType(RankedTensorType filterType,
                                                    int64_t stride) const {
-  return get1dConvCwFcwFilterExpandedType(filterType, matrixDataType, stride,
-                                          padding, interchangeRows);
+  return get1dConvCwFcwFilterExpandedType(filterType, *this, stride);
 }
 
 RankedTensorType ConvPacking::expanded2dFilterType(
     RankedTensorType filterType, ArrayRef<int64_t> strides) const {
-  return get2dConvChwFchwFilterExpandedType(filterType, matrixDataType, padding,
-                                            strides, interchangeRows);
+  return get2dConvChwFchwFilterExpandedType(filterType, *this, strides);
 }
 
 std::vector<int64_t> ConvPacking::layoutMatrixShape(
@@ -371,8 +373,10 @@ std::vector<int64_t> ConvPacking::layoutMatrixShape(
 }
 
 presburger::IntegerRelation get1dConvCwFcwFilterRelation(
-    RankedTensorType filterType, RankedTensorType dataType, int64_t stride,
-    int64_t padding) {
+    RankedTensorType filterType, const ConvPacking& packing, int64_t stride) {
+  RankedTensorType dataType = packing.matrixDataType;
+  int64_t padding = packing.padding;
+
   assert(filterType.getRank() == 3 && "expected 3-D filter matrix");
   assert(dataType.getRank() == 3 && "expected 3-D data matrix");
   assert(dataType.getDimSize(0) == 1 && "expected N=1 batch size");
@@ -441,8 +445,11 @@ presburger::IntegerRelation get1dConvCwFcwFilterRelation(
 }
 
 presburger::IntegerRelation get2dConvChwFchwFilterRelation(
-    RankedTensorType filterType, RankedTensorType dataType,
-    ArrayRef<int64_t> strides, int64_t padding) {
+    RankedTensorType filterType, const ConvPacking& packing,
+    ArrayRef<int64_t> strides) {
+  RankedTensorType dataType = packing.matrixDataType;
+  int64_t padding = packing.padding;
+
   assert(filterType.getRank() == 4 && "expected 4-D filter matrix");
   assert(dataType.getRank() == 4 && "expected 4-D data matrix");
   assert(dataType.getDimSize(0) == 1 && "expected N=1 batch size");
@@ -529,8 +536,10 @@ FailureOr<presburger::IntegerRelation> getConvFilterDiagonalizedRelation(
 }
 
 FailureOr<presburger::IntegerRelation> get1dConvDataColumnPermutation(
-    RankedTensorType matrixDataType,
-    const presburger::IntegerRelation& dataLayout, int64_t padding) {
+    const ConvPacking& packing, const presburger::IntegerRelation& dataLayout) {
+  RankedTensorType matrixDataType = packing.matrixDataType;
+  int64_t padding = packing.padding;
+
   assert(matrixDataType.getRank() == 3 && "expected 3-D data matrix");
   assert(matrixDataType.getDimSize(0) == 1 && "expected N=1 batch size");
   if (padding < 0) return failure();
@@ -593,11 +602,14 @@ llvm::DenseSet<int64_t> getMappedConvMatrixColumns(
 }
 
 FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
-    RankedTensorType filterType, RankedTensorType dataType, int64_t stride,
-    int64_t padding, int64_t minSlotCount, bool interchangeRows,
+    RankedTensorType filterType, const ConvPacking& packing, int64_t stride,
+    int64_t minSlotCount,
     const presburger::IntegerRelation* dataSlotPermutation) {
+  RankedTensorType dataType = packing.matrixDataType;
+  int64_t padding = packing.padding;
+  bool interchangeRows = packing.interchangeRows;
   auto expandedFilterRelation =
-      get1dConvCwFcwFilterRelation(filterType, dataType, stride, padding);
+      get1dConvCwFcwFilterRelation(filterType, packing, stride);
   // Permutate the rows of the matrix to minimize the number of non-zero
   // diagonals.
   if (interchangeRows) {
@@ -635,8 +647,8 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
   // Diagonalize against the shape the Halevi-Shoup kernel is sized from. The
   // relation's own bounds can be tighter: an interchanged layout reserves rows
   // for padding channels that no filter entry reaches.
-  auto expandedType = get1dConvCwFcwFilterExpandedType(
-      filterType, dataType, stride, padding, interchangeRows);
+  auto expandedType =
+      get1dConvCwFcwFilterExpandedType(filterType, packing, stride);
   SmallVector<int64_t> matrixShape(expandedType.getShape());
 
   // Absorbing re-indexes the columns by ciphertext slot, so the matrix spans
@@ -649,9 +661,12 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
 }
 
 FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
-    RankedTensorType filterType, RankedTensorType dataType,
-    ArrayRef<int64_t> strides, int64_t padding, int64_t minSlotCount,
-    bool interchangeRows) {
+    RankedTensorType filterType, const ConvPacking& packing,
+    ArrayRef<int64_t> strides, int64_t minSlotCount) {
+  RankedTensorType dataType = packing.matrixDataType;
+  int64_t padding = packing.padding;
+  bool interchangeRows = packing.interchangeRows;
+
   auto inputChannels = dataType.getDimSize(1);
   auto outputChannels = filterType.getDimSize(0);
   auto filterRowSize = filterType.getDimSize(2);

@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include "lib/Utils/Layout/Convolution.h"
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/include/mlir/Support/LLVM.h"     // from @llvm-project
@@ -54,11 +55,9 @@ std::vector<std::vector<int>> reference2dConvChwFchwMatrix(
 // convolution filter.
 FailureOr<presburger::IntegerRelation>
 get2dConvChwFchwFilterDiagonalizedRelation(RankedTensorType filterType,
-                                           RankedTensorType dataType,
+                                           const ConvPacking& packing,
                                            ArrayRef<int64_t> strides,
-                                           int64_t padding,
-                                           int64_t minSlotCount,
-                                           bool interchangeRows);
+                                           int64_t minSlotCount);
 
 }  // namespace heir
 }  // namespace mlir

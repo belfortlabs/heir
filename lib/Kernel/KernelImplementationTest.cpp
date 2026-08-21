@@ -339,7 +339,8 @@ TEST_P(KernelImplementationTest, Test2DConvWithLayout) {
   std::vector<std::vector<int>> packedMatrix =
       evaluateLayoutOnMatrix(matrixLayout, matrix);
   RankedTensorType expandedMatrixType =
-      get2dConvFilterExpandedType(filterType, dataType, /*padding=*/0);
+      get2dConvFilterExpandedType(filterType, dataType, /*padding=*/0,
+                                  /*strides=*/{1, 1});
 
   std::vector<int> expected = {5, 1, -2, -10};
   LiteralValue matrixInput = packedMatrix;
@@ -384,17 +385,16 @@ TEST_P(KernelImplementationTest, TestIssue3003) {
   std::vector<std::vector<int>> packedData =
       evaluateLayout<int>(dataLayout, getDataValueFn4D(data));
 
+  ConvPacking packing{dataType, /*padding=*/0, /*interchangeRows=*/false};
   auto matrixLayout = get2dConvChwFchwFilterDiagonalizedRelation(
-                          filterType, dataType, /*strides=*/{1, 1},
-                          /*padding=*/0, numSlots, /*interchangeRows=*/false)
+                          filterType, packing, /*strides=*/{1, 1}, numSlots)
                           .value();
   std::vector<std::vector<int>> packedMatrix =
       evaluateLayout<int>(matrixLayout, getDataValueFn4D(filter));
 
   RankedTensorType expandedMatrixType =
-      get2dConvChwFchwFilterExpandedType(filterType, dataType, /*padding=*/0,
-                                         /*strides=*/{1, 1},
-                                         /*interchangeRows=*/false);
+      get2dConvChwFchwFilterExpandedType(filterType, packing,
+                                         /*strides=*/{1, 1});
 
   // Expected output: 1x1x3x3
   tensor4d expected = {
@@ -748,9 +748,10 @@ TEST_P(KernelImplementationTest, TestConv2dNchwFchwStride2) {
       evaluateLayout(dataLayout, getDataValueFn4D(data));
 
   SmallVector<int64_t> strides = {2, 2};
+  ConvPacking packing{dataType, /*padding=*/0,
+                      /*interchangeRows=*/std::get<1>(GetParam())};
   auto filterLayout = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, 0, numSlots,
-      /*interchangeRows=*/std::get<1>(GetParam()));
+      filterType, packing, strides, numSlots);
   ASSERT_TRUE(succeeded(filterLayout));
   std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
       [&](const std::vector<int64_t>& domainPoint) -> int {
@@ -759,9 +760,8 @@ TEST_P(KernelImplementationTest, TestConv2dNchwFchwStride2) {
   };
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
-  auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
-      filterType, dataType, 0, strides,
-      /*interchangeRows=*/std::get<1>(GetParam()));
+  auto expandedFilterShape =
+      get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
 
   // The expected result is a 1x4x2x2:
   tensor4d expected = {{{{40, 72}, {168, 200}},
@@ -818,9 +818,10 @@ TEST_P(KernelImplementationTest, TestConv1dCwFcwStride2) {
       evaluateLayout(dataLayout, getDataValueFn3D(data));
 
   int64_t stride = 2;
+  ConvPacking packing{dataType, /*padding=*/0,
+                      /*interchangeRows=*/std::get<1>(GetParam())};
   auto filterLayout = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, dataType, stride, 0, numSlots,
-      /*interchangeRows=*/std::get<1>(GetParam()));
+      filterType, packing, stride, numSlots);
   ASSERT_TRUE(succeeded(filterLayout));
   std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
       [&](const std::vector<int64_t>& domainPoint) -> int {
@@ -828,9 +829,8 @@ TEST_P(KernelImplementationTest, TestConv1dCwFcwStride2) {
   };
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
-  auto expandedFilterShape = get1dConvCwFcwFilterExpandedType(
-      filterType, dataType, stride, 0,
-      /*interchangeRows=*/std::get<1>(GetParam()));
+  auto expandedFilterShape =
+      get1dConvCwFcwFilterExpandedType(filterType, packing, stride);
 
   // 1x2x2 output
   tensor3d expected = {{{55, 87}, {44, 68}}};
@@ -922,9 +922,9 @@ void checkGapPaddedConv1dCwFcw(int64_t outputChannels, int64_t inputChannels,
   std::vector<std::vector<int>> packedData =
       evaluateLayout(dataLayout, getDataValueFn3D(data));
 
+  ConvPacking packing{dataType, /*padding=*/0, /*interchangeRows=*/true};
   auto filterLayout = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, dataType, stride, /*padding=*/0, numSlots,
-      /*interchangeRows=*/true);
+      filterType, packing, stride, numSlots);
   ASSERT_TRUE(succeeded(filterLayout));
   std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
       [&](const std::vector<int64_t>& domainPoint) -> int {
@@ -932,8 +932,8 @@ void checkGapPaddedConv1dCwFcw(int64_t outputChannels, int64_t inputChannels,
   };
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
-  auto expandedFilterShape = get1dConvCwFcwFilterExpandedType(
-      filterType, dataType, stride, /*padding=*/0, /*interchangeRows=*/true);
+  auto expandedFilterShape =
+      get1dConvCwFcwFilterExpandedType(filterType, packing, stride);
 
   auto dag = implementHaleviShoup(
       LiteralValue(packedData[0]), LiteralValue(packedFilter),
@@ -1014,12 +1014,12 @@ TEST(KernelImplementationTest, TestConv1dCwFcwAbsorbedPackingWidth) {
   // Row-major data: the matrix columns are logical data indices, so the
   // expanded Toeplitz width is the width the layout was built with.
   auto rowMajorLayout = getRowMajorLayoutRelation(dataType, numSlots);
+  ConvPacking packing{dataType, /*padding=*/0, interchangeRows};
   auto rowMajorFilter = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, dataType, stride, 0, numSlots, interchangeRows);
+      filterType, packing, stride, numSlots);
   ASSERT_TRUE(succeeded(rowMajorFilter));
   auto expandedType =
-      get1dConvCwFcwFilterExpandedType(filterType, dataType, stride, 0,
-                                       /*interchangeRows=*/interchangeRows);
+      get1dConvCwFcwFilterExpandedType(filterType, packing, stride);
   EXPECT_EQ(runKernel(evaluateLayout(rowMajorLayout, getDataValueFn3D(data)),
                       rowMajorFilter.value(), expandedType.getShape()),
             expected);
@@ -1032,17 +1032,20 @@ TEST(KernelImplementationTest, TestConv1dCwFcwAbsorbedPackingWidth) {
           "0 <= w <= 5 and slot = 12c + 2w }")
           .value();
   auto columnPermutation =
-      get1dConvDataColumnPermutation(dataType, gappedLayout, /*padding=*/0);
+      get1dConvDataColumnPermutation(packing, gappedLayout);
   ASSERT_TRUE(succeeded(columnPermutation));
   auto representative =
       getDiagonalColumnRepresentative(columnPermutation.value(), numSlots);
   ASSERT_TRUE(succeeded(representative));
 
+  // Absorbing is recorded on the packing, exactly as LayoutPropagation does,
+  // so the width the kernel folds over comes from the production helper.
+  ConvPacking absorbed = packing;
+  absorbed.absorbedMatrixWidth = numSlots;
   auto absorbedFilter = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, dataType, stride, 0, numSlots, interchangeRows,
-      &representative.value());
+      filterType, absorbed, stride, numSlots, &representative.value());
   ASSERT_TRUE(succeeded(absorbedFilter));
-  SmallVector<int64_t> absorbedShape = {expandedType.getDimSize(0), numSlots};
+  std::vector<int64_t> absorbedShape = absorbed.layoutMatrixShape(expandedType);
   // The gap packing leaves the top slots empty, so state the ciphertext shape
   // rather than letting it come from the relation's tightest slot bound.
   std::vector<std::vector<int>> gappedData = evaluateLayout<int>(
@@ -1076,8 +1079,9 @@ void checkPaddedConv1dCwFcw(int64_t padding, const tensor3d& expected,
   std::vector<std::vector<int>> packedData =
       evaluateLayout(dataLayout, getDataValueFn3D(data));
 
+  ConvPacking packing{dataType, padding, interchangeRows};
   auto filterLayout = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, dataType, stride, padding, numSlots, interchangeRows);
+      filterType, packing, stride, numSlots);
   ASSERT_TRUE(succeeded(filterLayout));
   std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
       [&](const std::vector<int64_t>& domainPoint) -> int {
@@ -1088,8 +1092,8 @@ void checkPaddedConv1dCwFcw(int64_t padding, const tensor3d& expected,
   // The matrix shape must be derived the same way the filter was diagonalized,
   // i.e. against the unpadded data type with padding = p: implementHaleviShoup
   // sizes the squat-diagonal collapse from nextPowerOfTwo of these dims.
-  auto expandedFilterShape = get1dConvCwFcwFilterExpandedType(
-      filterType, dataType, stride, padding, interchangeRows);
+  auto expandedFilterShape =
+      get1dConvCwFcwFilterExpandedType(filterType, packing, stride);
 
   auto dag = implementHaleviShoup(
       LiteralValue(packedData[0]), LiteralValue(packedFilter),
@@ -1157,8 +1161,9 @@ void checkPaddedConv2dChwFchw(int64_t stride, int64_t filterSize,
   std::vector<std::vector<int>> packedData =
       evaluateLayout(dataLayout, getDataValueFn4D(data));
 
+  ConvPacking packing{dataType, padding, interchangeRows};
   auto filterLayout = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, padding, numSlots, interchangeRows);
+      filterType, packing, strides, numSlots);
   ASSERT_TRUE(succeeded(filterLayout));
   std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
       [&](const std::vector<int64_t>& domainPoint) -> int {
@@ -1171,8 +1176,7 @@ void checkPaddedConv2dChwFchw(int64_t stride, int64_t filterSize,
   // i.e. against the unpadded data type with padding = p: implementHaleviShoup
   // sizes the squat-diagonal collapse from nextPowerOfTwo of these dims.
   auto expandedFilterShape =
-      get2dConvChwFchwFilterExpandedType(filterType, dataType, padding, strides,
-                                         /*interchangeRows=*/interchangeRows);
+      get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
 
   auto dag = implementHaleviShoup(
       LiteralValue(packedData[0]), LiteralValue(packedFilter),
@@ -1251,9 +1255,9 @@ void checkGapPaddedConv2dChwFchw(int64_t outputChannels, int64_t inputChannels,
   std::vector<std::vector<int>> packedData =
       evaluateLayout(dataLayout, getDataValueFn4D(data));
 
+  ConvPacking packing{dataType, /*padding=*/0, /*interchangeRows=*/true};
   auto filterLayout = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, /*padding=*/0, numSlots,
-      /*interchangeRows=*/true);
+      filterType, packing, strides, numSlots);
   ASSERT_TRUE(succeeded(filterLayout));
   std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
       [&](const std::vector<int64_t>& domainPoint) -> int {
@@ -1262,8 +1266,8 @@ void checkGapPaddedConv2dChwFchw(int64_t outputChannels, int64_t inputChannels,
   };
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
-  auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
-      filterType, dataType, /*padding=*/0, strides, /*interchangeRows=*/true);
+  auto expandedFilterShape =
+      get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
 
   auto dag = implementHaleviShoup(
       LiteralValue(packedData[0]), LiteralValue(packedFilter),
@@ -1327,8 +1331,9 @@ TEST_P(KernelImplementationTest,
       evaluateLayout(dataLayout, getDataValueFn4D(data));
 
   SmallVector<int64_t> strides = {2, 2};
+  ConvPacking packing{dataType, /*padding=*/0, /*interchangeRows=*/true};
   auto filterLayout = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, 0, numSlots, /*interchangeRows=*/true);
+      filterType, packing, strides, numSlots);
   ASSERT_TRUE(succeeded(filterLayout));
   std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
       [&](const std::vector<int64_t>& domainPoint) -> int {
@@ -1338,8 +1343,7 @@ TEST_P(KernelImplementationTest,
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
   auto expandedFilterShape =
-      get2dConvChwFchwFilterExpandedType(filterType, dataType, 0, strides,
-                                         /*interchangeRows=*/true);
+      get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
 
   // The expected result is a 1x4x2x2:
   tensor4d expected = {{{{40, 72}, {168, 200}},
@@ -1419,9 +1423,9 @@ TEST_P(KernelImplementationTest, TestConv2dNchwFchwOrionFigure4) {
 
   SmallVector<int64_t> strides = {1, 1};
   int64_t padding = 1;
+  ConvPacking packing{dataType, padding, /*interchangeRows=*/false};
   auto filterLayout = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, padding, numSlots,
-      /*interchangeRows=*/false);
+      filterType, packing, strides, numSlots);
   ASSERT_TRUE(succeeded(filterLayout));
   std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
       [&](const std::vector<int64_t>& domainPoint) -> int {
@@ -1431,8 +1435,8 @@ TEST_P(KernelImplementationTest, TestConv2dNchwFchwOrionFigure4) {
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
 
-  auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
-      filterType, dataType, padding, strides, /*interchangeRows=*/false);
+  auto expandedFilterShape =
+      get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
 
   // Compute expected 1x2x3x3 2d conv with padding 1
   tensor4d expected(
@@ -1532,9 +1536,10 @@ TEST_P(KernelImplementationTest, TestConv2dNchwFchwStride2MultiInput) {
       evaluateLayout(dataLayout, getDataValueFn4D(data));
 
   SmallVector<int64_t> strides = {2, 2};
+  ConvPacking packing{dataType, /*padding=*/0,
+                      /*interchangeRows=*/std::get<1>(GetParam())};
   auto filterLayout = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, 0, numSlots,
-      /*interchangeRows=*/std::get<1>(GetParam()));
+      filterType, packing, strides, numSlots);
   ASSERT_TRUE(succeeded(filterLayout));
   std::function<int(const std::vector<int64_t>&)> getFilterValueFn =
       [&](const std::vector<int64_t>& domainPoint) -> int {
@@ -1543,9 +1548,8 @@ TEST_P(KernelImplementationTest, TestConv2dNchwFchwStride2MultiInput) {
   };
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
-  auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
-      filterType, dataType, 0, strides,
-      /*interchangeRows=*/std::get<1>(GetParam()));
+  auto expandedFilterShape =
+      get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
 
   // Compute expected 1x4x3x3 sum pooling
   tensor4d expected(

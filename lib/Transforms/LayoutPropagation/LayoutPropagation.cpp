@@ -305,8 +305,8 @@ std::optional<IntegerRelation> tryAbsorbConv1dDataPacking(
   if (!filterConstantOp || !isa<ElementsAttr>(filterConstantOp.getValue())) {
     return std::nullopt;
   }
-  auto columnPermutation = get1dConvDataColumnPermutation(
-      packing.matrixDataType, dataLayout.getIntegerRelation(), packing.padding);
+  auto columnPermutation =
+      get1dConvDataColumnPermutation(packing, dataLayout.getIntegerRelation());
   if (failed(columnPermutation)) return std::nullopt;
   // A replicated packing holds each element in several slots. Reduce it to one
   // representative slot per element, so the column substitution is a function.
@@ -1165,8 +1165,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
   // into a larger matrix and then diagonalizing.
   LayoutAttr filterLayout = getComposedLayoutAttr(filter);
   auto convRelation = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, packing.matrixDataType, stride, packing.padding, minSlotCount,
-      packing.interchangeRows,
+      filterType, packing, stride, minSlotCount,
       plan.columnPermutation ? &*plan.columnPermutation : nullptr);
   if (failed(convRelation)) {
     return failure();
@@ -1328,9 +1327,8 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   if (auto assignOp = filter.getDefiningOp<AssignLayoutOp>()) {
     originalFilter = assignOp.getValue();
   }
-  auto maybeRels = get2dConvChwFchwFilterAsSequence(
-      filterType, packing.matrixDataType, strides, packing.padding,
-      minSlotCount, packing.interchangeRows);
+  auto maybeRels = get2dConvChwFchwFilterAsSequence(filterType, packing,
+                                                    strides, minSlotCount);
   if (failed(maybeRels)) {
     return failure();
   }

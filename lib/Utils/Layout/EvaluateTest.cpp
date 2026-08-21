@@ -194,8 +194,9 @@ TEST(EvaluateTest, EvaluateLayoutFor2DConvChwFchw) {
       RankedTensorType::get({1, 2, 3, 3}, IndexType::get(&context));
   SmallVector<int64_t> strides = {1, 1};
   int64_t padding = 1;
+  ConvPacking packing{dataType, padding};
   IntegerRelation rel =
-      get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
+      get2dConvChwFchwFilterRelation(filterType, packing, strides);
 
   std::vector<std::vector<std::vector<std::vector<int>>>> filter = {
       {{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}}, {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}}},
@@ -241,8 +242,9 @@ TEST(EvaluateTest, EvaluateLayoutFor2DConvChwFchwNoPadding) {
       RankedTensorType::get({1, 2, 4, 4}, IndexType::get(&context));
   SmallVector<int64_t> strides = {2, 2};
   int64_t padding = 0;
+  ConvPacking packing{dataType, padding};
   IntegerRelation rel =
-      get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
+      get2dConvChwFchwFilterRelation(filterType, packing, strides);
 
   std::vector<std::vector<std::vector<std::vector<int>>>> filter = {
       {{{1, 2}, {3, 4}}, {{5, 6}, {7, 8}}},
@@ -286,8 +288,9 @@ TEST(EvaluateTest, EvaluateLayoutFor1DConvCwFcwNoPadding) {
       RankedTensorType::get({1, 2, 4}, IndexType::get(&context));
   int64_t stride = 2;
   int64_t padding = 0;
+  ConvPacking packing{dataType, padding};
   IntegerRelation rel =
-      get1dConvCwFcwFilterRelation(filterType, dataType, stride, padding);
+      get1dConvCwFcwFilterRelation(filterType, packing, stride);
 
   std::vector<std::vector<std::vector<int>>> filter = {{{1, 2}, {3, 4}},
                                                        {{5, 6}, {7, 8}}};
@@ -317,8 +320,10 @@ TEST(EvaluateTest, EvaluateLayoutFor2DConvChwFchwNoPaddingDiagonalized) {
       RankedTensorType::get({1, 1, 4, 4}, IndexType::get(&context));
   SmallVector<int64_t> strides = {2, 2};
   int64_t padding = 0;
-  auto rel = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, padding, 16, false);
+  ConvPacking flat{dataType, padding, /*interchangeRows=*/false};
+  ConvPacking shuffled{dataType, padding, /*interchangeRows=*/true};
+  auto rel =
+      get2dConvChwFchwFilterDiagonalizedRelation(filterType, flat, strides, 16);
   ASSERT_TRUE(succeeded(rel));
 
   std::vector<std::vector<std::vector<std::vector<int>>>> filter = {
@@ -356,7 +361,7 @@ TEST(EvaluateTest, EvaluateLayoutFor2DConvChwFchwNoPaddingDiagonalized) {
 
   // Now test minimal non zero diagonals
   auto relOptimized = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, padding, 16, true);
+      filterType, shuffled, strides, 16);
   ASSERT_TRUE(succeeded(relOptimized));
   auto resultOptimized = evaluateLayout(relOptimized.value(), getValueFn);
 
@@ -405,8 +410,9 @@ TEST(EvaluateTest, EvaluateLayoutFor2DConvChwFchwAsSequence) {
 
   // Test 1: No Interchange
   {
-    auto maybeRels = get2dConvChwFchwFilterAsSequence(
-        filterType, dataType, strides, padding, minSlotCount, false);
+    ConvPacking packing{dataType, padding, /*interchangeRows=*/false};
+    auto maybeRels = get2dConvChwFchwFilterAsSequence(filterType, packing,
+                                                      strides, minSlotCount);
     ASSERT_TRUE(succeeded(maybeRels));
     auto rels = maybeRels.value();
     ASSERT_EQ(rels.size(), 4);
@@ -439,8 +445,9 @@ TEST(EvaluateTest, EvaluateLayoutFor2DConvChwFchwAsSequence) {
 
   // Test 2: With Interchange
   {
-    auto maybeRels = get2dConvChwFchwFilterAsSequence(
-        filterType, dataType, strides, padding, minSlotCount, true);
+    ConvPacking packing{dataType, padding, /*interchangeRows=*/true};
+    auto maybeRels = get2dConvChwFchwFilterAsSequence(filterType, packing,
+                                                      strides, minSlotCount);
     ASSERT_TRUE(succeeded(maybeRels));
     auto rels = maybeRels.value();
     ASSERT_EQ(rels.size(), 5);
@@ -480,8 +487,9 @@ TEST(EvaluateTest, EvaluateLayoutFor1DConvCwFcwNoPaddingDiagonalized) {
       RankedTensorType::get({1, 1, 4}, IndexType::get(&context));
   int64_t stride = 1;
   int64_t padding = 0;
-  auto rel = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, dataType, stride, padding, 16, false);
+  ConvPacking packing{dataType, padding, /*interchangeRows=*/false};
+  auto rel =
+      get1dConvCwFcwFilterDiagonalizedRelation(filterType, packing, stride, 16);
   ASSERT_TRUE(succeeded(rel));
 
   std::vector<std::vector<std::vector<int>>> filter = {{{1, 2}},   // f=0
@@ -643,14 +651,13 @@ void checkConv2dFilterRelationsEquivalence(MLIRContext& context,
   SmallVector<int64_t> strides = {stride, stride};
   int64_t padding = 0;
 
+  ConvPacking packing{dataType, padding, /*interchangeRows=*/true};
   auto singleRel = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, padding, minSlotCount,
-      /*interchangeRows=*/true);
+      filterType, packing, strides, minSlotCount);
   ASSERT_TRUE(succeeded(singleRel));
 
-  auto sequenceRels = get2dConvChwFchwFilterAsSequence(
-      filterType, dataType, strides, padding, minSlotCount,
-      /*interchangeRows=*/true);
+  auto sequenceRels = get2dConvChwFchwFilterAsSequence(filterType, packing,
+                                                       strides, minSlotCount);
   ASSERT_TRUE(succeeded(sequenceRels));
   auto rels = sequenceRels.value();
   ASSERT_THAT(rels.size(), Eq(5));

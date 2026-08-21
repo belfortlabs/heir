@@ -343,8 +343,9 @@ TEST(ConvolutionTest, ConvChwFchwFilterRelation) {
       RankedTensorType::get({1, 2, 3, 3}, IndexType::get(&context));
   SmallVector<int64_t> strides = {1, 1};
   int64_t padding = 1;
+  ConvPacking packing{dataType, padding};
   IntegerRelation rel =
-      get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
+      get2dConvChwFchwFilterRelation(filterType, packing, strides);
 
   auto ctBound = rel.getConstantBound64(BoundType::UB,
                                         rel.getVarKindOffset(VarKind::Range));
@@ -367,8 +368,9 @@ TEST(ConvolutionTest, Conv1DCwFcwFilterRelation) {
       RankedTensorType::get({1, 2, 5}, IndexType::get(&context));
   int64_t stride = 1;
   int64_t padding = 1;
+  ConvPacking packing{dataType, padding};
   IntegerRelation rel =
-      get1dConvCwFcwFilterRelation(filterType, dataType, stride, padding);
+      get1dConvCwFcwFilterRelation(filterType, packing, stride);
 
   // One filter contributes Datasize-Kernelsize+1 +2 *padding = 5-3+1 +2 = 5
   // rows. Two filters means the upper bound is 2*3-1 = 5
@@ -393,8 +395,9 @@ TEST(ConvolutionTest, Conv1DCwFcwNoPaddingFilterRelation) {
       RankedTensorType::get({1, 2, 4}, IndexType::get(&context));
   int64_t stride = 2;
   int64_t padding = 0;
+  ConvPacking packing{dataType, padding};
   IntegerRelation rel =
-      get1dConvCwFcwFilterRelation(filterType, dataType, stride, padding);
+      get1dConvCwFcwFilterRelation(filterType, packing, stride);
 
   auto ctBound = rel.getConstantBound64(BoundType::UB,
                                         rel.getVarKindOffset(VarKind::Range));
@@ -418,8 +421,9 @@ TEST(ConvolutionTest, Conv2DChwFchwNoPaddingFilterRelation) {
       RankedTensorType::get({1, 2, 4, 4}, IndexType::get(&context));
   SmallVector<int64_t> strides = {2, 2};
   int64_t padding = 0;
+  ConvPacking packing{dataType, padding};
   IntegerRelation rel =
-      get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
+      get2dConvChwFchwFilterRelation(filterType, packing, strides);
 
   auto ctBound = rel.getConstantBound64(BoundType::UB,
                                         rel.getVarKindOffset(VarKind::Range));
@@ -448,8 +452,9 @@ TEST(ConvolutionTest, Conv2DChwFchwFilterRelationUnequalStrides) {
       RankedTensorType::get({1, 2, 5, 5}, IndexType::get(&context));
   SmallVector<int64_t> strides = {2, 3};
   int64_t padding = 0;
+  ConvPacking packing{dataType, padding};
   IntegerRelation rel =
-      get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
+      get2dConvChwFchwFilterRelation(filterType, packing, strides);
 
   auto ctBound = rel.getConstantBound64(BoundType::UB,
                                         rel.getVarKindOffset(VarKind::Range));
@@ -479,8 +484,9 @@ TEST(ConvolutionTest, Conv2DChwFchwFilterRelationPadding) {
       RankedTensorType::get({1, 2, 3, 3}, IndexType::get(&context));
   SmallVector<int64_t> strides = {2, 2};
   int64_t padding = 1;
+  ConvPacking packing{dataType, padding};
   IntegerRelation rel =
-      get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
+      get2dConvChwFchwFilterRelation(filterType, packing, strides);
 
   auto ctBound = rel.getConstantBound64(BoundType::UB,
                                         rel.getVarKindOffset(VarKind::Range));
@@ -649,8 +655,8 @@ TEST(ConvolutionTest, TestMultiChannelMultiRow) {
   SmallVector<int64_t> strides = {2, 2};
   int64_t padding = 0;
 
-  auto rel =
-      get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
+  ConvPacking packing{dataType, padding};
+  auto rel = get2dConvChwFchwFilterRelation(filterType, packing, strides);
 
   // Number of ciphertexts is number of elements of a single result (14*14) *
   // num channels = 196 * 4 = 784.
@@ -689,8 +695,8 @@ TEST(ConvolutionTest, TestConv1dMultiChannelMultiRow) {
   int64_t stride = 2;
   int64_t padding = 0;
 
-  auto rel =
-      get1dConvCwFcwFilterRelation(filterType, dataType, stride, padding);
+  ConvPacking packing{dataType, padding};
+  auto rel = get1dConvCwFcwFilterRelation(filterType, packing, stride);
 
   // Number of ciphertexts is number of elements of a single result (14) *
   // num channels = 14 * 4 = 56.
@@ -730,8 +736,9 @@ TEST(ConvolutionTest, TestMultiChannelMultiRowDiagonalized) {
   int64_t padding = 0;
   int64_t minSlotCount = 4096;
 
+  ConvPacking packing{dataType, padding, /*interchangeRows=*/false};
   auto maybeRel = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, padding, minSlotCount, false);
+      filterType, packing, strides, minSlotCount);
   ASSERT_TRUE(succeeded(maybeRel));
   IntegerRelation rel = maybeRel.value();
 
@@ -772,8 +779,9 @@ TEST(ConvolutionTest, TestMultiChannelMultiRowDiagonalizedInterchanged) {
   int64_t padding = 0;
   int64_t minSlotCount = 4096;
 
+  ConvPacking packing{dataType, padding, /*interchangeRows=*/true};
   auto maybeRel = get2dConvChwFchwFilterDiagonalizedRelation(
-      filterType, dataType, strides, padding, minSlotCount, true);
+      filterType, packing, strides, minSlotCount);
   ASSERT_TRUE(succeeded(maybeRel));
   IntegerRelation rel = maybeRel.value();
 
@@ -814,8 +822,9 @@ TEST(ConvolutionTest, TestConv1dCwFcwDiagonalizedRowInterchange) {
   int64_t minSlotCount = 8;
 
   auto distinctDiagonals = [&](bool interchangeRows) {
+    ConvPacking packing{dataType, padding, interchangeRows};
     auto maybeRel = get1dConvCwFcwFilterDiagonalizedRelation(
-        filterType, dataType, stride, padding, minSlotCount, interchangeRows);
+        filterType, packing, stride, minSlotCount);
     EXPECT_TRUE(succeeded(maybeRel));
     PointPairCollector collector(/*domainDims=*/3, /*rangeDims=*/2);
     enumeratePoints(maybeRel.value(), collector);
@@ -929,9 +938,9 @@ void checkConv1dCwFcwDiagonalized(MLIRContext& context, int64_t outputChannels,
   RankedTensorType dataType = RankedTensorType::get(
       {1, inputChannels, dataWidth}, IndexType::get(&context));
 
+  ConvPacking packing{dataType, padding, /*interchangeRows=*/false};
   auto expandedType =
-      get1dConvCwFcwFilterExpandedType(filterType, dataType, stride, padding,
-                                       /*interchangeRows=*/false);
+      get1dConvCwFcwFilterExpandedType(filterType, packing, stride);
   auto expected =
       reference1dConvCwFcwMatrix(filter, dataWidth, stride, padding);
   int64_t rows = expandedType.getDimSize(0);
@@ -945,7 +954,7 @@ void checkConv1dCwFcwDiagonalized(MLIRContext& context, int64_t outputChannels,
   // own derived bounds are tighter than the expanded type whenever a trailing
   // data column is never touched by any window.
   auto expandedRelation =
-      get1dConvCwFcwFilterRelation(filterType, dataType, stride, padding);
+      get1dConvCwFcwFilterRelation(filterType, packing, stride);
   EXPECT_EQ(evaluateLayout(expandedRelation, getFilterValueFn,
                            SmallVector<int64_t>{rows, cols}),
             expected);
@@ -964,8 +973,7 @@ void checkConv1dCwFcwDiagonalized(MLIRContext& context, int64_t outputChannels,
 
   // ... and so must the diagonalized relation that production actually uses.
   auto maybeRel = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, dataType, stride, padding, ciphertextSize,
-      /*interchangeRows=*/false);
+      filterType, packing, stride, ciphertextSize);
   ASSERT_TRUE(succeeded(maybeRel));
   auto packed = evaluateLayout(maybeRel.value(), getFilterValueFn);
   EXPECT_EQ(undiagonalizeMatrix(packed, rows, cols),
@@ -1024,8 +1032,9 @@ void checkConv2dChwFchwDiagonalized(
       {1, inputChannels, dataH, dataW}, IndexType::get(&context));
   SmallVector<int64_t> strides = {stride, stride};
 
-  auto expandedType = get2dConvChwFchwFilterExpandedType(
-      filterType, dataType, padding, strides, interchangeRows);
+  ConvPacking packing{dataType, padding, interchangeRows};
+  auto expandedType =
+      get2dConvChwFchwFilterExpandedType(filterType, packing, strides);
   auto expected =
       reference2dConvChwFchwMatrix(filter, dataH, dataW, stride, padding);
   int64_t rows = expandedType.getDimSize(0);
@@ -1040,7 +1049,7 @@ void checkConv2dChwFchwDiagonalized(
   // The non-diagonalized relation must agree with the reference Toeplitz
   // matrix. It is not interchanged, so it has no padding rows.
   auto expandedRelation =
-      get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
+      get2dConvChwFchwFilterRelation(filterType, packing, strides);
   EXPECT_EQ(evaluateLayout(expandedRelation, getFilterValueFn,
                            SmallVector<int64_t>{referenceRows, cols}),
             expected);
@@ -1073,8 +1082,8 @@ void checkConv2dChwFchwDiagonalized(
     }
   }
 
-  auto maybeRels = get2dConvChwFchwFilterAsSequence(
-      filterType, dataType, strides, padding, ciphertextSize, interchangeRows);
+  auto maybeRels = get2dConvChwFchwFilterAsSequence(filterType, packing,
+                                                    strides, ciphertextSize);
   ASSERT_TRUE(succeeded(maybeRels));
   IntegerRelation composed = maybeRels->front();
   for (const auto& rel : llvm::drop_begin(maybeRels.value())) {
@@ -1181,8 +1190,9 @@ TEST(ConvolutionTest, TestConv1dDataColumnPermutation) {
   RankedTensorType dataType =
       RankedTensorType::get({1, 2, 4}, IndexType::get(&context));
 
-  auto permutation = get1dConvDataColumnPermutation(
-      dataType, gappedDataLayout(/*low=*/0), /*padding=*/0);
+  ConvPacking packing{dataType, /*padding=*/0};
+  auto permutation =
+      get1dConvDataColumnPermutation(packing, gappedDataLayout(/*low=*/0));
   ASSERT_TRUE(succeeded(permutation));
 
   // Column j reads slot 2j: the matrix consumes the gapped packing in place.
@@ -1200,8 +1210,9 @@ TEST(ConvolutionTest, TestConv1dDataColumnPermutationFoldedPadding) {
   RankedTensorType matrixDataType =
       RankedTensorType::get({1, 2, 4}, IndexType::get(&context));
 
-  auto permutation = get1dConvDataColumnPermutation(
-      matrixDataType, gappedDataLayout(/*low=*/1), /*padding=*/1);
+  ConvPacking packing{matrixDataType, /*padding=*/1};
+  auto permutation =
+      get1dConvDataColumnPermutation(packing, gappedDataLayout(/*low=*/1));
   ASSERT_TRUE(succeeded(permutation));
 
   std::vector<std::pair<int64_t, int64_t>> expected;
@@ -1228,8 +1239,9 @@ TEST(ConvolutionTest, TestConv1dDataColumnPermutationRejectsInteriorHole) {
           "{ [n, c, w] -> [ct, slot] : n = 0 and ct = 0 and 0 <= c <= 1 and "
           "0 <= w <= 3 and w mod 3 = 0 and slot = 2 * (4c + w) }")
           .value();
-  auto unchecked = get1dConvDataColumnPermutation(matrixDataType, unfoldedHole,
-                                                  /*padding=*/0);
+  ConvPacking unfoldedPacking{matrixDataType, /*padding=*/0};
+  auto unchecked =
+      get1dConvDataColumnPermutation(unfoldedPacking, unfoldedHole);
   ASSERT_TRUE(succeeded(unchecked));
   auto mapped = getMappedConvMatrixColumns(unchecked.value());
   EXPECT_EQ(mapped.size(), 4u);
@@ -1242,8 +1254,9 @@ TEST(ConvolutionTest, TestConv1dDataColumnPermutationRejectsInteriorHole) {
           "{ [n, c, w] -> [ct, slot] : n = 0 and ct = 0 and 0 <= c <= 1 and "
           "1 <= w <= 4 and (w - 1) mod 3 = 0 and slot = 2 * (4c + w - 1) }")
           .value();
-  EXPECT_TRUE(failed(get1dConvDataColumnPermutation(matrixDataType, foldedHole,
-                                                    /*padding=*/1)));
+  ConvPacking foldedPacking{matrixDataType, /*padding=*/1};
+  EXPECT_TRUE(
+      failed(get1dConvDataColumnPermutation(foldedPacking, foldedHole)));
 }
 
 TEST(ConvolutionTest, TestConv1dCwFcwDiagonalizedAbsorbsGappedPacking) {
@@ -1281,13 +1294,13 @@ TEST(ConvolutionTest, TestConv1dCwFcwDiagonalizedAbsorbsGappedPacking) {
   RankedTensorType matrixDataType = RankedTensorType::get(
       {1, inputChannels, dataWidth}, IndexType::get(&context));
 
+  ConvPacking packing{matrixDataType, padding, /*interchangeRows=*/false};
   auto permutation = get1dConvDataColumnPermutation(
-      matrixDataType, gappedDataLayout(/*low=*/padding), padding);
+      packing, gappedDataLayout(/*low=*/padding));
   ASSERT_TRUE(succeeded(permutation));
 
   auto maybeRel = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, matrixDataType, stride, padding, ciphertextSize,
-      /*interchangeRows=*/false, &permutation.value());
+      filterType, packing, stride, ciphertextSize, &permutation.value());
   ASSERT_TRUE(succeeded(maybeRel));
 
   auto expected =
@@ -1313,8 +1326,9 @@ TEST(ConvolutionTest, TestConv1dDataColumnPermutationRejectsWrongPadding) {
   RankedTensorType matrixDataType =
       RankedTensorType::get({1, 2, 4}, IndexType::get(&context));
 
-  EXPECT_TRUE(failed(get1dConvDataColumnPermutation(
-      matrixDataType, gappedDataLayout(/*low=*/1), /*padding=*/2)));
+  ConvPacking packing{matrixDataType, /*padding=*/2};
+  EXPECT_TRUE(failed(
+      get1dConvDataColumnPermutation(packing, gappedDataLayout(/*low=*/1))));
 }
 
 TEST(ConvolutionTest, FoldConvSpatialPadding) {

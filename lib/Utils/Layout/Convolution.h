@@ -99,9 +99,10 @@ presburger::IntegerRelation get1dConvFilterRelation(RankedTensorType filterType,
                                                     int64_t stride,
                                                     int64_t padding);
 
-RankedTensorType get2dConvFilterExpandedType(
-    RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
-    ArrayRef<int64_t> strides = {1, 1});
+RankedTensorType get2dConvFilterExpandedType(RankedTensorType filterType,
+                                             RankedTensorType dataType,
+                                             int64_t padding,
+                                             ArrayRef<int64_t> strides);
 
 RankedTensorType get1dConvFilterExpandedType(RankedTensorType filterType,
                                              RankedTensorType dataType,
@@ -122,9 +123,11 @@ FailureOr<presburger::IntegerRelation> getConvFilterDiagonalizedRelation(
 // diagonalizing the matrix, this simply returns the expanded data matrix. The
 // filter type is assumed to be 4-D with dimensions (f, c, h, w) and the data
 // type is assumed to be 3-D within a 4-D tensor of dimensions (1, c, h, w).
+// Reads only the operand and its padding from `packing`; the rows are not
+// interchanged here.
 presburger::IntegerRelation get2dConvChwFchwFilterRelation(
-    RankedTensorType filterType, RankedTensorType dataType,
-    ArrayRef<int64_t> strides, int64_t padding);
+    RankedTensorType filterType, const ConvPacking& packing,
+    ArrayRef<int64_t> strides);
 
 // Returns an IntegerRelation that expands a multichannel filter used
 // in a 1-D convolution into a 2-D Toeplitz matrix such that the convolution is
@@ -133,9 +136,10 @@ presburger::IntegerRelation get2dConvChwFchwFilterRelation(
 // diagonalizing the matrix, this simply returns the expanded data matrix. The
 // filter type is assumed to be 3-D with dimensions (f, c, w) and the data
 // type is assumed to be 2-D with dimensions (1, c, w).
+// Reads only the operand and its padding from `packing`; the rows are not
+// interchanged here.
 presburger::IntegerRelation get1dConvCwFcwFilterRelation(
-    RankedTensorType filterType, RankedTensorType dataType, int64_t stride,
-    int64_t padding);
+    RankedTensorType filterType, const ConvPacking& packing, int64_t stride);
 
 // `interchangeRows` must match the flag the filter layout was built with: an
 // interchanged (pixel-shuffled) layout reserves whole channel blocks, so its
@@ -143,22 +147,15 @@ presburger::IntegerRelation get1dConvCwFcwFilterRelation(
 // block. The Halevi-Shoup kernel is sized from this type, so it has to agree
 // with the layout relation.
 //
-// No function in this family defaults `interchangeRows`. A default would let a
-// caller size a matrix one way and lay out its rows the other way, and the two
-// only disagree once the channel count stops dividing the block, so the tests
-// that use small channel counts would not catch it. See ConvPacking, which
-// carries the flag beside the operand it was decided against.
+// The flag travels on `packing`, beside the operand it was decided against, so
+// that one value cannot size a matrix one way and lay out its rows the other.
 RankedTensorType get1dConvCwFcwFilterExpandedType(RankedTensorType filterType,
-                                                  RankedTensorType dataType,
-                                                  int64_t stride,
-                                                  int64_t padding,
-                                                  bool interchangeRows);
+                                                  const ConvPacking& packing,
+                                                  int64_t stride);
 
 RankedTensorType get2dConvChwFchwFilterExpandedType(RankedTensorType filterType,
-                                                    RankedTensorType dataType,
-                                                    int64_t padding,
-                                                    ArrayRef<int64_t> strides,
-                                                    bool interchangeRows);
+                                                    const ConvPacking& packing,
+                                                    ArrayRef<int64_t> strides);
 
 // Returns an IntegerRelation that represents a diagonalized 2-D Toeplitz matrix
 // that is used to compute a 1-D multichannel convolution filter such that the
@@ -174,27 +171,27 @@ RankedTensorType get2dConvChwFchwFilterExpandedType(RankedTensorType filterType,
 // getDiagonalColumnRepresentative. A column with no slot is dropped, which is
 // correct exactly when that element is zero.
 FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
-    RankedTensorType filterType, RankedTensorType dataType, int64_t stride,
-    int64_t padding, int64_t minSlotCount, bool interchangeRows,
+    RankedTensorType filterType, const ConvPacking& packing, int64_t stride,
+    int64_t minSlotCount,
     const presburger::IntegerRelation* dataSlotPermutation = nullptr);
 
 // Flattens a 3-D (1, C, W) data layout `[n, c, w] -> [ct, slot]` into the
 // column-space permutation `[j] -> [ct, slot]` with j = c * W + w, as accepted
 // by `get1dConvCwFcwFilterDiagonalizedRelation`'s `dataSlotPermutation`.
 //
-// `matrixDataType` is the operand the Toeplitz matrix is built against, so it
-// fixes W and therefore the column space. `padding` is the padding the matrix
-// carries in its own `padding` parameter. It is nonzero when a `tensor.pad`
-// folded into the conv: the matrix is then built against the unpadded operand
-// while `dataLayout` still indexes the padded value, so column j must read the
-// slot of padded index (c, w + padding).
+// `packing.matrixDataType` is the operand the Toeplitz matrix is built against,
+// so it fixes W and therefore the column space. `packing.padding` is nonzero
+// when a `tensor.pad` folded into the conv: the matrix is then built against
+// the unpadded operand while `dataLayout` still indexes the padded value, so
+// column j must read the slot of padded index (c, w + padding).
 //
 // Fails if the layout does not pack the data into ciphertext zero, and, when
-// `padding` is nonzero, if the shifted window leaves any column without a slot.
-// Every column is real data in that case, so dropping one would drop data.
+// the padding is nonzero, if the shifted window leaves any column without a
+// slot. Every column is real data in that case, so dropping one would drop
+// data.
+// Reads only the operand and its padding from `packing`.
 FailureOr<presburger::IntegerRelation> get1dConvDataColumnPermutation(
-    RankedTensorType matrixDataType,
-    const presburger::IntegerRelation& dataLayout, int64_t padding);
+    const ConvPacking& packing, const presburger::IntegerRelation& dataLayout);
 
 // The columns j = c * W + w that `columnPermutation` gives a slot to read. The
 // diagonal kernel drops any column outside this set from the plaintext matrix,
@@ -208,9 +205,9 @@ llvm::DenseSet<int64_t> getMappedConvMatrixColumns(
 // hangs when generating loops.
 FailureOr<std::vector<presburger::IntegerRelation>>
 get2dConvChwFchwFilterAsSequence(RankedTensorType filterType,
-                                 RankedTensorType dataType,
-                                 ArrayRef<int64_t> strides, int64_t padding,
-                                 int64_t minSlotCount, bool interchangeRows);
+                                 const ConvPacking& packing,
+                                 ArrayRef<int64_t> strides,
+                                 int64_t minSlotCount);
 
 // Returns an IntegerRelation for a row-interchange map that optimizes the
 // diagonal structure of a convolution's Toeplitz matrix.
