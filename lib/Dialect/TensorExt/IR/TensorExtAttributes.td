@@ -85,4 +85,35 @@ def TensorExt_OriginalTypeAttr : TensorExt_Attr<"OriginalType", "original_type">
   let assemblyFormat =  "`<` struct(params) `>`";
 }
 
+def TensorExt_ConvPackingAttr : TensorExt_Attr<"ConvPacking", "conv_packing"> {
+  let summary = "How a convolution's filter matrix is shaped and laid out.";
+  let description = [{
+    A convolution lowers to a plaintext-ciphertext matvec over an expanded
+    Toeplitz matrix. Several choices fix that matrix, and they are made when
+    layouts are assigned but needed again when the kernel is materialized.
+    This attribute carries all of them together, so that both passes read one
+    value instead of re-deriving it from separate scalars.
+
+    * `matrixDataType` is the data operand the Toeplitz matrix is built
+      against. It already accounts for channel padding, and for a `tensor.pad`
+      folded into `padding` below, so a reader needs no further arithmetic.
+    * `padding` is the symmetric spatial zero padding folded out of a
+      `tensor.pad` and into the convolution's own `padding` parameter.
+    * `interchangeRows` says the matrix rows are pixel-shuffled, which reserves
+      whole channel blocks and so changes the matrix shape.
+    * `absorbedMatrixWidth` is the width the filter's diagonal layout was built
+      at, when the data operand's slot packing was absorbed into the matrix
+      column space. The columns are ciphertext slots then, so the width is the
+      ciphertext size rather than the Toeplitz width. Zero means nothing was
+      absorbed, and the Toeplitz width applies.
+  }];
+  let parameters = (ins
+    "::mlir::RankedTensorType":$matrixDataType,
+    "int64_t":$padding,
+    "bool":$interchangeRows,
+    "int64_t":$absorbedMatrixWidth
+  );
+  let genVerifyDecl = 1;
+}
+
 #endif  // LIB_DIALECT_TENSOREXT_IR_TENSOREXTATTRIBUTES_TD_

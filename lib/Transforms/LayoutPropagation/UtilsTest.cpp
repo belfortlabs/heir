@@ -153,64 +153,38 @@ TEST(UtilsTest, TestReduceLayoutManyReductions) {
   EXPECT_TRUE(isRelationEqual(reducedRelation, expectedRelation));
 }
 
-TEST(UtilsTest, TestFoldConvSpatialPadding) {
+TEST(UtilsTest, TestConvPackingRoundTrip) {
   MLIRContext context;
-  Type elementType = IndexType::get(&context);
-
-  // Rank 4: both spatial dims shrink by 2 * padding, (N, C) untouched.
-  auto rank4 = RankedTensorType::get({1, 4, 6, 8}, elementType);
-  auto folded4 = foldConvSpatialPadding(rank4, 1);
-  ASSERT_TRUE(folded4.has_value());
-  EXPECT_EQ(folded4->dataType,
-            RankedTensorType::get({1, 4, 4, 6}, elementType));
-  EXPECT_EQ(folded4->padding, 1);
-
-  // Rank 3: only the width dim is spatial.
-  auto rank3 = RankedTensorType::get({1, 4, 8}, elementType);
-  auto folded3 = foldConvSpatialPadding(rank3, 2);
-  ASSERT_TRUE(folded3.has_value());
-  EXPECT_EQ(folded3->dataType, RankedTensorType::get({1, 4, 4}, elementType));
-
-  // A padding of 0 is a no-op fold, not a rejection.
-  auto unfolded = foldConvSpatialPadding(rank4, 0);
-  ASSERT_TRUE(unfolded.has_value());
-  EXPECT_EQ(unfolded->dataType, rank4);
-}
-
-TEST(UtilsTest, TestFoldConvSpatialPaddingRejectsBadPadding) {
-  MLIRContext context;
-  Type elementType = IndexType::get(&context);
-  auto dataType = RankedTensorType::get({1, 4, 4, 4}, elementType);
-
-  // A negative padding would grow the operand rather than shrink it, and every
-  // resulting extent is still positive, so the emptiness check below does not
-  // catch it.
-  EXPECT_FALSE(foldConvSpatialPadding(dataType, -1).has_value());
-
-  // A padding that consumes a whole spatial dim leaves nothing to convolve.
-  EXPECT_FALSE(foldConvSpatialPadding(dataType, 2).has_value());
-
-  // Ranks the conv kernels do not pack.
-  EXPECT_FALSE(
-      foldConvSpatialPadding(RankedTensorType::get({4, 4}, elementType), 1)
-          .has_value());
-}
-
-TEST(UtilsTest, TestSetConvFoldedPaddingClearsStaleAttr) {
-  MLIRContext context;
+  context.loadDialect<tensor_ext::TensorExtDialect>();
   OpBuilder builder(&context);
   OwningOpRef<ModuleOp> op = ModuleOp::create(builder.getUnknownLoc());
 
-  EXPECT_EQ(getConvFoldedPadding(*op), 0);
+  auto dataType = RankedTensorType::get({1, 8, 4}, IndexType::get(&context));
+  ConvPacking fallback = defaultConv1dPacking(dataType);
 
-  setConvFoldedPadding(*op, 2);
-  EXPECT_EQ(getConvFoldedPadding(*op), 2);
+  // With nothing recorded, the caller's fallback comes back unchanged.
+  ConvPacking absent = getConvPacking(*op, fallback);
+  EXPECT_EQ(absent.matrixDataType, dataType);
+  EXPECT_EQ(absent.padding, 0);
+  EXPECT_EQ(absent.absorbedMatrixWidth, 0);
 
-  // A later run that folds nothing must clear the attribute rather than leave
-  // the stale 2 behind for ConvertToCiphertextSemantics to act on.
-  setConvFoldedPadding(*op, 0);
-  EXPECT_FALSE((*op)->hasAttr(kConvFoldedPaddingAttrName));
-  EXPECT_EQ(getConvFoldedPadding(*op), 0);
+  ConvPacking recorded = fallback;
+  recorded.padding = 2;
+  recorded.absorbedMatrixWidth = 1024;
+  setConvPacking(*op, recorded);
+
+  ConvPacking readBack = getConvPacking(*op, fallback);
+  EXPECT_EQ(readBack.matrixDataType, dataType);
+  EXPECT_EQ(readBack.padding, 2);
+  EXPECT_TRUE(readBack.interchangeRows);
+  EXPECT_EQ(readBack.absorbedMatrixWidth, 1024);
+
+  // A second run replaces the whole packing, so no field can go stale on its
+  // own: writing a fresh packing cannot leave the old absorbed width behind.
+  setConvPacking(*op, fallback);
+  ConvPacking rewritten = getConvPacking(*op, fallback);
+  EXPECT_EQ(rewritten.padding, 0);
+  EXPECT_EQ(rewritten.absorbedMatrixWidth, 0);
 }
 
 }  // namespace

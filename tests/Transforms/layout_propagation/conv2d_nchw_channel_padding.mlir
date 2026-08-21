@@ -14,7 +14,7 @@ func.func @conv2d_nchw_six_channels(%arg0: !secret.secret<tensor<1x1x10x10xf32>>
   ^body(%input0: tensor<1x1x10x10xf32>):
     // CHECK: linalg.conv_2d_nchw_fchw
     // The result reserves ceil(6 / 4) = 2 channel blocks of 10x10 sub-pixels.
-    // CHECK-SAME: heir.kernel_info = {gap_factor = 2 : i64, input_shape = array<i64: 1, 1, 10, 10>, result_shape = array<i64: 1, 2, 10, 10>}
+    // CHECK-SAME: heir.kernel_info = {gap_factor = 2 : i64, result_shape = array<i64: 1, 2, 10, 10>}
     %1 = linalg.conv_2d_nchw_fchw
       { dilations = dense<1> : tensor<2xi64>, strides = dense<2> : tensor<2xi64> }
       ins(%input0, %filter : tensor<1x1x10x10xf32>, tensor<6x1x2x2xf32>)

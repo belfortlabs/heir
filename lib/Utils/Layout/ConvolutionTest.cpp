@@ -930,7 +930,8 @@ void checkConv1dCwFcwDiagonalized(MLIRContext& context, int64_t outputChannels,
       {1, inputChannels, dataWidth}, IndexType::get(&context));
 
   auto expandedType =
-      get1dConvCwFcwFilterExpandedType(filterType, dataType, stride, padding);
+      get1dConvCwFcwFilterExpandedType(filterType, dataType, stride, padding,
+                                       /*interchangeRows=*/false);
   auto expected =
       reference1dConvCwFcwMatrix(filter, dataWidth, stride, padding);
   int64_t rows = expandedType.getDimSize(0);
@@ -1314,6 +1315,83 @@ TEST(ConvolutionTest, TestConv1dDataColumnPermutationRejectsWrongPadding) {
 
   EXPECT_TRUE(failed(get1dConvDataColumnPermutation(
       matrixDataType, gappedDataLayout(/*low=*/1), /*padding=*/2)));
+}
+
+TEST(ConvolutionTest, FoldConvSpatialPadding) {
+  MLIRContext context;
+  Type elementType = IndexType::get(&context);
+
+  // Rank 4: both spatial dims shrink by 2 * padding, (N, C) untouched.
+  auto rank4 = RankedTensorType::get({1, 4, 6, 8}, elementType);
+  auto folded4 = foldConvSpatialPadding(rank4, 1);
+  ASSERT_TRUE(folded4.has_value());
+  EXPECT_EQ(*folded4, RankedTensorType::get({1, 4, 4, 6}, elementType));
+
+  // Rank 3: only the width dim is spatial.
+  auto rank3 = RankedTensorType::get({1, 4, 8}, elementType);
+  auto folded3 = foldConvSpatialPadding(rank3, 2);
+  ASSERT_TRUE(folded3.has_value());
+  EXPECT_EQ(*folded3, RankedTensorType::get({1, 4, 4}, elementType));
+
+  // A padding of 0 is a no-op fold, not a rejection.
+  auto unfolded = foldConvSpatialPadding(rank4, 0);
+  ASSERT_TRUE(unfolded.has_value());
+  EXPECT_EQ(*unfolded, rank4);
+}
+
+TEST(ConvolutionTest, FoldConvSpatialPaddingRejectsBadPadding) {
+  MLIRContext context;
+  Type elementType = IndexType::get(&context);
+  auto dataType = RankedTensorType::get({1, 4, 4, 4}, elementType);
+
+  // A negative padding would grow the operand rather than shrink it, and every
+  // resulting extent is still positive, so the emptiness check below does not
+  // catch it.
+  EXPECT_FALSE(foldConvSpatialPadding(dataType, -1).has_value());
+
+  // A padding that consumes a whole spatial dim leaves nothing to convolve.
+  EXPECT_FALSE(foldConvSpatialPadding(dataType, 2).has_value());
+
+  // Ranks the conv kernels do not pack.
+  EXPECT_FALSE(
+      foldConvSpatialPadding(RankedTensorType::get({4, 4}, elementType), 1)
+          .has_value());
+}
+
+TEST(ConvolutionTest, DefaultPackingInterchangesRows) {
+  MLIRContext context;
+  Type elementType = IndexType::get(&context);
+  auto data1d = RankedTensorType::get({1, 4, 8}, elementType);
+  auto data2d = RankedTensorType::get({1, 4, 8, 8}, elementType);
+
+  // A 1-D conv always shuffles its rows.
+  ConvPacking packing1d = defaultConv1dPacking(data1d);
+  EXPECT_EQ(packing1d.matrixDataType, data1d);
+  EXPECT_EQ(packing1d.padding, 0);
+  EXPECT_TRUE(packing1d.interchangeRows);
+  EXPECT_EQ(packing1d.absorbedMatrixWidth, 0);
+
+  // A 2-D conv shuffles only when it strides.
+  EXPECT_FALSE(defaultConv2dPacking(data2d, {1, 1}).interchangeRows);
+  EXPECT_TRUE(defaultConv2dPacking(data2d, {2, 2}).interchangeRows);
+}
+
+TEST(ConvolutionTest, LayoutMatrixShapeUsesAbsorbedWidth) {
+  MLIRContext context;
+  Type elementType = IndexType::get(&context);
+  auto expanded = RankedTensorType::get({64, 256}, elementType);
+  ConvPacking packing =
+      defaultConv1dPacking(RankedTensorType::get({1, 4, 8}, elementType));
+
+  // Absorbing nothing leaves the Toeplitz width in place.
+  EXPECT_EQ(packing.layoutMatrixShape(expanded),
+            std::vector<int64_t>({64, 256}));
+
+  // Absorbing a packing makes the columns ciphertext slots, so the layout is
+  // built at the ciphertext width instead.
+  packing.absorbedMatrixWidth = 1024;
+  EXPECT_EQ(packing.layoutMatrixShape(expanded),
+            std::vector<int64_t>({64, 1024}));
 }
 
 }  // namespace

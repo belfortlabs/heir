@@ -5,9 +5,10 @@
 // padding parameter, so the ciphertext stays packed at the unpadded 4x4 extent
 // and the Toeplitz matrix is 64 x 64 instead of 64 x (4*6*6).
 
+// PROP-DAG: #[[$PACK:.*]] = #tensor_ext.conv_packing<matrixDataType = tensor<1x4x4x4xf32>, padding = 1, interchangeRows = false, absorbedMatrixWidth = 0>
 // PROP-NOT: tensor_ext.convert_layout
 // PROP: linalg.conv_2d_nchw_fchw
-// PROP-SAME: heir.conv_folded_padding = 1 : i64
+// PROP-SAME: tensor_ext.conv_packing = #[[$PACK]]
 
 // 64 diagonals, one per matrix row: the padded column count never leaked in.
 // CTS: secret.generic

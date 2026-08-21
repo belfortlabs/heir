@@ -513,7 +513,8 @@ TEST(EvaluateTest, Conv2dResultRelationNoInterchange) {
   // Fits in one ciphertext
   int64_t minSlotCount = 16;
   IntegerRelation rel =
-      get2dConvResultRelation(outputType, strides, padding, minSlotCount);
+      get2dConvResultRelation(outputType, strides, padding, minSlotCount,
+                              /*interchangeRows=*/false);
   EXPECT_EQ(rel.getNumDomainVars(), outputType.getRank());
   EXPECT_EQ(rel.getNumRangeVars(), 2);
 
@@ -543,7 +544,8 @@ TEST(EvaluateTest, Conv2dResultRelationWithInterchange) {
   // Fits in one ciphertext
   int64_t minSlotCount = 16;
   IntegerRelation rel1 =
-      get2dConvResultRelation(outputType, strides, padding, minSlotCount);
+      get2dConvResultRelation(outputType, strides, padding, minSlotCount,
+                              /*interchangeRows=*/true);
   IntegerRelation rel2 =
       get2dConvRowInterchangeLayoutRelation(outputType, strides, minSlotCount);
   rel1.compose(rel2);
@@ -573,7 +575,8 @@ TEST(EvaluateTest, Conv2dResultRelationTwoCiphertextsNoInterchange) {
 
   int64_t minSlotCount = 8;
   IntegerRelation rel =
-      get2dConvResultRelation(outputType, strides, padding, minSlotCount);
+      get2dConvResultRelation(outputType, strides, padding, minSlotCount,
+                              /*interchangeRows=*/false);
 
   std::vector<std::vector<std::vector<std::vector<int>>>> output = {
       {{{1, 2}, {3, 4}},
@@ -600,7 +603,8 @@ TEST(EvaluateTest, Conv2dResultRelationTwoCiphertextsWithInterchange) {
 
   int64_t minSlotCount = 8;
   IntegerRelation rel1 =
-      get2dConvResultRelation(outputType, strides, padding, minSlotCount);
+      get2dConvResultRelation(outputType, strides, padding, minSlotCount,
+                              /*interchangeRows=*/true);
   IntegerRelation rel2 =
       get2dConvRowInterchangeLayoutRelation(outputType, strides, minSlotCount);
   rel1.compose(rel2);

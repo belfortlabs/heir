@@ -1,13 +1,16 @@
 // RUN: heir-opt --layout-propagation=min-slot-count=1024 %s | FileCheck %s
 
-// `heir.conv_folded_padding` describes the one op whose filter matrix was built
-// against an unpadded operand. It must not travel along the value chain to %2's
-// conv, whose operand was never padded.
+// A packing describes the one op whose filter matrix was built against an
+// unpadded operand. It must not travel along the value chain to %2's conv,
+// whose operand was never padded: that conv records its own packing, with a
+// padding of 0.
 
+// CHECK-DAG: #[[$PACK1:.*]] = #tensor_ext.conv_packing<matrixDataType = tensor<1x4x4x4xf32>, padding = 1, interchangeRows = false, absorbedMatrixWidth = 0>
+// CHECK-DAG: #[[$PACK2:.*]] = #tensor_ext.conv_packing<matrixDataType = tensor<1x4x4x4xf32>, padding = 0, interchangeRows = false, absorbedMatrixWidth = 0>
 // CHECK: linalg.conv_2d_nchw_fchw
-// CHECK-SAME: heir.conv_folded_padding = 1 : i64
+// CHECK-SAME: tensor_ext.conv_packing = #[[$PACK1]]
 // CHECK: linalg.conv_2d_nchw_fchw
-// CHECK-NOT: heir.conv_folded_padding
+// CHECK-SAME: tensor_ext.conv_packing = #[[$PACK2]]
 
 func.func @padded_then_unpadded(%arg0: !secret.secret<tensor<1x4x4x4xf32>>) -> !secret.secret<tensor<1x4x4x4xf32>> {
   %out = arith.constant dense<0.000000e+00> : tensor<1x4x4x4xf32>

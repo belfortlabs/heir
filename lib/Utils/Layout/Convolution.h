@@ -21,6 +21,64 @@ namespace heir {
 // the result layout maps nothing into their slots.
 int64_t getPaddedConvChannels(int64_t outputChannels, int64_t channelsPerBlock);
 
+// Everything that fixes the expanded Toeplitz matrix a convolution lowers to,
+// and the layout that matrix carries.
+//
+// A convolution becomes a plaintext-ciphertext matvec over that matrix. The
+// choices below are made when layouts are assigned, but they are needed again
+// when the kernel is materialized, so they travel together as one value. See
+// tensor_ext::ConvPackingAttr for the form they take on an op.
+struct ConvPacking {
+  // The data operand the matrix is built against. It already accounts for
+  // channel padding, and for a `tensor.pad` folded into `padding` below.
+  RankedTensorType matrixDataType;
+  // Symmetric spatial zero padding folded out of a `tensor.pad` and into the
+  // convolution's own `padding` parameter.
+  int64_t padding = 0;
+  // Whether the matrix rows are pixel-shuffled. A shuffled matrix reserves
+  // whole channel blocks, so this changes the matrix shape.
+  bool interchangeRows = true;
+  // The width the filter's diagonal layout was built at, when the data
+  // operand's slot packing was absorbed into the matrix column space. The
+  // columns are ciphertext slots then. Zero means nothing was absorbed.
+  int64_t absorbedMatrixWidth = 0;
+
+  // The expanded Toeplitz type this packing produces for `filterType`. Both
+  // the layout assignment and the kernel materialization go through here, so
+  // that one definition sizes the matrix.
+  RankedTensorType expanded1dFilterType(RankedTensorType filterType,
+                                        int64_t stride) const;
+  RankedTensorType expanded2dFilterType(RankedTensorType filterType,
+                                        ArrayRef<int64_t> strides) const;
+
+  // The shape the filter's diagonal layout was built against. It is the
+  // expanded Toeplitz shape, except that an absorbed packing makes the columns
+  // ciphertext slots and so widens the layout.
+  std::vector<int64_t> layoutMatrixShape(
+      RankedTensorType expandedFilterType) const;
+};
+
+// The packing a 1-D convolution gets before any fold or absorption. Its rows
+// always interchange.
+ConvPacking defaultConv1dPacking(RankedTensorType dataType);
+
+// The packing a 2-D convolution gets before any fold or absorption. Its rows
+// interchange only when the convolution strides, because an unstrided one
+// packs its rows and outputs densely with no channel gap.
+ConvPacking defaultConv2dPacking(RankedTensorType dataType,
+                                 ArrayRef<int64_t> strides);
+
+// Removes `padding` entries from both ends of every spatial dim of a conv data
+// operand: the width dim of a rank-3 (N, C, W) operand, or the height and
+// width dims of a rank-4 (N, C, H, W) one. A conv's `padding` parameter is a
+// single symmetric value shared by every spatial dim, which is why one
+// `padding` covers them all.
+//
+// Returns nullopt when `padding` does not fit the operand, so that a caller
+// cannot build a matrix against a degenerate shape.
+std::optional<RankedTensorType> foldConvSpatialPadding(
+    RankedTensorType dataType, int64_t padding);
+
 // Returns an IntegerRelation that expands a 2-D filter matrix used in a
 // convolution into a 2-D matrix such that the convolution is
 // equivalent a matrix product with the flattened input vector. Each row
@@ -84,15 +142,23 @@ presburger::IntegerRelation get1dConvCwFcwFilterRelation(
 // matrix has extra zero rows when the channel count is not a multiple of the
 // block. The Halevi-Shoup kernel is sized from this type, so it has to agree
 // with the layout relation.
+//
+// No function in this family defaults `interchangeRows`. A default would let a
+// caller size a matrix one way and lay out its rows the other way, and the two
+// only disagree once the channel count stops dividing the block, so the tests
+// that use small channel counts would not catch it. See ConvPacking, which
+// carries the flag beside the operand it was decided against.
 RankedTensorType get1dConvCwFcwFilterExpandedType(RankedTensorType filterType,
                                                   RankedTensorType dataType,
                                                   int64_t stride,
                                                   int64_t padding,
-                                                  bool interchangeRows = true);
+                                                  bool interchangeRows);
 
-RankedTensorType get2dConvChwFchwFilterExpandedType(
-    RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
-    ArrayRef<int64_t> strides = {1, 1}, bool interchangeRows = true);
+RankedTensorType get2dConvChwFchwFilterExpandedType(RankedTensorType filterType,
+                                                    RankedTensorType dataType,
+                                                    int64_t padding,
+                                                    ArrayRef<int64_t> strides,
+                                                    bool interchangeRows);
 
 // Returns an IntegerRelation that represents a diagonalized 2-D Toeplitz matrix
 // that is used to compute a 1-D multichannel convolution filter such that the
@@ -109,7 +175,7 @@ RankedTensorType get2dConvChwFchwFilterExpandedType(
 // correct exactly when that element is zero.
 FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
     RankedTensorType filterType, RankedTensorType dataType, int64_t stride,
-    int64_t padding, int64_t minSlotCount, bool interchangeRows = true,
+    int64_t padding, int64_t minSlotCount, bool interchangeRows,
     const presburger::IntegerRelation* dataSlotPermutation = nullptr);
 
 // Flattens a 3-D (1, C, W) data layout `[n, c, w] -> [ct, slot]` into the
@@ -144,8 +210,7 @@ FailureOr<std::vector<presburger::IntegerRelation>>
 get2dConvChwFchwFilterAsSequence(RankedTensorType filterType,
                                  RankedTensorType dataType,
                                  ArrayRef<int64_t> strides, int64_t padding,
-                                 int64_t minSlotCount,
-                                 bool interchangeRows = true);
+                                 int64_t minSlotCount, bool interchangeRows);
 
 // Returns an IntegerRelation for a row-interchange map that optimizes the
 // diagonal structure of a convolution's Toeplitz matrix.
@@ -178,9 +243,11 @@ bool isRelationConvFilterDiagonalized(
 // Returns an IntegerRelation that corresponds to the output layout of a 1-D
 // multi-channel convolution. This includes the row interchange from pixel
 // shuffling. The result is a relation mapping to (ct, slot) of the output.
-presburger::IntegerRelation get1dConvResultRelation(
-    RankedTensorType outputType, int64_t stride, int64_t padding,
-    int64_t minSlotCount, bool interchangeRows = true);
+presburger::IntegerRelation get1dConvResultRelation(RankedTensorType outputType,
+                                                    int64_t stride,
+                                                    int64_t padding,
+                                                    int64_t minSlotCount,
+                                                    bool interchangeRows);
 
 // Returns an IntegerRelation that corresponds to the output layout of a 2-D
 // multi-channel convolution. This includes the row interchange from pixel
@@ -190,9 +257,15 @@ presburger::IntegerRelation get1dConvResultRelation(
 // get2dConvRowInterchangeLayoutRelation: a shuffled result reserves whole
 // channel blocks, and both relations must use that same larger extent as the
 // replication period.
-presburger::IntegerRelation get2dConvResultRelation(
-    RankedTensorType outputType, ArrayRef<int64_t> strides, int64_t padding,
-    int64_t minSlotCount, bool interchangeRows = false);
+//
+// This parameter used to default to false while the rest of the family
+// defaulted to true, so a caller that composed but omitted it got a result
+// layout narrower than the matrix it belonged to. Nothing defaults now.
+presburger::IntegerRelation get2dConvResultRelation(RankedTensorType outputType,
+                                                    ArrayRef<int64_t> strides,
+                                                    int64_t padding,
+                                                    int64_t minSlotCount,
+                                                    bool interchangeRows);
 
 presburger::IntegerRelation get2dConvRowInterchangeLayoutRelation(
     RankedTensorType outputType, ArrayRef<int64_t> strides,

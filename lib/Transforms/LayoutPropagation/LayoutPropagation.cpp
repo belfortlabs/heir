@@ -141,8 +141,8 @@ std::pair<Value, LayoutAttr> convertToLayout(
 // The outcome of folding a zero `tensor.pad` on the spatial dims into a conv's
 // own `padding` parameter.
 struct FoldedConvPadding {
-  // What the Toeplitz matrix must be built against.
-  ConvMatrixOperand matrixOperand;
+  // The packing with the pad folded into it.
+  ConvPacking packing;
   // The layout that holds only the unpadded data, at the positions the unpadded
   // operand would occupy on its own.
   IntegerRelation targetRelation;
@@ -202,12 +202,12 @@ std::optional<int64_t> getConvSpatialZeroPad(Value data,
 // Such a column is provably zero only inside the zero region of a `tensor.pad`
 // on `data`. Any other partial packing would lose live data.
 //
-// `operand.padding != 0` cannot reach here with a hole: that is the folded
+// `packing.padding != 0` cannot reach here with a hole: that is the folded
 // path, where get1dConvDataColumnPermutation already rejected one.
-bool dropped1dConvColumnsAreZero(Value data, const ConvMatrixOperand& operand,
+bool dropped1dConvColumnsAreZero(Value data, const ConvPacking& packing,
                                  const IntegerRelation& columnPermutation) {
-  int64_t width = operand.dataType.getDimSize(2);
-  int64_t numColumns = operand.dataType.getDimSize(1) * width;
+  int64_t width = packing.matrixDataType.getDimSize(2);
+  int64_t numColumns = packing.matrixDataType.getDimSize(1) * width;
   llvm::DenseSet<int64_t> mapped =
       getMappedConvMatrixColumns(columnPermutation);
   if (static_cast<int64_t>(mapped.size()) == numColumns) return true;
@@ -228,8 +228,9 @@ bool dropped1dConvColumnsAreZero(Value data, const ConvMatrixOperand& operand,
 // Returns nullopt when the pad pattern does not apply, in which case the caller
 // keeps the unfolded path.
 std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
-    Value data, RankedTensorType matrixDataType, LayoutAttr dataLayout,
+    Value data, const ConvPacking& packing, LayoutAttr dataLayout,
     int64_t ciphertextSize) {
+  RankedTensorType matrixDataType = packing.matrixDataType;
   int64_t rank = matrixDataType.getRank();
   if ((rank != 3 && rank != 4) || matrixDataType.getDimSize(0) != 1) {
     return std::nullopt;
@@ -249,14 +250,17 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
   // The reshape chain above means the pad's spatial dims are not guaranteed to
   // be this conv operand's spatial dims, so validate before building a type
   // from them.
-  std::optional<ConvMatrixOperand> matrixOperand =
+  std::optional<RankedTensorType> unpaddedType =
       foldConvSpatialPadding(matrixDataType, p);
-  if (!matrixOperand) return std::nullopt;
+  if (!unpaddedType) return std::nullopt;
+  ConvPacking folded = packing;
+  folded.matrixDataType = *unpaddedType;
+  folded.padding = p;
 
   // The layout we expect on the padded value: the unpadded row-major layout
   // with each spatial index shifted by `p`.
   IntegerRelation expected =
-      getRowMajorLayoutRelation(matrixOperand->dataType, ciphertextSize);
+      getRowMajorLayoutRelation(folded.matrixDataType, ciphertextSize);
   unsigned domainOffset =
       expected.getVarKindOffset(presburger::VarKind::Domain);
   for (int64_t dim = 2; dim < rank; ++dim) {
@@ -270,13 +274,13 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
                    << " into the conv padding parameter; operand layout "
                    << (layoutMatchesTarget ? "matches" : "does not match")
                    << " the shifted unpadded row-major layout\n");
-  return FoldedConvPadding{*matrixOperand, expected, layoutMatchesTarget};
+  return FoldedConvPadding{folded, expected, layoutMatchesTarget};
 }
 
 // How a 1-D conv will read its data operand.
 struct ConvDataPlan {
-  // What the Toeplitz matrix is built against.
-  ConvMatrixOperand matrixOperand;
+  // What the matrix is built from, complete once the plan is made.
+  ConvPacking packing;
   // Set when the matrix absorbs the data's slot packing into its column space.
   std::optional<IntegerRelation> columnPermutation;
   // Set when the data must be converted to this relation first. Never set
@@ -286,11 +290,11 @@ struct ConvDataPlan {
 
 // Encode the data's slot packing into the public diagonal filter packing, so
 // that a non-row-major single-ciphertext input needs no online conversion.
-// `operand` is what the matrix is built against, which fixes the column space
+// `packing` says what the matrix is built against, which fixes the column space
 // the permutation is indexed in.
 std::optional<IntegerRelation> tryAbsorbConv1dDataPacking(
-    Value data, Value filter, const ConvMatrixOperand& operand,
-    LayoutAttr dataLayout, int64_t minSlotCount, DataFlowSolver* solver) {
+    Value data, Value filter, const ConvPacking& packing, LayoutAttr dataLayout,
+    int64_t minSlotCount, DataFlowSolver* solver) {
   if (isSecret(filter, solver)) return std::nullopt;
   Value logicalFilter = filter;
   if (auto assignLayout =
@@ -302,14 +306,14 @@ std::optional<IntegerRelation> tryAbsorbConv1dDataPacking(
     return std::nullopt;
   }
   auto columnPermutation = get1dConvDataColumnPermutation(
-      operand.dataType, dataLayout.getIntegerRelation(), operand.padding);
+      packing.matrixDataType, dataLayout.getIntegerRelation(), packing.padding);
   if (failed(columnPermutation)) return std::nullopt;
   // A replicated packing holds each element in several slots. Reduce it to one
   // representative slot per element, so the column substitution is a function.
   auto representative =
       getDiagonalColumnRepresentative(columnPermutation.value(), minSlotCount);
   if (failed(representative)) return std::nullopt;
-  if (!dropped1dConvColumnsAreZero(data, operand, representative.value())) {
+  if (!dropped1dConvColumnsAreZero(data, packing, representative.value())) {
     LLVM_DEBUG(llvm::dbgs()
                << "conv_1d cannot absorb the data packing: it drops matrix "
                   "columns that are not provably zero\n");
@@ -318,44 +322,55 @@ std::optional<IntegerRelation> tryAbsorbConv1dDataPacking(
   return representative.value();
 }
 
+// The plan for a matrix that absorbed the data's slot packing. Absorbing makes
+// the matrix columns ciphertext slots, so the filter layout is built at the
+// ciphertext width rather than the Toeplitz matrix's own width.
+ConvDataPlan absorbedConv1dPlan(ConvPacking packing,
+                                IntegerRelation columnPermutation,
+                                int64_t minSlotCount) {
+  packing.absorbedMatrixWidth = minSlotCount;
+  return ConvDataPlan{packing, std::move(columnPermutation)};
+}
+
 // Decide how a 1-D conv reads its data operand, taking the first of these that
 // holds. A folded operand comes first because it keeps the padding out of the
 // matrix columns, and reading the data where it already sits comes before
 // absorbing, because absorbing widens the matrix to the whole ciphertext.
 std::optional<ConvDataPlan> planFoldedConv1dDataAccess(
-    Value data, Value filter, RankedTensorType dataType, LayoutAttr dataLayout,
+    Value data, Value filter, const ConvPacking& packing, LayoutAttr dataLayout,
     int64_t minSlotCount, DataFlowSolver* solver) {
   std::optional<FoldedConvPadding> folded =
-      tryFoldPadIntoConvPadding(data, dataType, dataLayout, minSlotCount);
+      tryFoldPadIntoConvPadding(data, packing, dataLayout, minSlotCount);
   if (!folded) return std::nullopt;
-  if (folded->layoutMatchesTarget) return ConvDataPlan{folded->matrixOperand};
+  if (folded->layoutMatchesTarget) return ConvDataPlan{folded->packing};
   std::optional<IntegerRelation> absorbed = tryAbsorbConv1dDataPacking(
-      data, filter, folded->matrixOperand, dataLayout, minSlotCount, solver);
+      data, filter, folded->packing, dataLayout, minSlotCount, solver);
   if (!absorbed) return std::nullopt;
-  return ConvDataPlan{folded->matrixOperand, std::move(absorbed)};
+  return absorbedConv1dPlan(folded->packing, std::move(*absorbed),
+                            minSlotCount);
 }
 
 ConvDataPlan planConv1dDataAccess(Value data, Value filter,
-                                  RankedTensorType dataType,
+                                  const ConvPacking& packing,
                                   LayoutAttr dataLayout, int64_t minSlotCount,
                                   DataFlowSolver* solver) {
   if (auto folded = planFoldedConv1dDataAccess(
-          data, filter, dataType, dataLayout, minSlotCount, solver)) {
+          data, filter, packing, dataLayout, minSlotCount, solver)) {
     return std::move(*folded);
   }
 
   // Unfolded: the matrix keeps a column per padded element, and the data must
   // carry the plain row-major layout, either already or after absorption.
-  ConvMatrixOperand matrixOperand{dataType};
-  IntegerRelation rowMajor = getRowMajorLayoutRelation(dataType, minSlotCount);
+  IntegerRelation rowMajor =
+      getRowMajorLayoutRelation(packing.matrixDataType, minSlotCount);
   if (isRelationEqual(dataLayout.getIntegerRelation(), rowMajor)) {
-    return ConvDataPlan{matrixOperand};
+    return ConvDataPlan{packing};
   }
   if (auto absorbed = tryAbsorbConv1dDataPacking(
-          data, filter, matrixOperand, dataLayout, minSlotCount, solver)) {
-    return ConvDataPlan{matrixOperand, std::move(absorbed)};
+          data, filter, packing, dataLayout, minSlotCount, solver)) {
+    return absorbedConv1dPlan(packing, std::move(*absorbed), minSlotCount);
   }
-  return ConvDataPlan{matrixOperand, std::nullopt, std::move(rowMajor)};
+  return ConvDataPlan{packing, std::nullopt, std::move(rowMajor)};
 }
 
 // Return a copy of the kernel info associated with the value and update the
@@ -1111,8 +1126,6 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
   RankedTensorType outputType =
       cast<RankedTensorType>(op.getResult(0).getType());
 
-  bool interchangeRows = true;
-
   int64_t stride = op.getStrides().getValues<int64_t>().begin()[0];
 
   MLIRContext* ctx = &getContext();
@@ -1131,9 +1144,10 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
 
   LayoutAttr dataLayout = getComposedLayoutAttr(data);
 
-  ConvDataPlan plan = planConv1dDataAccess(data, filter, dataType, dataLayout,
-                                           minSlotCount, solver);
-  const ConvMatrixOperand& matrixOperand = plan.matrixOperand;
+  ConvDataPlan plan =
+      planConv1dDataAccess(data, filter, defaultConv1dPacking(dataType),
+                           dataLayout, minSlotCount, solver);
+  const ConvPacking& packing = plan.packing;
 
   if (plan.conversionTarget) {
     LLVM_DEBUG(llvm::dbgs() << "conv_1d data input is not row major, "
@@ -1151,8 +1165,8 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
   // into a larger matrix and then diagonalizing.
   LayoutAttr filterLayout = getComposedLayoutAttr(filter);
   auto convRelation = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, matrixOperand.dataType, stride, matrixOperand.padding,
-      minSlotCount, /*interchangeRows=*/interchangeRows,
+      filterType, packing.matrixDataType, stride, packing.padding, minSlotCount,
+      packing.interchangeRows,
       plan.columnPermutation ? &*plan.columnPermutation : nullptr);
   if (failed(convRelation)) {
     return failure();
@@ -1177,21 +1191,16 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
   // Always one result. For a gapped output, the result will also have a
   // row-shuffled gap. Future users may need to insert a layout conversion.
   auto result = op->getResult(0);
-  presburger::IntegerRelation resultRelation =
-      get1dConvResultRelation(outputType, stride, /*padding=*/0, minSlotCount,
-                              /*interchangeRows=*/interchangeRows);
+  presburger::IntegerRelation resultRelation = get1dConvResultRelation(
+      outputType, stride, /*padding=*/0, minSlotCount, packing.interchangeRows);
   LayoutAttr resultLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, resultRelation);
   Attribute kernelInfoAttr =
       cloneKernelInfoWithResultShape(data, outputType.getShape());
 
-  // Record what the filter was diagonalized against, so that
-  // ConvertToCiphertextSemantics rebuilds the same expanded matrix shape.
-  setConvFoldedPadding(op, matrixOperand.padding);
-  // Absorbing built the filter layout at full ciphertext width. The kernel
-  // folds its partial sums over the matrix width, so it must read the same
-  // number.
-  setAbsorbedMatrixWidth(op, plan.columnPermutation ? minSlotCount : 0);
+  // Record how the matrix was built, so that ConvertToCiphertextSemantics
+  // sizes the same matrix and folds its partial sums over the same width.
+  setConvPacking(op, packing);
 
   assignedLayouts.insert({result, resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -1220,9 +1229,9 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     return op->emitOpError() << "Expected equal strides for Conv2DNchwFchwOp";
   }
 
-  // Interchange rows only if the stride is greater than 1. Otherwise, we can
-  // densely pack the rows and outputs without channel gapping.
-  bool interchangeRows = strides[0] > 1;
+  // The packing starts from what the convolution declares, and picks up the
+  // channel-padded operand and any folded padding as they are decided below.
+  ConvPacking packing = defaultConv2dPacking(dataType, strides);
 
   // Ensure data is in gapped row-major layout with current inputGap.
   // We expect 4-D tensor (N, C, H, W) but only support N=1.
@@ -1245,7 +1254,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   // block size the channel padding below rounds up to. A conv whose gap exceeds
   // its stride packs its result against gap^2 instead, and padding cannot
   // reconcile the two, so keep rejecting those rather than mis-packing them.
-  if (interchangeRows && gapFactor != strides[0] &&
+  if (packing.interchangeRows && gapFactor != strides[0] &&
       outputType.getDimSize(1) % (gapFactor * gapFactor) != 0) {
     return op->emitOpError()
            << "Expected number of output channels (" << outputType.getDimSize(1)
@@ -1261,29 +1270,29 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   // `tensor.pad` on the spatial dims folds into the conv's own `padding`
   // parameter. When it does, the ciphertext holds only the unpadded data and
   // the matrix must be built against that smaller operand.
-  ConvMatrixOperand matrixOperand{fheInputType};
+  packing.matrixDataType = fheInputType;
   IntegerRelation targetDataRelation =
       getRowMajorLayoutRelation(fheInputType, minSlotCount);
   // This conv has no way to read the data anywhere but the target positions, so
   // it only folds a pad that `data` already carries the target relation for.
   // Only the unfolded path can then still need a conversion.
   bool dataLayoutMatchesTarget = false;
-  if (auto folded = tryFoldPadIntoConvPadding(data, fheInputType, dataLayout,
-                                              minSlotCount);
+  if (auto folded =
+          tryFoldPadIntoConvPadding(data, packing, dataLayout, minSlotCount);
       folded && folded->layoutMatchesTarget) {
-    matrixOperand = folded->matrixOperand;
+    packing = folded->packing;
     targetDataRelation = folded->targetRelation;
     dataLayoutMatchesTarget = true;
   }
 
   RankedTensorType fheOutputType = outputType;
-  if (interchangeRows) {
+  if (packing.interchangeRows) {
     // If interchangeRows is on, then the output shape may include reshaping the
     // striding and gapping. The spatial extents come from the operand the
     // ciphertext actually holds, i.e. the unpadded one when the pad folded.
-    int64_t hFhe = std::max(matrixOperand.dataType.getDimSize(2),
+    int64_t hFhe = std::max(packing.matrixDataType.getDimSize(2),
                             outputType.getDimSize(2) * gapFactor);
-    int64_t wFhe = std::max(matrixOperand.dataType.getDimSize(3),
+    int64_t wFhe = std::max(packing.matrixDataType.getDimSize(3),
                             outputType.getDimSize(3) * gapFactor);
     // The interchanged layout groups the output channels into gap x gap blocks,
     // so the ciphertext holds whole blocks. A channel count that is not a
@@ -1295,10 +1304,9 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
         RankedTensorType::get({outputType.getDimSize(0), cFhe, hFhe, wFhe},
                               outputType.getElementType());
   }
-  // `inputShape` stays the padded FHE shape; ConvertToCiphertextSemantics
-  // re-derives the unpadded operand from it and the folded padding attribute.
+  // The operand the matrix is built against travels on the packing instead, so
+  // this only chains the gap and the result shape to the next conv.
   KernelInfo kernelInfo = {
-      .inputShape = llvm::to_vector(fheInputType.getShape()),
       .resultShape = llvm::to_vector(fheOutputType.getShape()),
       .gapFactor = gapFactor};
   Attribute kernelInfoAttr = makeKernelInfoAttr(ctx, kernelInfo);
@@ -1321,8 +1329,8 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     originalFilter = assignOp.getValue();
   }
   auto maybeRels = get2dConvChwFchwFilterAsSequence(
-      filterType, matrixOperand.dataType, strides, matrixOperand.padding,
-      minSlotCount, interchangeRows);
+      filterType, packing.matrixDataType, strides, packing.padding,
+      minSlotCount, packing.interchangeRows);
   if (failed(maybeRels)) {
     return failure();
   }
@@ -1352,10 +1360,11 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   // pixel-shuffled gap. Future users may need to insert a layout conversion.
   auto result = op->getResult(0);
   Attribute resultLayoutAttr;
-  presburger::IntegerRelation rel1 = get2dConvResultRelation(
-      outputType, strides, /*padding=*/0, minSlotCount, interchangeRows);
+  presburger::IntegerRelation rel1 =
+      get2dConvResultRelation(outputType, strides, /*padding=*/0, minSlotCount,
+                              packing.interchangeRows);
 
-  if (interchangeRows) {
+  if (packing.interchangeRows) {
     presburger::IntegerRelation rel2 = get2dConvRowInterchangeLayoutRelation(
         outputType, strides, minSlotCount);
     LayoutAttr layout1 = LayoutAttr::getFromIntegerRelation(ctx, rel1);
@@ -1365,9 +1374,9 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     resultLayoutAttr = LayoutAttr::getFromIntegerRelation(ctx, rel1);
   }
 
-  // Record what the filter was diagonalized against, so that
-  // ConvertToCiphertextSemantics rebuilds the same expanded matrix shape.
-  setConvFoldedPadding(op, matrixOperand.padding);
+  // Record how the matrix was built, so that ConvertToCiphertextSemantics
+  // sizes the same matrix.
+  setConvPacking(op, packing);
 
   assignedLayouts.insert({result, resultLayoutAttr});
   auto resultKernelInfo =

@@ -1,9 +1,10 @@
 // RUN: heir-opt --layout-propagation=min-slot-count=1024 %s | FileCheck %s --check-prefix=PROP
 // RUN: heir-opt --layout-propagation=min-slot-count=1024 --convert-to-ciphertext-semantics=min-slot-count=1024 %s | FileCheck %s --check-prefix=CTS
 
+// PROP-DAG: #[[$PACK:.*]] = #tensor_ext.conv_packing<matrixDataType = tensor<1x8x6xf32>, padding = 2, interchangeRows = true, absorbedMatrixWidth = 0>
 // PROP-NOT: tensor_ext.convert_layout
 // PROP: linalg.conv_1d_ncw_fcw
-// PROP-SAME: heir.conv_folded_padding = 2 : i64
+// PROP-SAME: tensor_ext.conv_packing = #[[$PACK]]
 
 // The collapse: exactly one rotate-and-add, by 64/2 = 32. A rotation by 64
 // anywhere would mean the padded column count leaked back in.

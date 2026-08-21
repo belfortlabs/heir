@@ -13,6 +13,7 @@
 #include "lib/Utils/MathUtils.h"
 #include "llvm/include/llvm/ADT/DenseSet.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"           // from @llvm-project
+#include "llvm/include/llvm/ADT/SmallVector.h"         // from @llvm-project
 #include "llvm/include/llvm/Support/FormatVariadic.h"  // from @llvm-project
 #include "llvm/include/llvm/Support/MathExtras.h"      // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
@@ -31,6 +32,29 @@ using presburger::VarKind;
 int64_t getPaddedConvChannels(int64_t outputChannels,
                               int64_t channelsPerBlock) {
   return llvm::alignTo(outputChannels, channelsPerBlock);
+}
+
+std::optional<RankedTensorType> foldConvSpatialPadding(
+    RankedTensorType dataType, int64_t padding) {
+  if (padding < 0) return std::nullopt;
+  if (dataType.getRank() != 3 && dataType.getRank() != 4) return std::nullopt;
+  SmallVector<int64_t> shape(dataType.getShape());
+  // Dims 0 and 1 are (N, C); everything after them is spatial.
+  for (int64_t dim = 2; dim < dataType.getRank(); ++dim) {
+    shape[dim] -= 2 * padding;
+    if (shape[dim] <= 0) return std::nullopt;
+  }
+  return RankedTensorType::get(shape, dataType.getElementType());
+}
+
+ConvPacking defaultConv1dPacking(RankedTensorType dataType) {
+  return ConvPacking{dataType, /*padding=*/0, /*interchangeRows=*/true};
+}
+
+ConvPacking defaultConv2dPacking(RankedTensorType dataType,
+                                 ArrayRef<int64_t> strides) {
+  return ConvPacking{dataType, /*padding=*/0,
+                     /*interchangeRows=*/strides[0] > 1};
 }
 
 presburger::IntegerRelation get2dConvFilterRelation(RankedTensorType filterType,
@@ -323,6 +347,27 @@ RankedTensorType get2dConvChwFchwFilterExpandedType(RankedTensorType filterType,
   int64_t rows = outputChannels * singleResultType.getDimSize(0);
   int64_t cols = inputChannels * singleResultType.getDimSize(1);
   return RankedTensorType::get({rows, cols}, filterType.getElementType());
+}
+
+RankedTensorType ConvPacking::expanded1dFilterType(RankedTensorType filterType,
+                                                   int64_t stride) const {
+  return get1dConvCwFcwFilterExpandedType(filterType, matrixDataType, stride,
+                                          padding, interchangeRows);
+}
+
+RankedTensorType ConvPacking::expanded2dFilterType(
+    RankedTensorType filterType, ArrayRef<int64_t> strides) const {
+  return get2dConvChwFchwFilterExpandedType(filterType, matrixDataType, padding,
+                                            strides, interchangeRows);
+}
+
+std::vector<int64_t> ConvPacking::layoutMatrixShape(
+    RankedTensorType expandedFilterType) const {
+  std::vector<int64_t> shape = expandedFilterType.getShape().vec();
+  if (absorbedMatrixWidth != 0) {
+    shape[1] = absorbedMatrixWidth;
+  }
+  return shape;
 }
 
 presburger::IntegerRelation get1dConvCwFcwFilterRelation(

@@ -10,13 +10,17 @@
 // width rather than at the Toeplitz C*W. It must record that width, because the
 // kernel folds its partial sums over it.
 
+// Each conv records one packing, so the folded padding and the absorbed width
+// are read as a unit rather than as separate scalars.
+
+// CHECK-DAG: #[[$PACK1:.*]] = #tensor_ext.conv_packing<matrixDataType = tensor<1x8x8xf32>, padding = 1, interchangeRows = true, absorbedMatrixWidth = 0>
+// CHECK-DAG: #[[$PACK2:.*]] = #tensor_ext.conv_packing<matrixDataType = tensor<1x8x4xf32>, padding = 1, interchangeRows = true, absorbedMatrixWidth = 1024>
 // CHECK-NOT: tensor_ext.convert_layout
 // CHECK: linalg.conv_1d_ncw_fcw
-// CHECK-SAME: heir.conv_folded_padding = 1 : i64
+// CHECK-SAME: tensor_ext.conv_packing = #[[$PACK1]]
 // CHECK-NOT: tensor_ext.convert_layout
 // CHECK: linalg.conv_1d_ncw_fcw
-// CHECK-SAME: heir.absorbed_matrix_width = 1024 : i64
-// CHECK-SAME: heir.conv_folded_padding = 1 : i64
+// CHECK-SAME: tensor_ext.conv_packing = #[[$PACK2]]
 // CHECK-NOT: tensor_ext.convert_layout
 
 func.func @conv1d_gapped_folded_padding(

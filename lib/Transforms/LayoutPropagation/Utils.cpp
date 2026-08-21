@@ -7,6 +7,7 @@
 #include <optional>
 #include <utility>
 
+#include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
 #include "llvm/include/llvm/ADT/ArrayRef.h"     // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"    // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"  // from @llvm-project
@@ -25,15 +26,10 @@ using ::llvm::SmallVector;
 
 Attribute makeKernelInfoAttr(MLIRContext* ctx, const KernelInfo& info) {
   SmallVector<NamedAttribute> attrs;
-  attrs.reserve(3);
+  attrs.reserve(2);
   attrs.push_back(
       NamedAttribute(StringAttr::get(ctx, kKernelShapeKey),
                      DenseI64ArrayAttr::get(ctx, info.resultShape)));
-  if (!info.inputShape.empty()) {
-    attrs.push_back(
-        NamedAttribute(StringAttr::get(ctx, kKernelInputShapeKey),
-                       DenseI64ArrayAttr::get(ctx, info.inputShape)));
-  }
   attrs.push_back(NamedAttribute(
       StringAttr::get(ctx, kGapFactorKey),
       IntegerAttr::get(IntegerType::get(ctx, 64), info.gapFactor)));
@@ -44,11 +40,6 @@ std::optional<KernelInfo> getKernelInfo(Attribute attr) {
   auto dictAttr = dyn_cast_or_null<DictionaryAttr>(attr);
   if (!dictAttr) return std::nullopt;
   KernelInfo info;
-  if (auto inputShapeAttr =
-          dictAttr.getAs<DenseI64ArrayAttr>(kKernelInputShapeKey)) {
-    info.inputShape.assign(inputShapeAttr.asArrayRef().begin(),
-                           inputShapeAttr.asArrayRef().end());
-  }
   if (auto shapeAttr = dictAttr.getAs<DenseI64ArrayAttr>(kKernelShapeKey)) {
     info.resultShape.assign(shapeAttr.asArrayRef().begin(),
                             shapeAttr.asArrayRef().end());
@@ -59,37 +50,19 @@ std::optional<KernelInfo> getKernelInfo(Attribute attr) {
   return info;
 }
 
-std::optional<ConvMatrixOperand> foldConvSpatialPadding(
-    RankedTensorType dataType, int64_t padding) {
-  // Reject negative padding
-  if (padding < 0) return std::nullopt;
-  if (dataType.getRank() != 3 && dataType.getRank() != 4) return std::nullopt;
-  SmallVector<int64_t> shape(dataType.getShape());
-  // Dims 0 and 1 are (N, C); everything after them is spatial.
-  for (int64_t dim = 2; dim < dataType.getRank(); ++dim) {
-    shape[dim] -= 2 * padding;
-    if (shape[dim] <= 0) return std::nullopt;
-  }
-  return ConvMatrixOperand{
-      RankedTensorType::get(shape, dataType.getElementType()), padding};
+void setConvPacking(Operation* op, const ConvPacking& packing) {
+  op->setAttr(tensor_ext::TensorExtDialect::kConvPackingAttrName,
+              tensor_ext::ConvPackingAttr::get(
+                  op->getContext(), packing.matrixDataType, packing.padding,
+                  packing.interchangeRows, packing.absorbedMatrixWidth));
 }
 
-int64_t getConvKernelParam(Operation* op, StringRef name) {
-  if (auto attr = op->getAttrOfType<IntegerAttr>(name)) {
-    return attr.getInt();
-  }
-  return 0;
-}
-
-void setConvKernelParam(Operation* op, StringRef name, int64_t value) {
-  if (value == 0) {
-    // Drop an attribute an earlier run or an op clone left behind: a conv that
-    // folded or absorbed nothing must not be read as one that did.
-    op->removeAttr(name);
-    return;
-  }
-  op->setAttr(name,
-              IntegerAttr::get(IntegerType::get(op->getContext(), 64), value));
+ConvPacking getConvPacking(Operation* op, const ConvPacking& fallback) {
+  auto attr = op->getAttrOfType<tensor_ext::ConvPackingAttr>(
+      tensor_ext::TensorExtDialect::kConvPackingAttrName);
+  if (!attr) return fallback;
+  return ConvPacking{attr.getMatrixDataType(), attr.getPadding(),
+                     attr.getInterchangeRows(), attr.getAbsorbedMatrixWidth()};
 }
 
 int64_t maxOfMaxes(ArrayRef<int64_t> d1, ArrayRef<int64_t> d2) {

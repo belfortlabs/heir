@@ -1395,21 +1395,6 @@ struct ConvertLinalgConv2D : public ConversionBase<linalg::Conv2DOp> {
   bool unrollKernels;
 };
 
-// Rebuild the operand shape honoring any zero `tensor.pad` it folded into the
-// conv's `padding` parameter. `dataType` is the operand shape before that fold
-FailureOr<ConvMatrixOperand> foldedConvMatrixOperand(
-    Operation* op, RankedTensorType dataType) {
-  int64_t padding = getConvFoldedPadding(op);
-  std::optional<ConvMatrixOperand> matrixOperand =
-      foldConvSpatialPadding(dataType, padding);
-  if (!matrixOperand) {
-    return op->emitError() << kConvFoldedPaddingAttrName << " of " << padding
-                           << " does not fit this conv's data operand "
-                           << dataType;
-  }
-  return *matrixOperand;
-}
-
 struct ConvertLinalgConv1DNcwFcw
     : public ConversionBase<linalg::Conv1DNcwFcwOp> {
  public:
@@ -1447,30 +1432,20 @@ struct ConvertLinalgConv1DNcwFcw
     return isPowerOfTwoDims && isConv1dAsMatvec;
   }
 
-  FailureOr<RankedTensorType> expandedFilterShape(
-      linalg::Conv1DNcwFcwOp op) const {
-    auto filterType = cast<RankedTensorType>(op.getInputs()[1].getType());
+  // How LayoutPropagation built this conv's matrix. IR that never went through
+  // that pass carries no packing, and gets the one a 1-D conv has before any
+  // fold or absorption.
+  ConvPacking convPacking(linalg::Conv1DNcwFcwOp op) const {
     auto dataType = cast<RankedTensorType>(op.getInputs()[0].getType());
-    int64_t stride =
-        llvm::to_vector(op.getStrides().getValues<int64_t>()).front();
-
-    FailureOr<ConvMatrixOperand> matrixOperand =
-        foldedConvMatrixOperand(op, dataType);
-    if (failed(matrixOperand)) return failure();
-    return get1dConvCwFcwFilterExpandedType(filterType, matrixOperand->dataType,
-                                            stride, matrixOperand->padding);
+    return getConvPacking(op, defaultConv1dPacking(dataType));
   }
 
-  // The shape the filter's diagonal layout was built against: the expanded
-  // Toeplitz shape, except that absorbing the data packing makes the columns
-  // ciphertext slots and widens the layout to the recorded ciphertext size.
-  std::vector<int64_t> layoutMatrixShape(
-      linalg::Conv1DNcwFcwOp op, RankedTensorType expandedMatrixType) const {
-    std::vector<int64_t> shape = expandedMatrixType.getShape().vec();
-    if (int64_t width = getAbsorbedMatrixWidth(op); width != 0) {
-      shape[1] = width;
-    }
-    return shape;
+  RankedTensorType expandedFilterShape(linalg::Conv1DNcwFcwOp op,
+                                       const ConvPacking& packing) const {
+    auto filterType = cast<RankedTensorType>(op.getInputs()[1].getType());
+    int64_t stride =
+        llvm::to_vector(op.getStrides().getValues<int64_t>()).front();
+    return packing.expanded1dFilterType(filterType, stride);
   }
 
   LogicalResult haleviShoupKernel(
@@ -1488,8 +1463,8 @@ struct ConvertLinalgConv1DNcwFcw
         cast<TypedValue<RankedTensorType>>(adaptor.getInputs()[1]);
     SSAValue matrixLeaf(matrix);
 
-    FailureOr<RankedTensorType> expandedMatrixType = expandedFilterShape(op);
-    if (failed(expandedMatrixType)) return failure();
+    ConvPacking packing = convPacking(op);
+    RankedTensorType expandedMatrixType = expandedFilterShape(op, packing);
     // Collect any zero diagonals of the filter matrix.
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
     auto filterRelation = filterLayout.getIntegerRelation();
@@ -1505,7 +1480,7 @@ struct ConvertLinalgConv1DNcwFcw
                << " zero diagonals for filter: " << matrix << "\n");
 
     std::vector<int64_t> matrixShapeForLayout =
-        layoutMatrixShape(op, expandedMatrixType.value());
+        packing.layoutMatrixShape(expandedMatrixType);
     // Layout propagation can record the result layout as a list of layouts to
     // compose, as the expanded kernel below also handles.
     Attribute resultLayout = op->getAttr(kLayoutAttrName);
@@ -1607,30 +1582,21 @@ struct ConvertLinalgConv2DNchwFchw
     return isPowerOfTwoDims && isConv2dAsMatvec;
   }
 
-  FailureOr<RankedTensorType> expandedFilterShape(
-      linalg::Conv2DNchwFchwOp op) const {
-    auto filterType = cast<RankedTensorType>(op.getInputs()[1].getType());
-    RankedTensorType dataType =
-        cast<RankedTensorType>(op.getInputs()[0].getType());
-    auto infoAttr = op->getAttr(kKernelInfoAttrName);
-    auto info = getKernelInfo(infoAttr);
-    if (info && !info->inputShape.empty()) {
-      // Use the kernel info attribute's input shape for the kernel. This
-      // accounts for any padding on the data-semantic tensor to allow for
-      // channel packing.
-      dataType =
-          RankedTensorType::get(info->inputShape, dataType.getElementType());
-    }
-
-    FailureOr<ConvMatrixOperand> matrixOperand =
-        foldedConvMatrixOperand(op, dataType);
-    if (failed(matrixOperand)) return failure();
+  // How LayoutPropagation built this conv's matrix. The packing already
+  // accounts for the channel padding and for any folded `tensor.pad`, so this
+  // needs no shape arithmetic of its own. IR that never went through that pass
+  // carries no packing, and gets the one a 2-D conv has before any fold.
+  ConvPacking convPacking(linalg::Conv2DNchwFchwOp op) const {
+    auto dataType = cast<RankedTensorType>(op.getInputs()[0].getType());
     auto strides = llvm::to_vector(op.getStrides().getValues<int64_t>());
-    // Rows only interchange for a strided conv; keep this in step with
-    // LayoutPropagation, which sizes the filter layout the same way.
-    return get2dConvChwFchwFilterExpandedType(
-        filterType, matrixOperand->dataType, matrixOperand->padding, strides,
-        /*interchangeRows=*/strides[0] > 1);
+    return getConvPacking(op, defaultConv2dPacking(dataType, strides));
+  }
+
+  RankedTensorType expandedFilterShape(linalg::Conv2DNchwFchwOp op,
+                                       const ConvPacking& packing) const {
+    auto filterType = cast<RankedTensorType>(op.getInputs()[1].getType());
+    auto strides = llvm::to_vector(op.getStrides().getValues<int64_t>());
+    return packing.expanded2dFilterType(filterType, strides);
   }
 
   LogicalResult haleviShoupKernel(
@@ -1650,8 +1616,8 @@ struct ConvertLinalgConv2DNchwFchw
 
     // The original matrix shape is the shape of the expanded filter before
     // diagonalization.
-    FailureOr<RankedTensorType> expandedMatrixType = expandedFilterShape(op);
-    if (failed(expandedMatrixType)) return failure();
+    ConvPacking packing = convPacking(op);
+    RankedTensorType expandedMatrixType = expandedFilterShape(op, packing);
 
     // Collect any zero diagonals of the filter matrix.
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
@@ -1668,7 +1634,7 @@ struct ConvertLinalgConv2DNchwFchw
                << " zero diagonals for filter: " << matrix << "\n");
 
     std::vector<int64_t> matrixShapeForLayout =
-        expandedMatrixType->getShape().vec();
+        packing.layoutMatrixShape(expandedMatrixType);
     // Layout propagation can record the result layout as a list of layouts to
     // compose, as the expanded kernel below also handles.
     Attribute resultLayout = op->getAttr(kLayoutAttrName);

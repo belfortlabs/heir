@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "lib/Dialect/TensorExt/IR/TensorExtAttributes.h"
+#include "lib/Utils/Layout/Convolution.h"
 #include "llvm/include/llvm/ADT/ArrayRef.h"          // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"       // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"  // from @llvm-project
@@ -16,68 +17,28 @@ namespace mlir {
 namespace heir {
 
 constexpr StringLiteral kKernelInfoAttrName = "heir.kernel_info";
-constexpr StringLiteral kKernelInputShapeKey = "input_shape";
 constexpr StringLiteral kKernelShapeKey = "result_shape";
 constexpr StringLiteral kGapFactorKey = "gap_factor";
 
-// Symmetric zero padding on the spatial dims that LayoutPropagation folded out
-// of a `tensor.pad` and into a conv's own `padding` parameter.
-constexpr StringLiteral kConvFoldedPaddingAttrName = "heir.conv_folded_padding";
+// Records `packing` on `op`, replacing whatever packing was there. Every field
+// travels in one attribute, so a run cannot leave half of a stale packing
+// behind for the next pass to act on.
+void setConvPacking(Operation* op, const ConvPacking& packing);
 
-// The width of the matrix that a conv's diagonalized filter layout was built
-// against, when LayoutPropagation absorbed the data operand's slot packing into
-// the filter's column space. The columns are then ciphertext slots, so the
-// layout is built at the ciphertext size instead of the expanded Toeplitz
-// matrix's own C*W. Absent means the layout uses the Toeplitz width.
-constexpr StringLiteral kAbsorbedMatrixWidthAttrName =
-    "heir.absorbed_matrix_width";
-
-// A conv's data operand as its expanded Toeplitz matrix sees it, paired with
-// the conv `padding` parameter that goes with it.
-struct ConvMatrixOperand {
-  RankedTensorType dataType;
-  int64_t padding = 0;
-};
-
-// Removes `padding` entries from both ends of every spatial dim of a conv data
-// operand: the width dim of a rank-3 (N, C, W) operand, or the height and
-// width dims of a rank-4 (N, C, H, W) one. A conv's `padding` parameter is a
-// single symmetric value shared by every spatial dim, which is why one
-// `padding` covers them all.
-std::optional<ConvMatrixOperand> foldConvSpatialPadding(
-    RankedTensorType dataType, int64_t padding);
-
-// Reads back an integer conv kernel parameter LayoutPropagation recorded on
-// `op`; 0 when the attribute is absent.
-int64_t getConvKernelParam(Operation* op, StringRef name);
-
-// Records an integer conv kernel parameter on `op`. A value of 0 removes the
-// attribute instead of writing it, so an op clone cannot carry a stale one.
-void setConvKernelParam(Operation* op, StringRef name, int64_t value);
-
-// The padding folded into `op`'s own padding parameter; 0 if none.
-inline int64_t getConvFoldedPadding(Operation* op) {
-  return getConvKernelParam(op, kConvFoldedPaddingAttrName);
-}
-inline void setConvFoldedPadding(Operation* op, int64_t padding) {
-  setConvKernelParam(op, kConvFoldedPaddingAttrName, padding);
-}
-
-// The width `op`'s filter layout was diagonalized at; 0 when it absorbed
-// nothing and so uses the expanded Toeplitz width.
-inline int64_t getAbsorbedMatrixWidth(Operation* op) {
-  return getConvKernelParam(op, kAbsorbedMatrixWidthAttrName);
-}
-inline void setAbsorbedMatrixWidth(Operation* op, int64_t width) {
-  setConvKernelParam(op, kAbsorbedMatrixWidthAttrName, width);
-}
+// The packing recorded on `op`, or `fallback` when `op` carries none.
+//
+// LayoutPropagation always records one, so a missing packing means the op never
+// went through it: hand written test IR, for instance. `fallback` is then the
+// packing a convolution has before any fold or absorption, which is what such
+// IR describes.
+ConvPacking getConvPacking(Operation* op, const ConvPacking& fallback);
 
 struct KernelInfo {
-  SmallVector<int64_t> inputShape;
   // Tracks the shape of the resolved kernel's tensor shape. This will account
   // for any additional expansion or striding due to the FHE kernel.
   SmallVector<int64_t> resultShape;
-  // Tracks the gap factor used for multiplexing convolutions.
+  // Tracks the gap factor used for multiplexing convolutions. A conv reads it
+  // off its data operand to chain the gap through successive convolutions.
   int64_t gapFactor = 1;
 };
 

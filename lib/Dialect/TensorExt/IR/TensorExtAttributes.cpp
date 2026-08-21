@@ -40,6 +40,26 @@ LogicalResult LayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
+LogicalResult ConvPackingAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError,
+    RankedTensorType matrixDataType, int64_t padding, bool interchangeRows,
+    int64_t absorbedMatrixWidth) {
+  // The conv kernels pack a rank-3 (N, C, W) or rank-4 (N, C, H, W) operand,
+  // and read the spatial extents by index, so no other rank is meaningful.
+  if (matrixDataType.getRank() != 3 && matrixDataType.getRank() != 4) {
+    return emitError() << "expected a rank-3 or rank-4 matrixDataType, got "
+                       << matrixDataType;
+  }
+  if (padding < 0) {
+    return emitError() << "expected a non-negative padding, got " << padding;
+  }
+  if (absorbedMatrixWidth < 0) {
+    return emitError() << "expected a non-negative absorbedMatrixWidth, got "
+                       << absorbedMatrixWidth;
+  }
+  return success();
+}
+
 IntegerRelation LayoutAttr::getIntegerRelation() const {
   auto result = getIntegerRelationFromIslStr(getLayoutStr());
   assert(succeeded(result) && "Failed to parse the layout string");

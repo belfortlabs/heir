@@ -31,6 +31,11 @@ def TensorExt_Dialect : Dialect {
     // (DenseI32ArrayAttr). Absent means row i is diagonal i.
     constexpr const static ::llvm::StringLiteral
         kDiagonalIndicesAttrName = "tensor_ext.diagonal_indices";
+    // On a convolution, everything that fixes the Toeplitz matrix the kernel
+    // is built from and the layout that matrix carries. LayoutPropagation
+    // decides it; ConvertToCiphertextSemantics reads it back.
+    constexpr const static ::llvm::StringLiteral
+        kConvPackingAttrName = "tensor_ext.conv_packing";
   }];
 
 
