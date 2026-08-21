@@ -16,10 +16,6 @@
 namespace mlir {
 namespace heir {
 
-constexpr StringLiteral kKernelInfoAttrName = "heir.kernel_info";
-constexpr StringLiteral kKernelShapeKey = "result_shape";
-constexpr StringLiteral kGapFactorKey = "gap_factor";
-
 // Records `packing` on `op`, replacing whatever packing was there. Every field
 // travels in one attribute, so a run cannot leave half of a stale packing
 // behind for the next pass to act on.
@@ -32,19 +28,6 @@ void setConvPacking(Operation* op, const ConvPacking& packing);
 // packing a convolution has before any fold or absorption, which is what such
 // IR describes.
 ConvPacking getConvPacking(Operation* op, const ConvPacking& fallback);
-
-struct KernelInfo {
-  // Tracks the shape of the resolved kernel's tensor shape. This will account
-  // for any additional expansion or striding due to the FHE kernel.
-  SmallVector<int64_t> resultShape;
-  // Tracks the gap factor used for multiplexing convolutions. A conv reads it
-  // off its data operand to chain the gap through successive convolutions.
-  int64_t gapFactor = 1;
-};
-
-Attribute makeKernelInfoAttr(MLIRContext* ctx, const KernelInfo& info);
-
-std::optional<KernelInfo> getKernelInfo(Attribute attr);
 
 using tensor_ext::LayoutAttr;
 

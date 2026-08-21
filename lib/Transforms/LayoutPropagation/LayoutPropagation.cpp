@@ -269,14 +269,58 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
   return FoldedConvPadding{folded, expected, layoutMatchesTarget};
 }
 
-// How a conv will read its data operand.
-struct ConvDataPlan {
+// How a conv will read its data operand. Exactly one of three things holds:
+// the operand already sits where the matrix expects it, the matrix absorbs the
+// operand's packing into its column space, or the operand has to be converted
+// first. Naming the three cases is what stops the last two from being set at
+// once.
+class ConvDataPlan {
+ public:
+  // The operand already carries the layout the matrix reads.
+  static ConvDataPlan readInPlace(ConvPacking packing) {
+    return ConvDataPlan(std::move(packing));
+  }
+
+  // The matrix absorbs the operand's slot packing. That makes its columns
+  // ciphertext slots, so the filter layout is built at the ciphertext width
+  // rather than the Toeplitz matrix's own width.
+  static ConvDataPlan absorb(ConvPacking packing,
+                             IntegerRelation columnPermutation,
+                             int64_t minSlotCount) {
+    packing.absorbedMatrixWidth = minSlotCount;
+    ConvDataPlan plan(std::move(packing));
+    plan.columnPermutation = std::move(columnPermutation);
+    return plan;
+  }
+
+  // The operand must carry `target` before the matrix can read it.
+  static ConvDataPlan convertFirst(ConvPacking packing,
+                                   IntegerRelation target) {
+    ConvDataPlan plan(std::move(packing));
+    plan.conversionTarget = std::move(target);
+    return plan;
+  }
+
   // What the matrix is built from, complete once the plan is made.
+  const ConvPacking& getPacking() const { return packing; }
+
+  // The permutation to fold into the matrix's column space, or null when this
+  // plan does not absorb. Shaped as the pointer the relation builders take.
+  const IntegerRelation* getColumnPermutation() const {
+    return columnPermutation ? &*columnPermutation : nullptr;
+  }
+
+  // The relation the operand must be converted to first, or null when it needs
+  // no conversion.
+  const IntegerRelation* getConversionTarget() const {
+    return conversionTarget ? &*conversionTarget : nullptr;
+  }
+
+ private:
+  explicit ConvDataPlan(ConvPacking packing) : packing(std::move(packing)) {}
+
   ConvPacking packing;
-  // Set when the matrix absorbs the data's slot packing into its column space.
   std::optional<IntegerRelation> columnPermutation;
-  // Set when the data must be converted to this relation first. Never set
-  // together with `columnPermutation`.
   std::optional<IntegerRelation> conversionTarget;
 };
 
@@ -314,16 +358,6 @@ std::optional<IntegerRelation> tryAbsorbConvDataPacking(
   return representative.value();
 }
 
-// The plan for a matrix that absorbed the data's slot packing. Absorbing makes
-// the matrix columns ciphertext slots, so the filter layout is built at the
-// ciphertext width rather than the Toeplitz matrix's own width.
-ConvDataPlan absorbedConvPlan(ConvPacking packing,
-                              IntegerRelation columnPermutation,
-                              int64_t minSlotCount) {
-  packing.absorbedMatrixWidth = minSlotCount;
-  return ConvDataPlan{packing, std::move(columnPermutation)};
-}
-
 // Decide how a conv reads its data operand, taking the first of these that
 // holds. A folded operand comes first because it keeps the padding out of the
 // matrix columns, and reading the data where it already sits comes before
@@ -336,11 +370,14 @@ std::optional<ConvDataPlan> planFoldedConvDataAccess(Value data, Value filter,
   std::optional<FoldedConvPadding> folded =
       tryFoldPadIntoConvPadding(data, packing, dataLayout, minSlotCount);
   if (!folded) return std::nullopt;
-  if (folded->layoutMatchesTarget) return ConvDataPlan{folded->packing};
+  if (folded->layoutMatchesTarget) {
+    return ConvDataPlan::readInPlace(folded->packing);
+  }
   std::optional<IntegerRelation> absorbed = tryAbsorbConvDataPacking(
       data, filter, folded->packing, dataLayout, minSlotCount, solver);
   if (!absorbed) return std::nullopt;
-  return absorbedConvPlan(folded->packing, std::move(*absorbed), minSlotCount);
+  return ConvDataPlan::absorb(folded->packing, std::move(*absorbed),
+                              minSlotCount);
 }
 
 ConvDataPlan planConvDataAccess(Value data, Value filter,
@@ -357,13 +394,13 @@ ConvDataPlan planConvDataAccess(Value data, Value filter,
   IntegerRelation rowMajor =
       getRowMajorLayoutRelation(packing.matrixDataType, minSlotCount);
   if (isRelationEqual(dataLayout.getIntegerRelation(), rowMajor)) {
-    return ConvDataPlan{packing};
+    return ConvDataPlan::readInPlace(packing);
   }
   if (auto absorbed = tryAbsorbConvDataPacking(
           data, filter, packing, dataLayout, minSlotCount, solver)) {
-    return absorbedConvPlan(packing, std::move(*absorbed), minSlotCount);
+    return ConvDataPlan::absorb(packing, std::move(*absorbed), minSlotCount);
   }
-  return ConvDataPlan{packing, std::nullopt, std::move(rowMajor)};
+  return ConvDataPlan::convertFirst(packing, std::move(rowMajor));
 }
 
 // Return a copy of the kernel info associated with the value and update the
@@ -372,13 +409,15 @@ ConvDataPlan planConvDataAccess(Value data, Value filter,
 
 Attribute cloneKernelInfoWithResultShape(Value value,
                                          ArrayRef<int64_t> resultShape) {
-  auto kernelInfo = findAttributeAssociatedWith(value, kKernelInfoAttrName);
-  if (succeeded(kernelInfo)) {
-    auto info = getKernelInfo(kernelInfo.value()).value();
-    info.resultShape = llvm::to_vector(resultShape);
-    return makeKernelInfoAttr(value.getContext(), info);
-  }
-  return Attribute{};
+  auto kernelInfo = findAttributeAssociatedWith(
+      value, tensor_ext::TensorExtDialect::kKernelInfoAttrName);
+  if (failed(kernelInfo)) return Attribute{};
+  auto info = dyn_cast<tensor_ext::KernelInfoAttr>(kernelInfo.value());
+  if (!info) return Attribute{};
+  return tensor_ext::KernelInfoAttr::get(
+      value.getContext(),
+      DenseI64ArrayAttr::get(value.getContext(), resultShape),
+      info.getGapFactor());
 }
 
 }  // namespace
@@ -618,11 +657,11 @@ LogicalResult LayoutPropagation::visitOperation(func::FuncOp op) {
     if (auto tensorType = dyn_cast<RankedTensorType>(
             cast<SecretType>(arg.getType()).getValueType())) {
       setAttributeAssociatedWith(
-          arg, kKernelInfoAttrName,
-          makeKernelInfoAttr(
+          arg, tensor_ext::TensorExtDialect::kKernelInfoAttrName,
+          tensor_ext::KernelInfoAttr::get(
               arg.getContext(),
-              KernelInfo{.resultShape = llvm::to_vector(tensorType.getShape()),
-                         .gapFactor = 1}));
+              DenseI64ArrayAttr::get(arg.getContext(), tensorType.getShape()),
+              /*gapFactor=*/1));
     }
   }
 
@@ -663,11 +702,12 @@ LogicalResult LayoutPropagation::visitOperation(GenericOp op) {
         blockArg, tensor_ext::TensorExtDialect::kLayoutAttrName, layout);
     debugAssignLayout(blockArg, layout);
     // Pass through kernel info
-    auto kernelInfo =
-        findAttributeAssociatedWith(operand.get(), kKernelInfoAttrName);
+    auto kernelInfo = findAttributeAssociatedWith(
+        operand.get(), tensor_ext::TensorExtDialect::kKernelInfoAttrName);
     if (succeeded(kernelInfo)) {
-      setAttributeAssociatedWith(blockArg, kKernelInfoAttrName,
-                                 kernelInfo.value());
+      setAttributeAssociatedWith(
+          blockArg, tensor_ext::TensorExtDialect::kKernelInfoAttrName,
+          kernelInfo.value());
     }
   }
   // The layout of the result of the generic op is handled when the YieldOp is
@@ -1140,16 +1180,16 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
   ConvDataPlan plan =
       planConvDataAccess(data, filter, defaultConv1dPacking(dataType),
                          dataLayout, minSlotCount, solver);
-  const ConvPacking& packing = plan.packing;
+  const ConvPacking& packing = plan.getPacking();
 
-  if (plan.conversionTarget) {
+  if (const IntegerRelation* target = plan.getConversionTarget()) {
     LLVM_DEBUG(llvm::dbgs() << "conv_1d data input is not row major, "
                                "inserting layout conversion.\n");
-    auto [toReplace, newDataLayoutAttr] = convertToLayout(
-        ctx, builder, op, data, dataLayout, *plan.conversionTarget);
+    auto [toReplace, newDataLayoutAttr] =
+        convertToLayout(ctx, builder, op, data, dataLayout, *target);
     debugAssignLayout(toReplace, newDataLayoutAttr);
     assignedLayouts.insert({toReplace, newDataLayoutAttr});
-  } else if (plan.columnPermutation) {
+  } else if (plan.getColumnPermutation()) {
     LLVM_DEBUG(llvm::dbgs() << "conv_1d absorbing data packing into the "
                                "diagonal filter layout.\n");
   }
@@ -1158,8 +1198,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
   // into a larger matrix and then diagonalizing.
   LayoutAttr filterLayout = getComposedLayoutAttr(filter);
   auto convRelation = get1dConvCwFcwFilterDiagonalizedRelation(
-      filterType, packing, stride, minSlotCount,
-      plan.columnPermutation ? &*plan.columnPermutation : nullptr);
+      filterType, packing, stride, minSlotCount, plan.getColumnPermutation());
   if (failed(convRelation)) {
     return failure();
   }
@@ -1231,17 +1270,19 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     return op->emitOpError() << "Expected 4-D data tensor (N=1, C, H, W)";
   }
 
-  auto dataParentInfo = findAttributeAssociatedWith(data, kKernelInfoAttrName);
+  auto dataParentInfo = findAttributeAssociatedWith(
+      data, tensor_ext::TensorExtDialect::kKernelInfoAttrName);
   if (failed(dataParentInfo)) {
     return op->emitOpError() << "Failed to find kernel info for data input";
   }
-  auto dataKernelInfo = getKernelInfo(dataParentInfo.value());
+  auto dataKernelInfo =
+      dyn_cast<tensor_ext::KernelInfoAttr>(dataParentInfo.value());
   if (!dataKernelInfo) {
     return op->emitOpError() << "Failed to get kernel info for data input";
   }
   // The gap factor accumulates the producer's gap, so it can exceed the stride
   // when this conv follows another strided one.
-  auto gapFactor = strides[0] * dataKernelInfo->gapFactor;
+  auto gapFactor = strides[0] * dataKernelInfo.getGapFactor();
   // The layout relations shuffle by this conv's own stride, so that is the
   // block size the channel padding below rounds up to. A conv whose gap exceeds
   // its stride packs its result against gap^2 instead, and padding cannot
@@ -1253,8 +1294,9 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
            << ") to be divisible by gap^2 (" << gapFactor * gapFactor << ")";
   }
 
-  RankedTensorType fheInputType = RankedTensorType::get(
-      dataKernelInfo->resultShape, outputType.getElementType());
+  RankedTensorType fheInputType =
+      RankedTensorType::get(dataKernelInfo.getResultShape().asArrayRef(),
+                            outputType.getElementType());
 
   LayoutAttr dataLayout = getComposedLayoutAttr(data);
 
@@ -1265,7 +1307,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   packing.matrixDataType = fheInputType;
   ConvDataPlan plan = planConvDataAccess(data, filter, packing, dataLayout,
                                          minSlotCount, solver);
-  packing = plan.packing;
+  packing = plan.getPacking();
 
   RankedTensorType fheOutputType = outputType;
   if (packing.interchangeRows) {
@@ -1288,20 +1330,18 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   }
   // The operand the matrix is built against travels on the packing instead, so
   // this only chains the gap and the result shape to the next conv.
-  KernelInfo kernelInfo = {
-      .resultShape = llvm::to_vector(fheOutputType.getShape()),
-      .gapFactor = gapFactor};
-  Attribute kernelInfoAttr = makeKernelInfoAttr(ctx, kernelInfo);
+  Attribute kernelInfoAttr = tensor_ext::KernelInfoAttr::get(
+      ctx, DenseI64ArrayAttr::get(ctx, fheOutputType.getShape()), gapFactor);
 
   mlir::IRRewriter builder(ctx);
-  if (plan.conversionTarget) {
+  if (const IntegerRelation* target = plan.getConversionTarget()) {
     LLVM_DEBUG(llvm::dbgs() << "conv_2d data input is not row major, "
                                "inserting layout conversion.\n");
-    auto [toReplace, newDataLayoutAttr] = convertToLayout(
-        ctx, builder, op, data, dataLayout, *plan.conversionTarget);
+    auto [toReplace, newDataLayoutAttr] =
+        convertToLayout(ctx, builder, op, data, dataLayout, *target);
     debugAssignLayout(toReplace, newDataLayoutAttr);
     assignedLayouts.insert({toReplace, newDataLayoutAttr});
-  } else if (plan.columnPermutation) {
+  } else if (plan.getColumnPermutation()) {
     LLVM_DEBUG(llvm::dbgs() << "conv_2d absorbing data packing into the "
                                "diagonal filter layout.\n");
   }
@@ -1313,8 +1353,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     originalFilter = assignOp.getValue();
   }
   auto maybeRels = get2dConvChwFchwFilterAsSequence(
-      filterType, packing, strides, minSlotCount,
-      plan.columnPermutation ? &*plan.columnPermutation : nullptr);
+      filterType, packing, strides, minSlotCount, plan.getColumnPermutation());
   if (failed(maybeRels)) {
     return failure();
   }
@@ -1371,7 +1410,8 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
       secret::KernelAttr::get(ctx, KernelName::MatvecDiagonal, /*force=*/false);
   op->setAttr(secret::SecretDialect::kKernelAttrName, kernelAttr);
 
-  setAttributeAssociatedWith(op.getResult(0), kKernelInfoAttrName,
+  setAttributeAssociatedWith(op.getResult(0),
+                             tensor_ext::TensorExtDialect::kKernelInfoAttrName,
                              kernelInfoAttr);
 
   return alignInitWithResultLayout(op, op.getOutputs().front(),
@@ -2172,10 +2212,12 @@ void LayoutPropagation::rectifyIncompatibleOperandLayouts(Operation* op) {
             // an attribute describing the layout of their results.
             OpBuilder builder(&getContext());
             assignedLayouts.insert({convertOp.getResult(), targetLayout});
-            setResultLayoutAttr(convertOp,
-                                findAttributeAssociatedWith(opOperand.get(),
-                                                            kKernelInfoAttrName)
-                                    .value_or(Attribute()));
+            setResultLayoutAttr(
+                convertOp,
+                findAttributeAssociatedWith(
+                    opOperand.get(),
+                    tensor_ext::TensorExtDialect::kKernelInfoAttrName)
+                    .value_or(Attribute()));
             op->setOperand(opOperand.getOperandNumber(), convertOp.getResult());
           }
         }
@@ -2375,7 +2417,8 @@ void LayoutPropagation::setResultLayoutAttr(Operation* op,
   // one.
   if (!kernelInfo && op->getNumOperands() > 0) {
     for (Value operand : op->getOperands()) {
-      auto info = findAttributeAssociatedWith(operand, kKernelInfoAttrName);
+      auto info = findAttributeAssociatedWith(
+          operand, tensor_ext::TensorExtDialect::kKernelInfoAttrName);
       if (succeeded(info)) {
         kernelInfo = info.value();
         break;
@@ -2384,7 +2427,9 @@ void LayoutPropagation::setResultLayoutAttr(Operation* op,
   }
   if (kernelInfo) {
     for (Value result : op->getResults()) {
-      setAttributeAssociatedWith(result, kKernelInfoAttrName, kernelInfo);
+      setAttributeAssociatedWith(
+          result, tensor_ext::TensorExtDialect::kKernelInfoAttrName,
+          kernelInfo);
     }
   }
 

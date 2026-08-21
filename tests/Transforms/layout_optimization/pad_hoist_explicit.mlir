@@ -7,18 +7,18 @@
 module attributes {backend.lattigo, scheme.ckks} {
   // CHECK: func.func @tcresnet8small
   // CHECK-SAME: tensor_ext.layout = #[[hoisted_layout:.*]]
-  func.func @tcresnet8small(%arg0: !secret.secret<tensor<1x10x48xf32>> {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 10, 48>}, tensor_ext.layout = #layout1}) -> (!secret.secret<tensor<10x50xf32>> {tensor_ext.layout = #layout}) {
+  func.func @tcresnet8small(%arg0: !secret.secret<tensor<1x10x48xf32>> {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 10, 48], gapFactor = 1>, tensor_ext.layout = #layout1}) -> (!secret.secret<tensor<10x50xf32>> {tensor_ext.layout = #layout}) {
     %cst = arith.constant 0.000000e+00 : f32
-    %0 = secret.generic(%arg0: !secret.secret<tensor<1x10x48xf32>> {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 10, 48>}, tensor_ext.layout = #layout1}) {
+    %0 = secret.generic(%arg0: !secret.secret<tensor<1x10x48xf32>> {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 10, 48], gapFactor = 1>, tensor_ext.layout = #layout1}) {
     ^body(%input0: tensor<1x10x48xf32>):
       debug.validate %input0 {metadata = "input", name = "input", tensor_ext.layout = []} : tensor<1x10x48xf32>
-      %collapsed = tensor.collapse_shape %input0 [[0, 1], [2]] {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 10, 48>}, tensor_ext.layout = #layout2} : tensor<1x10x48xf32> into tensor<10x48xf32>
+      %collapsed = tensor.collapse_shape %input0 [[0, 1], [2]] {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [10, 48], gapFactor = 1>, tensor_ext.layout = #layout2} : tensor<1x10x48xf32> into tensor<10x48xf32>
 
       // Pad outputs layout2
       %padded = tensor.pad %collapsed low[0, 1] high[0, 1] {
       ^bb0(%arg1: index, %arg2: index):
         tensor.yield %cst : f32
-      } {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 10, 48>}, tensor_ext.layout = #layout2} : tensor<10x48xf32> to tensor<10x50xf32>
+      } {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [10, 48], gapFactor = 1>, tensor_ext.layout = #layout2} : tensor<10x48xf32> to tensor<10x50xf32>
 
       // Explicit convert_layout from layout2 to layout
       // CHECK-NOT: tensor_ext.convert_layout

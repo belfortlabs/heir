@@ -29,7 +29,7 @@ module attributes {backend.lattigo, scheme.ckks, backend.config_override = {boot
     %c2 = arith.constant 2 : index
     %c4 = arith.constant 4 : index
 
-    %4534 = secret.generic(%arg0: !secret.secret<tensor<1x4096xf32>> {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 10, 48>}}) {
+    %4534 = secret.generic(%arg0: !secret.secret<tensor<1x4096xf32>> {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 10, 48], gapFactor = 1>}) {
     ^body(%input0: tensor<1x4096xf32>):
       %11354 = arith.mulf %input0, %cst : tensor<1x4096xf32>
       %11355 = arith.addf %11354, %cst_0 : tensor<1x4096xf32>

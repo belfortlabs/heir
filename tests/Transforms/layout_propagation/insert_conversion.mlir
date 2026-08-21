@@ -11,16 +11,16 @@
 // CHECK: [[rm_layout:[^ ]*]] = #tensor_ext.layout<"{ [i0, i1] -> [ct, slot] :
 
 // CHECK: insert_conversion
-// CHECK-SAME: %[[arg0:[^:]+]]: !secret.secret<tensor<32x32xi16>> {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 32, 32>}, tensor_ext.layout = [[rm_layout]]},
-// CHECK-SAME: %[[arg1:[^:]+]]: !secret.secret<tensor<32x32xi16>> {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 32, 32>}, tensor_ext.layout = [[rm_layout]]}
+// CHECK-SAME: %[[arg0:[^:]+]]: !secret.secret<tensor<32x32xi16>> {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [32, 32], gapFactor = 1>, tensor_ext.layout = [[rm_layout]]},
+// CHECK-SAME: %[[arg1:[^:]+]]: !secret.secret<tensor<32x32xi16>> {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [32, 32], gapFactor = 1>, tensor_ext.layout = [[rm_layout]]}
 func.func @insert_conversion(%arg0: !stensor, %arg1: !stensor) -> !stensor2 {
   // CHECK: [[cst:%.*]] = arith.constant dense<0>
   %out_1 = arith.constant dense<0> : !tensor2
   %out_2 = arith.constant dense<0> : !tensor2
 
   // CHECK: secret.generic
-  // CHECK-SAME: (%[[arg0]]: !secret.secret<tensor<32x32xi16>> {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 32, 32>}, tensor_ext.layout = [[rm_layout]]},
-  // CHECK-SAME: %[[arg1]]: !secret.secret<tensor<32x32xi16>> {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 32, 32>}, tensor_ext.layout = [[rm_layout]]}
+  // CHECK-SAME: (%[[arg0]]: !secret.secret<tensor<32x32xi16>> {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [32, 32], gapFactor = 1>, tensor_ext.layout = [[rm_layout]]},
+  // CHECK-SAME: %[[arg1]]: !secret.secret<tensor<32x32xi16>> {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [32, 32], gapFactor = 1>, tensor_ext.layout = [[rm_layout]]}
   %0 = secret.generic(%arg0: !stensor, %arg1: !stensor) {
   ^body(%pt_arg0: !tensor, %pt_arg1: !tensor):
     // CHECK: tensor_ext.assign_layout [[cst]] {layout = [[rm_layout1:.*]],

@@ -116,4 +116,30 @@ def TensorExt_ConvPackingAttr : TensorExt_Attr<"ConvPacking", "conv_packing"> {
   let genVerifyDecl = 1;
 }
 
+def TensorExt_KernelInfoAttr : TensorExt_Attr<"KernelInfo", "kernel_info"> {
+  let summary = "What a value's kernel produced, and the gap it was packed with.";
+  let description = [{
+    Layout assignment records this on each value it lays out.
+
+    * `resultShape` is the shape the resolved FHE kernel produces, which
+      accounts for any expansion, striding or channel padding the kernel adds
+      on top of the data-semantic shape.
+    * `gapFactor` is the multiplexing gap that shape is packed with. A strided
+      convolution multiplies its operand's gap by its stride, so a chain of
+      them accumulates, and each conv reads the factor off its data operand.
+
+    Unlike tensor_ext.conv_packing, this describes a value rather than an
+    operation, because it is what the next kernel in the chain consumes.
+  }];
+  let parameters = (ins
+    "DenseI64ArrayAttr":$resultShape,
+    "int64_t":$gapFactor
+  );
+  // Printed inline rather than behind a mnemonic alias: it lands on nearly
+  // every laid-out value, and keeping the value beside the op is what makes the
+  // layout tests readable.
+  let genMnemonicAlias = 0;
+  let genVerifyDecl = 1;
+}
+
 #endif  // LIB_DIALECT_TENSOREXT_IR_TENSOREXTATTRIBUTES_TD_

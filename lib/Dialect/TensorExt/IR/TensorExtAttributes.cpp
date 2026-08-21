@@ -40,6 +40,20 @@ LogicalResult LayoutAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
+LogicalResult KernelInfoAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError, DenseI64ArrayAttr resultShape,
+    int64_t gapFactor) {
+  if (!resultShape) {
+    return emitError() << "expected a resultShape";
+  }
+  // A gap of 1 means no multiplexing; 0 or less describes no packing at all.
+  if (gapFactor < 1) {
+    return emitError() << "expected a gapFactor of at least 1, got "
+                       << gapFactor;
+  }
+  return success();
+}
+
 LogicalResult ConvPackingAttr::verify(
     function_ref<InFlightDiagnostic()> emitError,
     RankedTensorType matrixDataType, int64_t padding, bool interchangeRows,

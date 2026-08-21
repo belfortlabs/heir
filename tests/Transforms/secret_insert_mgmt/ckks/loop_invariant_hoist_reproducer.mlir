@@ -68,7 +68,7 @@ module attributes {backend.lattigo, scheme.ckks,
     }
     return %0 : tensor<64x4096xf32>
   }
-  func.func @tcresnet8small(%arg0: !secret.secret<tensor<1x4096xf32>> {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 10, 48>}, tensor_ext.original_type = #tensor_ext.original_type<originalType = tensor<1x10x48xf32>, layout = #tensor_ext.layout<"{ [i0, i1, i2] -> [ct, slot] : i0 = 0 and ct = 0 and (-48i1 - i2 + slot) mod 512 = 0 and 0 <= i1 <= 9 and 0 <= i2 <= 4095 - 48i1 and i2 <= 47 and 0 <= slot <= 4095 and 4096*floor((-512 + 48i1 + i2)/4096) <= -4096 + 48i1 + i2 }">>}) -> (!secret.secret<tensor<1x4096xf32>> {tensor_ext.original_type = #original_type}) {
+  func.func @tcresnet8small(%arg0: !secret.secret<tensor<1x4096xf32>> {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 10, 48], gapFactor = 1>, tensor_ext.original_type = #tensor_ext.original_type<originalType = tensor<1x10x48xf32>, layout = #tensor_ext.layout<"{ [i0, i1, i2] -> [ct, slot] : i0 = 0 and ct = 0 and (-48i1 - i2 + slot) mod 512 = 0 and 0 <= i1 <= 9 and 0 <= i2 <= 4095 - 48i1 and i2 <= 47 and 0 <= slot <= 4095 and 4096*floor((-512 + 48i1 + i2)/4096) <= -4096 + 48i1 + i2 }">>}) -> (!secret.secret<tensor<1x4096xf32>> {tensor_ext.original_type = #original_type}) {
     %c3904 = arith.constant 3904 : index
     %cst = arith.constant dense_resource<torch_tensor_16_10_3_torch.float32_packed> : tensor<512x4096xf32>
     %cst_0 = arith.constant dense_resource<__elided__> : tensor<1x4096xf32>
@@ -393,7 +393,7 @@ module attributes {backend.lattigo, scheme.ckks,
     %2 = call @_assign_layout_16889166383960922983() : () -> tensor<64x4096xf32>
     %3 = tensor.empty() : tensor<8x4096xf32>
     %4 = tensor.empty() : tensor<4x4096xf32>
-    %5 = secret.generic(%arg0: !secret.secret<tensor<1x4096xf32>> {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 10, 48>}}) {
+    %5 = secret.generic(%arg0: !secret.secret<tensor<1x4096xf32>> {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 10, 48], gapFactor = 1>}) {
     ^body(%input0: tensor<1x4096xf32>):
       debug.validate %input0 {metadata = "input", name = "input"} : tensor<1x4096xf32>
       %6 = arith.mulf %input0, %cst_270 : tensor<1x4096xf32>
@@ -434,9 +434,9 @@ module attributes {backend.lattigo, scheme.ckks,
       }
       %9 = arith.addf %8, %cst_0 : tensor<1x4096xf32>
       debug.validate %9 {metadata = "conv1", name = "conv1"} : tensor<1x4096xf32>
-      %10 = arith.mulf %9, %cst_4 {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 16, 48>}} : tensor<1x4096xf32>
-      %11 = arith.addf %10, %cst_5 {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 16, 48>}} : tensor<1x4096xf32>
-      %12 = kernel.eval_chebyshev %11 {coefficients = [2.3251965538185049, 3.6698357203950502, 1.7070180567163611, -0.042888578030742995], heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 16, 48>}} : tensor<1x4096xf32> -> tensor<1x4096xf32>
+      %10 = arith.mulf %9, %cst_4 {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 16, 48], gapFactor = 1>} : tensor<1x4096xf32>
+      %11 = arith.addf %10, %cst_5 {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 16, 48], gapFactor = 1>} : tensor<1x4096xf32>
+      %12 = kernel.eval_chebyshev %11 {coefficients = [2.3251965538185049, 3.6698357203950502, 1.7070180567163611, -0.042888578030742995], tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 16, 48], gapFactor = 1>} : tensor<1x4096xf32> -> tensor<1x4096xf32>
       debug.validate %12 {metadata = "relu1", name = "relu1"} : tensor<1x4096xf32>
       %13 = scf.for %arg1 = %c0 to %c32 step %c1 iter_args(%arg2 = %1) -> (tensor<32x4096xf32>) {
         %727 = tensor_ext.rotate %12, %arg1 : tensor<1x4096xf32>, index
@@ -513,9 +513,9 @@ module attributes {backend.lattigo, scheme.ckks,
       }
       %19 = arith.addf %18, %cst_10 : tensor<1x4096xf32>
       debug.validate %19 {metadata = "conv3", name = "conv3"} : tensor<1x4096xf32>
-      %20 = arith.mulf %19, %cst_12 {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 24, 24>}} : tensor<1x4096xf32>
-      %21 = arith.addf %20, %cst_13 {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 24, 24>}} : tensor<1x4096xf32>
-      %22 = kernel.eval_chebyshev %21 {coefficients = [1.928445874218355, 3.1291131356625779, 1.6714159928421066, 0.079184834538447213], heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 24, 24>}} : tensor<1x4096xf32> -> tensor<1x4096xf32>
+      %20 = arith.mulf %19, %cst_12 {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 24, 24], gapFactor = 1>} : tensor<1x4096xf32>
+      %21 = arith.addf %20, %cst_13 {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 24, 24], gapFactor = 1>} : tensor<1x4096xf32>
+      %22 = kernel.eval_chebyshev %21 {coefficients = [1.928445874218355, 3.1291131356625779, 1.6714159928421066, 0.079184834538447213], tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 24, 24], gapFactor = 1>} : tensor<1x4096xf32> -> tensor<1x4096xf32>
       debug.validate %22 {metadata = "relu2", name = "relu2"} : tensor<1x4096xf32>
       %23 = arith.mulf %22, %cst_272 : tensor<1x4096xf32>
       %24 = arith.mulf %22, %cst_273 : tensor<1x4096xf32>
@@ -759,9 +759,9 @@ module attributes {backend.lattigo, scheme.ckks,
       %235 = arith.addf %186, %231 : tensor<1x4096xf32>
       %236 = arith.addf %235, %233 : tensor<1x4096xf32>
       %237 = arith.addf %234, %236 : tensor<1x4096xf32>
-      %238 = arith.mulf %237, %cst_16 {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 24, 24>}} : tensor<1x4096xf32>
-      %239 = arith.addf %238, %cst_17 {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 24, 24>}} : tensor<1x4096xf32>
-      %240 = kernel.eval_chebyshev %239 {coefficients = [3.2315526501609444, 5.0763567915464565, 2.3095994252524283, -0.08145488075797401], heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 1, 24, 24>}} : tensor<1x4096xf32> -> tensor<1x4096xf32>
+      %238 = arith.mulf %237, %cst_16 {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 24, 24], gapFactor = 1>} : tensor<1x4096xf32>
+      %239 = arith.addf %238, %cst_17 {tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 24, 24], gapFactor = 1>} : tensor<1x4096xf32>
+      %240 = kernel.eval_chebyshev %239 {coefficients = [3.2315526501609444, 5.0763567915464565, 2.3095994252524283, -0.08145488075797401], tensor_ext.kernel_info = #tensor_ext.kernel_info<resultShape = [1, 24, 24], gapFactor = 1>} : tensor<1x4096xf32> -> tensor<1x4096xf32>
       debug.validate %240 {metadata = "relu3", name = "relu3"} : tensor<1x4096xf32>
       %241 = scf.for %arg1 = %c0 to %c23 step %c1 iter_args(%arg2 = %0) -> (tensor<23x4096xf32>) {
         %727 = tensor_ext.rotate %240, %arg1 : tensor<1x4096xf32>, index

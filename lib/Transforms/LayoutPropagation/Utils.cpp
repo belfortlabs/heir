@@ -24,32 +24,6 @@ namespace heir {
 using ::llvm::ArrayRef;
 using ::llvm::SmallVector;
 
-Attribute makeKernelInfoAttr(MLIRContext* ctx, const KernelInfo& info) {
-  SmallVector<NamedAttribute> attrs;
-  attrs.reserve(2);
-  attrs.push_back(
-      NamedAttribute(StringAttr::get(ctx, kKernelShapeKey),
-                     DenseI64ArrayAttr::get(ctx, info.resultShape)));
-  attrs.push_back(NamedAttribute(
-      StringAttr::get(ctx, kGapFactorKey),
-      IntegerAttr::get(IntegerType::get(ctx, 64), info.gapFactor)));
-  return DictionaryAttr::get(ctx, attrs);
-}
-
-std::optional<KernelInfo> getKernelInfo(Attribute attr) {
-  auto dictAttr = dyn_cast_or_null<DictionaryAttr>(attr);
-  if (!dictAttr) return std::nullopt;
-  KernelInfo info;
-  if (auto shapeAttr = dictAttr.getAs<DenseI64ArrayAttr>(kKernelShapeKey)) {
-    info.resultShape.assign(shapeAttr.asArrayRef().begin(),
-                            shapeAttr.asArrayRef().end());
-  }
-  if (auto gapFactorAttr = dictAttr.getAs<IntegerAttr>(kGapFactorKey)) {
-    info.gapFactor = gapFactorAttr.getValue().getSExtValue();
-  }
-  return info;
-}
-
 void setConvPacking(Operation* op, const ConvPacking& packing) {
   op->setAttr(tensor_ext::TensorExtDialect::kConvPackingAttrName,
               tensor_ext::ConvPackingAttr::get(

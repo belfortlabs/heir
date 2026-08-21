@@ -36,6 +36,11 @@ def TensorExt_Dialect : Dialect {
     // decides it; ConvertToCiphertextSemantics reads it back.
     constexpr const static ::llvm::StringLiteral
         kConvPackingAttrName = "tensor_ext.conv_packing";
+    // On a value, the shape its kernel actually produces and the gap factor
+    // that shape was packed with. A conv reads it off its data operand to chain
+    // the gap through successive convolutions.
+    constexpr const static ::llvm::StringLiteral
+        kKernelInfoAttrName = "tensor_ext.kernel_info";
   }];
 
 

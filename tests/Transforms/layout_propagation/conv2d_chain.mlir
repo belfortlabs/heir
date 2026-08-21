@@ -1,13 +1,13 @@
 // RUN: heir-opt --layout-propagation %s | FileCheck %s
 
-// Check annotations of heir.kernel_info for gap_factor propagation.
+// Check annotations of tensor_ext.kernel_info for gapFactor propagation.
 
 module attributes {backend.lattigo, scheme.ckks} {
   // CHECK: func.func @conv2d_chain
   // CHECK: linalg.conv_2d_nchw_fchw
-  // CHECK-SAME: gap_factor = 1 : i64, result_shape = array<i64: 1, 1, 3, 3>
+  // CHECK-SAME: resultShape = [1, 1, 3, 3], gapFactor = 1
   // CHECK: linalg.conv_2d_nchw_fchw
-  // CHECK-SAME: gap_factor = 1 : i64, result_shape = array<i64: 1, 1, 2, 3>
+  // CHECK-SAME: resultShape = [1, 1, 2, 3], gapFactor = 1
   // CHECK: return
   func.func @conv2d_chain(%arg0: !secret.secret<tensor<1x1x4x4xf32>>) -> !secret.secret<tensor<1x1x2x3xf32>> {
     %cst = arith.constant dense<1.000000e+00> : tensor<1x1x2x1xf32>
