@@ -1,5 +1,6 @@
 // RUN: heir-opt --cheddar-configure-crypto-context=entry-function=main %s | FileCheck %s
 // RUN: heir-opt --cheddar-configure-crypto-context="entry-function=main prepare-rotation-keys-at-use-levels=true" %s | FileCheck %s --check-prefix=USE-LEVELS
+// RUN: heir-opt --cheddar-configure-crypto-context="entry-function=main use-cyclops-runtime=true" %s | FileCheck %s --check-prefix=CYCLOPS
 
 !ciphertext = !cheddar.ciphertext
 !context = !cheddar.context
@@ -15,6 +16,16 @@ module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [3602879
     %d2 = bufferization.alloc_tensor() : tensor<!ciphertext>
     %result2 = cheddar.hrot_add %ctx, %evk, %result, %ct, %d2 {distance = 7 : i64, level = 0 : i64} : (!context, !evk_map, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
     return %result2 : tensor<!ciphertext>
+  }
+
+  // bs = gs = 0: the runtime plans the split, so this op names no rotation
+  // distances of its own. Two transforms of the same shape share one request.
+  func.func @transform(%ctx: !context, %ct: tensor<!ciphertext>, %evk: !cheddar.evk_map, %diagonals: tensor<2x8xf32>) -> tensor<!ciphertext> {
+    %d0 = bufferization.alloc_tensor() : tensor<!ciphertext>
+    %0 = cheddar.linear_transform %ctx, %ct, %evk, %diagonals, %d0 {diagonal_indices = array<i32: 0, 1>, level = 1 : i64, bs = 0 : i64, gs = 0 : i64} : (!context, tensor<!ciphertext>, !cheddar.evk_map, tensor<2x8xf32>, tensor<!ciphertext>) -> tensor<!ciphertext>
+    %d1 = bufferization.alloc_tensor() : tensor<!ciphertext>
+    %1 = cheddar.linear_transform %ctx, %0, %evk, %diagonals, %d1 {diagonal_indices = array<i32: 0, 1>, level = 1 : i64, bs = 0 : i64, gs = 0 : i64} : (!context, tensor<!ciphertext>, !cheddar.evk_map, tensor<2x8xf32>, tensor<!ciphertext>) -> tensor<!ciphertext>
+    return %1 : tensor<!ciphertext>
   }
 }
 
@@ -42,6 +53,13 @@ module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [3602879
 // CHECK: func.func @main__configure
 // CHECK: call @main__setup
 // CHECK: call @main__keygen
+
+// With the Cyclops runtime the server reports its evaluation-key request and
+// the client generates the keys from it, so keygen itself prepares none.
+// CYCLOPS: func.func @main__keygen
+// CYCLOPS-NOT: cheddar.prepare_rot_key
+// CYCLOPS-NOT: cheddar.prepare_linear_transform_keys
+// CYCLOPS: return
 
 // USE-LEVELS: func.func @main__keygen
 // USE-LEVELS: cheddar.prepare_rot_key

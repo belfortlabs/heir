@@ -68,6 +68,16 @@ bool moduleIsOpenfhe(Operation* moduleOp);
 bool moduleIsLattigo(Operation* moduleOp);
 bool moduleIsCheddar(Operation* moduleOp);
 
+// The C++ runtime a Cheddar module was lowered for ("cheddar" or "cyclops"),
+// recorded by lwe-to-cheddar so later passes need not be told again.
+constexpr const static ::llvm::StringLiteral kCheddarRuntimeAttrName =
+    "cheddar.runtime";
+constexpr const static ::llvm::StringLiteral kCheddarRuntimeCheddar = "cheddar";
+constexpr const static ::llvm::StringLiteral kCheddarRuntimeCyclops = "cyclops";
+
+// The recorded runtime, or empty when no lowering recorded one.
+StringRef getCheddarRuntime(Operation* moduleOp);
+
 void moduleClearBackend(Operation* moduleOp);
 
 void moduleSetOpenfhe(Operation* moduleOp);

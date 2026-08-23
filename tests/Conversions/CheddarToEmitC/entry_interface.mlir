@@ -1,4 +1,6 @@
 // RUN: heir-opt --cheddar-emitc-entry-interface %s | FileCheck %s
+// RUN: not heir-opt --cheddar-emitc-entry-interface=runtime=cyclops %s 2>&1 | FileCheck %s --check-prefix=CYCLOPS
+// RUN: not heir-opt --cheddar-emitc-entry-interface=runtime=invalid %s 2>&1 | FileCheck %s --check-prefix=INVALID
 
 !ctx = !emitc.ptr<!emitc.opaque<"Context<word>">>
 !boot_ctx = !emitc.ptr<!emitc.opaque<"BootContext<word>">>
@@ -142,17 +144,20 @@ func.func @entry__preprocess(
 // CHECK: verbatim "using EncryptedOutputs = std::tuple<std::array<Ciphertext<word>, 1>>;"
 // CHECK: func @Setup() -> !emitc.opaque<"std::shared_ptr<Context>">
 
+// CYCLOPS: error: Cyclops split output requires separate server setup
+// INVALID: error: unsupported C++ runtime 'invalid'
 // CHECK: func @Encrypt(!emitc.opaque<"Context&">, !emitc.opaque<"SecretKey">, !emitc.opaque<"CleartextInputs&">) -> !emitc.opaque<"EncryptedInputs">
 // CHECK: emitc.file "source"
 // CHECK: include "entry.h"
 // CHECK: verbatim "namespace heir::generated::detail {"
-// CHECK: func.func private @entry__setup
-// CHECK: func.func private @entry__encrypt__arg0
-// CHECK: func.func private @entry__encrypt__arg1
-// CHECK: func.func private @entry__preprocessing
-// CHECK: func.func private @outlined_layout
-// CHECK: func.func private @entry__encrypt_inputs
-// CHECK-NOT: func.func private @entry(
+// CHECK: func private @entry__setup
+// CHECK-SAME: specifiers = ["static"]
+// CHECK: func private @entry__encrypt__arg0
+// CHECK: func private @entry__encrypt__arg1
+// CHECK: func private @entry__preprocessing
+// CHECK: func private @outlined_layout
+// CHECK: func private @entry__encrypt_inputs
+// CHECK-NOT: func private @entry(
 // CHECK: func @Setup() -> !emitc.opaque<"std::shared_ptr<Context>">
 // CHECK: !emitc.lvalue<!emitc.opaque<"std::shared_ptr<Context>">>
 // CHECK: call_opaque "::heir::generated::detail::entry__setup"

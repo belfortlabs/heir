@@ -49,7 +49,10 @@ def CheddarEmitCEntryInterface
   ];
   let options = [
     Option<"entryFunction", "entry-function", "std::string", "\"\"",
-           "Entry function to expose when the module contains more than one">
+           "Entry function to expose when the module contains more than one">,
+    Option<"runtime", "runtime", "std::string", "\"\"",
+           "C++ runtime API to target: cheddar or cyclops (default: the "
+           "runtime the module was lowered for, else cheddar)">
   ];
 }
 

@@ -40,7 +40,8 @@ StringRef supportKind(Type type) {
 
 bool isContextKind(StringRef kind) {
   return kind == ContextType::getMnemonic() ||
-         kind == BootContextType::getMnemonic();
+         kind == BootContextType::getMnemonic() ||
+         kind == ClientContextType::getMnemonic();
 }
 
 // A data argument of the facade.
@@ -83,7 +84,7 @@ class FacadeBuilder {
       llvm::function_ref<FailureOr<SmallVector<Value>>(ValueRange)> body) {
     MLIRContext* ctx = module.getContext();
     // Owned support values, in a fixed order: the primary context, further
-    // context kinds, the key, the resource directory.
+    // context kinds, the key, the debug handler, the resource directory.
     SmallVector<Type> types;
     SmallVector<DictionaryAttr> attrs;
     auto support = [&](StringRef kind, Type type) {
@@ -95,7 +96,8 @@ class FacadeBuilder {
     };
     support(getSupportKind(primaryContext), primaryContext);
     for (Type type :
-         {Type(ContextType::get(ctx)), Type(BootContextType::get(ctx))}) {
+         {Type(ContextType::get(ctx)), Type(BootContextType::get(ctx)),
+          Type(ClientContextType::get(ctx))}) {
       StringRef kind = getSupportKind(type);
       if (type != primaryContext && llvm::is_contained(required, kind))
         support(kind, type);
@@ -108,6 +110,8 @@ class FacadeBuilder {
                llvm::is_contained(required, EvalKeyType::getMnemonic())) {
       support(EvkMapType::getMnemonic(), EvkMapType::get(ctx));
     }
+    if (llvm::is_contained(required, DebugHandlerType::getMnemonic()))
+      support(DebugHandlerType::getMnemonic(), DebugHandlerType::get(ctx));
     if (llvm::is_contained(required, kResourceDirSupportKind))
       support(kResourceDirSupportKind,
               preprocessing::ResourceDirType::get(ctx));
