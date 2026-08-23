@@ -46,6 +46,10 @@ Clang needs a C++20 standard library; Cyclops also requires libtommath. CMake
 fetches Cyclops' pinned Cereal, JSON, and Protobuf dependencies. Medusa supplies
 separate persistent client/server runners and chunked local-process transport.
 
+The maintained AWS task `sky/cyclops_client.yaml` runs this build with HEIR's
+hermetic Clang on a CUDA-free host. Supply a `git archive` of the selected
+Cyclops revision as `/tmp/cyclops-source.tar.gz`.
+
 Medusa's `test/test_cyclops_integration.py` exercises generated key/ciphertext
 exchange, preprocessing, and debug checkpoints. On a configured GPU host, run
 `MEDUSA_CYCLOPS_INTEGRATION=1 uv run python -m unittest discover -s test -p test_cyclops_integration.py`.
