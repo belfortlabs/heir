@@ -19,6 +19,8 @@ enum RLWEScheme { ckksScheme, bgvScheme, bfvScheme };
 // Ciphertext management style selector
 enum CiphertextManagementStyle { greedy, orbitIlp };
 
+enum class CheddarRuntime { Cheddar, Cyclops };
+
 struct LoopOptions : public PassPipelineOptions<LoopOptions> {
   PassOptions::Option<bool> experimentalDisableLoopUnroll{
       *this, "experimental-disable-loop-unroll",
@@ -242,6 +244,12 @@ struct CheddarBackendOptions
       llvm::cl::desc(
           "Bootstrap message headroom passed to the Cheddar runtime"),
       llvm::cl::init(-1)};
+  PassOptions::Option<CheddarRuntime> runtime{
+      *this, "runtime", llvm::cl::desc("C++ runtime API to target"),
+      llvm::cl::values(
+          clEnumValN(CheddarRuntime::Cheddar, "cheddar", "Cheddar runtime"),
+          clEnumValN(CheddarRuntime::Cyclops, "cyclops", "Cyclops runtime")),
+      llvm::cl::init(CheddarRuntime::Cheddar)};
 };
 
 using RLWEPipelineBuilder =
