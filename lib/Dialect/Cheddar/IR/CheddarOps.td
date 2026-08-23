@@ -195,7 +195,8 @@ def Cheddar_PrepareBootstrapOp : Cheddar_ReadWriteDpsOp<
   let arguments = (ins
     Cheddar_BootContextLike:$ctx,
     Cheddar_UserInterfaceLike:$ui,
-    Builtin_IntegerAttr:$numSlots
+    Builtin_IntegerAttr:$numSlots,
+    OptionalAttr<UnitAttr>:$useCyclopsRuntime
   );
   let results = (outs
     Cheddar_BootContextResult:$ctxResult,
@@ -292,13 +293,16 @@ def Cheddar_EncodeOp : Cheddar_DpsOp<"encode", [PlaintextEncodeOpInterface]> {
     Calls encoder.Encode(pt, level, scale, message). The message is a vector
     of complex numbers (or reals). `logScale` preserves HEIR's logarithmic
     scale metadata for future use. `$output` is the destination plaintext.
+    `useSlotsApi` selects Cyclops' real-message EncodeSlots(pt, level, scale,
+    reals) in place of scale-snu's complex-message Encode.
   }];
   let arguments = (ins
     Cheddar_Encoder:$encoder,
     Cheddar_FloatLike:$message,
     Cheddar_PtLike:$output,
     Builtin_IntegerAttr:$level,
-    OptionalAttr<Builtin_IntegerAttr>:$logScale
+    OptionalAttr<Builtin_IntegerAttr>:$logScale,
+    OptionalAttr<UnitAttr>:$useSlotsApi
   );
   let results = (outs Cheddar_PtResult:$result);
 }
@@ -327,11 +331,14 @@ def Cheddar_DecodeOp : Cheddar_DpsOp<"decode", [], "Value"> {
     Calls encoder.Decode(message, pt). `value` is the destination buffer the
     decoded message is written into (the DPS init); the DPS interface verifier
     ties it 1:1 to the `decoded` result (same type).
+    `useSlotsApi` selects Cyclops' real-message DecodeSlots(reals, pt) in
+    place of scale-snu's complex-message Decode.
   }];
   let arguments = (ins
     Cheddar_Encoder:$encoder,
     Cheddar_PtLike:$plaintext,
-    Cheddar_FloatLike:$value
+    Cheddar_FloatLike:$value,
+    OptionalAttr<UnitAttr>:$useSlotsApi
   );
   let results = (outs Variadic<AnyRankedTensor>:$decoded);
 }
@@ -702,6 +709,9 @@ def Cheddar_LinearTransformOp : Cheddar_DpsOp<"linear_transform", [
     The `level` attribute specifies the modulus level for the operation.
     `min_ks` selects scale-snu's minimum-key-switch evaluation when the baby-
     and giant-step rotations are complete arithmetic progressions.
+    `log_pt_size_per_prime`, when present, is Cyclops' compact plaintext period:
+    the encoded diagonals repeat every `2^log_pt_size_per_prime` words per prime,
+    so it stores one period instead of a full ring-degree plaintext.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
@@ -714,7 +724,8 @@ def Cheddar_LinearTransformOp : Cheddar_DpsOp<"linear_transform", [
     Builtin_IntegerAttr:$level,
     Builtin_IntegerAttr:$bs,
     Builtin_IntegerAttr:$gs,
-    DefaultValuedAttr<BoolAttr, "false">:$min_ks
+    DefaultValuedAttr<BoolAttr, "false">:$min_ks,
+    OptionalAttr<Builtin_IntegerAttr>:$log_pt_size_per_prime
   );
   let results = (outs Cheddar_CtResult:$result);
   let hasVerifier = 1;
@@ -732,6 +743,9 @@ def Cheddar_PrepareLinearTransformOp :
     If `source_row_indices` is present, diagonal `diagonal_indices[i]` is read
     from row `source_row_indices[i]`.
     `min_ks` records the key-switch strategy chosen by the source lowering.
+    `log_pt_size_per_prime`, when present, is Cyclops' compact plaintext period:
+    the encoded diagonals repeat every `2^log_pt_size_per_prime` words per prime,
+    so it stores one period instead of a full ring-degree plaintext.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
@@ -743,7 +757,8 @@ def Cheddar_PrepareLinearTransformOp :
     Builtin_IntegerAttr:$level,
     Builtin_IntegerAttr:$bs,
     Builtin_IntegerAttr:$gs,
-    DefaultValuedAttr<BoolAttr, "false">:$min_ks
+    DefaultValuedAttr<BoolAttr, "false">:$min_ks,
+    OptionalAttr<Builtin_IntegerAttr>:$log_pt_size_per_prime
   );
   let results = (outs Cheddar_LinearTransformResult:$result);
   let hasVerifier = 1;
@@ -784,7 +799,8 @@ def Cheddar_EvalPolyOp : Cheddar_DpsOp<"eval_poly"> {
     Cheddar_EvkMap:$evkMap,
     Cheddar_CtLike:$output,
     F64ArrayAttr:$coefficients,
-    Builtin_IntegerAttr:$levelConsumption
+    Builtin_IntegerAttr:$levelConsumption,
+    OptionalAttr<UnitAttr>:$selectMultKeyAtUseLevel
   );
   let results = (outs Cheddar_CtResult:$result);
   let hasVerifier = 1;

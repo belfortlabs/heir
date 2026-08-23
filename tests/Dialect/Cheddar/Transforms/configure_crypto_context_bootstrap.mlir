@@ -1,5 +1,6 @@
 // RUN: heir-opt --cheddar-configure-crypto-context=entry-function=main %s | FileCheck %s --check-prefix=CONFIG
 // RUN: heir-opt --cheddar-configure-crypto-context=entry-function=main --cheddar-bufferize --fold-memref-alias-ops --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s --check-prefix=EMITC
+// RUN: heir-opt --cheddar-configure-crypto-context='entry-function=main use-cyclops-runtime=true' --cheddar-bufferize --fold-memref-alias-ops --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s --check-prefix=CYCLOPS
 
 !boot_context = !cheddar.boot_context
 !ciphertext = !cheddar.ciphertext
@@ -59,3 +60,5 @@ module attributes {
 // EMITC: func.func @main__configure
 // EMITC: emitc.call_opaque "main__setup"
 // EMITC: emitc.call_opaque "main__keygen"
+
+// CYCLOPS: emitc.verbatim "{}->PrepareHomomorphicDFT(256, BootVariant::kImaginaryRemoving);"

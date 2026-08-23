@@ -32,6 +32,7 @@ def CheddarConfigureCryptoContext : Pass<"cheddar-configure-crypto-context"> {
     Option<"numStcLevels", "num-stc-levels", "int", /*default=*/"3", "Bootstrap SlotToCoeff (StC) level budget (cf. OpenFHE level-budget-decode); only used when the program bootstraps">,
     Option<"logMessageRatio", "log-message-ratio", "int", /*default=*/"-1", "Bootstrap message headroom passed to CHEDDAR's BootParameter (governs EvalMod precision). -1 uses CHEDDAR's default headroom of 5; only used when the program bootstraps">,
     Option<"prepareRotationKeysAtUseLevels", "prepare-rotation-keys-at-use-levels", "bool", /*default=*/"false", "Prepare each rotation key at the level of the operation that uses it instead of once at the maximum level">,
+    Option<"useCyclopsRuntime", "use-cyclops-runtime", "bool", /*default=*/"false", "Select setup operations required by the Cyclops runtime">,
   ];
 
   let dependentDialects = [

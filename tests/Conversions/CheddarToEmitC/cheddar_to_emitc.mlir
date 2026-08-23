@@ -165,6 +165,31 @@ func.func @dec_chain(%enc: !encoder, %ui: !user_interface, %ct: tensor<!cipherte
   return %msg : tensor<1x4xf32>
 }
 
+// With `useSlotsApi` (the Cyclops runtime), encode bridges the message
+// through a std::vector<double> and calls EncodeSlots.
+// CHECK: func.func @enc_chain_slots
+// CHECK: emitc.verbatim "{} = std::vector<double>({}, {} + 4);"
+// CHECK: emitc.verbatim "{}.EncodeSlots({}, 5, {}.GetScale(5), {});"
+func.func @enc_chain_slots(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
+  %dp = tensor.empty() : tensor<!plaintext>
+  %pt = cheddar.encode %enc, %msg, %dp {level = 5 : i64, logScale = 37 : i64, useSlotsApi} : (!encoder, tensor<4xf64>, tensor<!plaintext>) -> tensor<!plaintext>
+  %dc = tensor.empty() : tensor<!ciphertext>
+  %ct = cheddar.encrypt %ui, %pt, %dc : (!user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %ct : tensor<!ciphertext>
+}
+
+// With `useSlotsApi`, decode reads real doubles straight out of DecodeSlots;
+// no `.real()` projection.
+// CHECK: func.func @dec_chain_slots
+// CHECK: emitc.verbatim "{}.DecodeSlots({}, {});"
+// CHECK: emitc.verbatim "for (size_t _i = 0; _i < 4; ++_i) {}[_i] = {}.at(_i);"
+func.func @dec_chain_slots(%enc: !encoder, %ui: !user_interface, %ct: tensor<!ciphertext>, %dst: tensor<1x4xf32>) -> tensor<1x4xf32> {
+  %dp = tensor.empty() : tensor<!plaintext>
+  %pt = cheddar.decrypt %ui, %ct, %dp : (!user_interface, tensor<!ciphertext>, tensor<!plaintext>) -> tensor<!plaintext>
+  %msg = cheddar.decode %enc, %pt, %dst {useSlotsApi} : (!encoder, tensor<!plaintext>, tensor<1x4xf32>) -> tensor<1x4xf32>
+  return %msg : tensor<1x4xf32>
+}
+
 // HRot/HConj keep their verbatim form. Static distance bakes the distance into
 // the format string; dynamic distance threads the SSA value twice.
 // CHECK: func.func @hrot_static
@@ -218,7 +243,7 @@ func.func @boot(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map) -
 // CHECK: emitc.verbatim "int _ep_lvl = {}->param_.NPToLevel({}.GetNP());"
 // CHECK: emitc.verbatim "double _ep_is = {}.GetScale();"
 // CHECK: emitc.verbatim "_ep_ts = _ep_ts * _ep_ts / {}->param_.GetRescalePrimeProd
-// CHECK: emitc.verbatim "EvalPoly<word> _ep({1, 2, 3}, _ep_lvl, _ep_is, _ep_ts, true);"
+// CHECK: emitc.verbatim "EvalPoly<word> _ep(std::vector<double>{1, 2, 3}, _ep_lvl, _ep_is, _ep_ts, true);"
 // CHECK: emitc.verbatim "_ep.Compile(_ep_cp);"
 // CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());"
 // CHECK: emitc.verbatim "}"
@@ -228,12 +253,22 @@ func.func @eval_poly(%ctx: !context, %enc: !encoder, %ct: tensor<!ciphertext>, %
   return %r : tensor<!ciphertext>
 }
 
+// CHECK: func.func @eval_poly_level_key
+// CHECK: emitc.verbatim "EvalPoly<word> _ep(std::vector<double>{1, 2, 3}, PolynomialParity::kFull, _ep_lvl, _ep_is, _ep_ts, true);"
+// CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
+func.func @eval_poly_level_key(%ctx: !context, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %r = cheddar.eval_poly %ctx, %ct, %evk, %d0 {coefficients = [1.0 : f64, 2.0 : f64, 3.0 : f64], levelConsumption = 2 : i64, selectMultKeyAtUseLevel} : (!context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %r : tensor<!ciphertext>
+}
+
 // scale-snu evaluates a single ciphertext, while HEIR represents ciphertext
 // payloads as one-element tensors. Both direct and prepared transforms must
 // therefore pass the array element, not the std::array itself.
 // CHECK: func.func @linear_transform
 // CHECK: emitc.verbatim "_lt_matrix[0] = std::vector<Complex>({} + 4, {} + 8);"
 // CHECK: emitc.verbatim "_lt_matrix[1] = std::vector<Complex>({} + 12, {} + 16);"
+// CHECK: emitc.verbatim "LinearTransform<word> _lt(_lt_cp, _lt_matrix, 1, {}->param_.GetScale(1), 2, 1);"
 // CHECK: emitc.verbatim "_lt.Evaluate(_lt_cp, {}[0], {}[0], {});"
 func.func @linear_transform(
     %ctx: !context, %ct: tensor<1x!ciphertext>, %evk: !evk_map,
@@ -259,6 +294,50 @@ func.func @linear_transform_min_ks(
       : (!context, tensor<1x!ciphertext>, !evk_map, tensor<4x4xf64>,
          tensor<1x!ciphertext>) -> tensor<1x!ciphertext>
   return %result : tensor<1x!ciphertext>
+}
+
+// A width-4 message repeats every 2 * 4 words per prime, so lwe-to-cheddar
+// records log_pt_size_per_prime = 3 and Cyclops keeps one period instead of a
+// full ring-degree plaintext. scale-snu CHEDDAR takes pre_rotation in that
+// position, so the arguments appear only when the attribute is present.
+// CHECK: func.func @linear_transform_compact_pt
+// CHECK: emitc.verbatim "LinearTransform<word> _lt(_lt_cp, _lt_matrix, 1, {}->param_.GetScale(1), 2, 1, 3, PlaintextCacheConfig(), KeyMode::kInherit, PlaintextMode::kCompiled, 4);"
+func.func @linear_transform_compact_pt(
+    %ctx: !context, %ct: tensor<1x!ciphertext>, %evk: !evk_map,
+    %diagonals: tensor<4x4xf64>) -> tensor<1x!ciphertext> {
+  %out = tensor.empty() : tensor<1x!ciphertext>
+  %result = cheddar.linear_transform %ctx, %ct, %evk, %diagonals, %out
+      {diagonal_indices = array<i32: 0, 1>, source_row_indices = array<i32: 1, 3>, level = 1 : i64,
+       bs = 2 : i64, gs = 1 : i64, log_pt_size_per_prime = 3 : i64}
+      : (!context, tensor<1x!ciphertext>, !evk_map, tensor<4x4xf64>,
+         tensor<1x!ciphertext>) -> tensor<1x!ciphertext>
+  return %result : tensor<1x!ciphertext>
+}
+
+// CHECK: func.func @prepare_linear_transform
+// CHECK: emitc.verbatim "{} = std::make_shared<LinearTransform<word>>(_lt_cp, _lt_matrix, 1, {}->param_.GetScale(1), 2, 1);"
+func.func @prepare_linear_transform(
+    %ctx: !context, %diagonals: tensor<2x4xf64>) -> tensor<!linear_transform> {
+  %out = tensor.empty() : tensor<!linear_transform>
+  %result = cheddar.prepare_linear_transform %ctx, %diagonals, %out
+      {diagonal_indices = array<i32: 0, 1>, width = 4 : i64, level = 1 : i64,
+       bs = 2 : i64, gs = 1 : i64}
+      : (!context, tensor<2x4xf64>, tensor<!linear_transform>)
+      -> tensor<!linear_transform>
+  return %result : tensor<!linear_transform>
+}
+
+// CHECK: func.func @prepare_linear_transform_compact_pt
+// CHECK: emitc.verbatim "{} = std::make_shared<LinearTransform<word>>(_lt_cp, _lt_matrix, 1, {}->param_.GetScale(1), 2, 1, 3, PlaintextCacheConfig(), KeyMode::kInherit, PlaintextMode::kCompiled, 4);"
+func.func @prepare_linear_transform_compact_pt(
+    %ctx: !context, %diagonals: tensor<2x4xf64>) -> tensor<!linear_transform> {
+  %out = tensor.empty() : tensor<!linear_transform>
+  %result = cheddar.prepare_linear_transform %ctx, %diagonals, %out
+      {diagonal_indices = array<i32: 0, 1>, width = 4 : i64, level = 1 : i64,
+       bs = 2 : i64, gs = 1 : i64, log_pt_size_per_prime = 3 : i64}
+      : (!context, tensor<2x4xf64>, tensor<!linear_transform>)
+      -> tensor<!linear_transform>
+  return %result : tensor<!linear_transform>
 }
 
 // CHECK: func.func @apply_prepared_linear_transform
