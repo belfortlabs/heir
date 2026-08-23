@@ -58,6 +58,15 @@ using ::mlir::emitc::VerbatimOp;
 //===----------------------------------------------------------------------===//
 
 constexpr StringLiteral kDestinationOperandAttr = "cheddar.destination_operand";
+constexpr StringLiteral kCheddarRuntimeAttrName = "cheddar.runtime";
+
+bool useCyclopsRuntime(Operation* op) {
+  auto module = op->getParentOfType<ModuleOp>();
+  auto runtime =
+      module ? module->getAttrOfType<StringAttr>(kCheddarRuntimeAttrName)
+             : StringAttr{};
+  return runtime && runtime.getValue() == "cyclops";
+}
 
 template <typename OpTy>
 OpTy markDestination(OpTy op, unsigned operandNumber) {
@@ -526,10 +535,12 @@ struct ConvertPrepareBootstrap
     Value context = adaptor.getCtx();
     VerbatimOp::create(rewriter, op.getLoc(), "{}->PrepareEvalMod();",
                        ValueRange{context});
-    VerbatimOp::create(rewriter, op.getLoc(),
-                       "{}->PrepareEvalSpecialFFT(" + slots +
-                           ", BootVariant::kImaginaryRemoving);",
-                       ValueRange{context});
+    std::string prepareDft = op.getUseCyclopsRuntime()
+                                 ? "{}->PrepareHomomorphicDFT(" + slots +
+                                       ", BootVariant::kImaginaryRemoving);"
+                                 : "{}->PrepareEvalSpecialFFT(" + slots +
+                                       ", BootVariant::kImaginaryRemoving);";
+    VerbatimOp::create(rewriter, op.getLoc(), prepareDft, ValueRange{context});
     VerbatimOp::create(rewriter, op.getLoc(), "EvkRequest boot_evk_req;",
                        ValueRange{});
     VerbatimOp::create(rewriter, op.getLoc(),
@@ -543,9 +554,10 @@ struct ConvertPrepareBootstrap
   }
 };
 
-// cheddar.encode: fill a std::vector<Complex> from the float message buffer,
-// then encode at the requested logarithmic scale, or CHEDDAR's canonical scale
-// for the level when no explicit scale is present.
+// cheddar.encode: fill a std::vector from the float message buffer, then
+// encode at the requested logarithmic scale, or CHEDDAR's canonical scale
+// for the level when no explicit scale is present. Cyclops' slots API takes
+// the message as real doubles (EncodeSlots); scale-snu takes Complex (Encode).
 struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
@@ -559,17 +571,20 @@ struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
       return rewriter.notifyMatchFailure(
           op, "encode requires a static message shape");
     int64_t n = numElements(messageType.getShape());
+    bool slots = op.getUseSlotsApi().value_or(false);
+    std::string vecType =
+        slots ? "std::vector<double>" : "std::vector<Complex>";
+    std::string method = slots ? "EncodeSlots" : "Encode";
     // Flatten both a whole (possibly multidimensional) C array and a subview
     // pointer to the first scalar element before constructing the vector.
     Value begin = addressOfFirstElement(rewriter, op.getLoc(), msg);
-    Value vec =
-        VariableOp::create(rewriter, op.getLoc(),
-                           LValueType::get(OpaqueType::get(
-                               rewriter.getContext(), "std::vector<Complex>")),
-                           OpaqueAttr::get(rewriter.getContext(), ""));
+    Value vec = VariableOp::create(
+        rewriter, op.getLoc(),
+        LValueType::get(OpaqueType::get(rewriter.getContext(), vecType)),
+        OpaqueAttr::get(rewriter.getContext(), ""));
     VerbatimOp::create(
         rewriter, op.getLoc(),
-        "{} = std::vector<Complex>({}, {} + " + std::to_string(n) + ");",
+        "{} = " + vecType + "({}, {} + " + std::to_string(n) + ");",
         ValueRange{vec, begin, begin});
     // TODO(#2364): Use scale from op once HEIR can do precise scale tracking.
     std::string scale = "{}.GetScale(" + lvl + ")";
@@ -577,9 +592,9 @@ struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
                                 adaptor.getEncoder()};
     operands.push_back(vec);
     markDestination(
-        VerbatimOp::create(rewriter, op.getLoc(),
-                           "{}.Encode({}, " + lvl + ", " + scale + ", {});",
-                           operands),
+        VerbatimOp::create(
+            rewriter, op.getLoc(),
+            "{}." + method + "({}, " + lvl + ", " + scale + ", {});", operands),
         1);
     rewriter.eraseOp(op);
     return success();
@@ -606,8 +621,9 @@ struct ConvertEncodeConstant
   }
 };
 
-// cheddar.decode: decode into a temporary complex vector, copy real parts into
-// the float destination buffer.
+// cheddar.decode: decode into a temporary vector, copy into the float
+// destination buffer. Cyclops' slots API decodes straight to real doubles
+// (DecodeSlots); scale-snu decodes to Complex, whose real parts are kept.
 struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
@@ -624,19 +640,23 @@ struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
     auto shape = memTy.getShape();
     int64_t n = numElements(shape);
     auto* ctx = rewriter.getContext();
+    bool slots = op.getUseSlotsApi().value_or(false);
+    std::string vecType =
+        slots ? "std::vector<double>" : "std::vector<Complex>";
     Value vec = VariableOp::create(
-        rewriter, op.getLoc(),
-        LValueType::get(OpaqueType::get(ctx, "std::vector<Complex>")),
+        rewriter, op.getLoc(), LValueType::get(OpaqueType::get(ctx, vecType)),
         OpaqueAttr::get(ctx, ""));
     markDestination(
         VerbatimOp::create(
-            rewriter, op.getLoc(), "{}.Decode({}, {});",
+            rewriter, op.getLoc(),
+            slots ? "{}.DecodeSlots({}, {});" : "{}.Decode({}, {});",
             ValueRange{adaptor.getEncoder(), vec, adaptor.getPlaintext()}),
         1);
     markDestination(
         VerbatimOp::create(rewriter, op.getLoc(),
                            "for (size_t _i = 0; _i < " + std::to_string(n) +
-                               "; ++_i) {}[_i] = {}.at(_i).real();",
+                               "; ++_i) {}[_i] = {}.at(_i)" +
+                               (slots ? "" : ".real()") + ";",
                            ValueRange{dst, vec}),
         0);
     rewriter.eraseOp(op);
@@ -645,7 +665,8 @@ struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
 };
 
 // HRot/HRotAdd/HConj/HConjAdd: look up the rotation/conjugation key inline on
-// the EvkMap operand.
+// the EvkMap operand. Rotations pass the op's `level` so the best-fit key
+// prepared for that level is used.
 struct ConvertHRot : public OpConversionPattern<cheddar::HRotOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
@@ -655,20 +676,32 @@ struct ConvertHRot : public OpConversionPattern<cheddar::HRotOp> {
     Value evk = adaptor.getEvk();
     Value out = adaptor.getOutput();
     Value in = adaptor.getInput();
+    std::string level = intLit(op.getLevelAttr());
     if (auto sd = op.getStaticDistanceAttr()) {
       std::string d = intLit(sd);
-      markDestination(VerbatimOp::create(rewriter, op.getLoc(),
-                                         "{}->HRot({}, {}, {}.GetRotationKey(" +
-                                             d + "), " + d + ");",
-                                         ValueRange{ctx, out, in, evk}),
+      std::string code = "{}->HRot({}, {}, {}.GetRotationKey(" + d;
+      SmallVector<Value> operands{ctx, out, in, evk};
+      if (useCyclopsRuntime(op)) {
+        code += ", {}->BootSecretId(), {}->param_, " + level +
+                ", KeyMode::kInherit";
+        operands.append({ctx, ctx});
+      }
+      code += "), " + d + ");";
+      markDestination(VerbatimOp::create(rewriter, op.getLoc(), code, operands),
                       1);
     } else {
       Value dyn = adaptor.getDynamicDistance();
-      markDestination(
-          VerbatimOp::create(rewriter, op.getLoc(),
-                             "{}->HRot({}, {}, {}.GetRotationKey({}), {});",
-                             ValueRange{ctx, out, in, evk, dyn, dyn}),
-          1);
+      std::string code = "{}->HRot({}, {}, {}.GetRotationKey({}";
+      SmallVector<Value> operands{ctx, out, in, evk, dyn};
+      if (useCyclopsRuntime(op)) {
+        code += ", {}->BootSecretId(), {}->param_, " + level +
+                ", KeyMode::kInherit";
+        operands.append({ctx, ctx});
+      }
+      code += "), {});";
+      operands.push_back(dyn);
+      markDestination(VerbatimOp::create(rewriter, op.getLoc(), code, operands),
+                      1);
     }
     rewriter.eraseOp(op);
     return success();
@@ -683,13 +716,18 @@ struct ConvertHRotAdd : public OpConversionPattern<cheddar::HRotAddOp> {
     Value ctx = adaptor.getCtx();
     Value evk = adaptor.getEvk();
     std::string d = intLit(op.getDistanceAttr());
-    markDestination(
-        VerbatimOp::create(
-            rewriter, op.getLoc(),
-            "{}->HRotAdd({}, {}, {}, {}.GetRotationKey(" + d + "), " + d + ");",
-            ValueRange{ctx, adaptor.getOutput(), adaptor.getInput(),
-                       adaptor.getAddend(), evk}),
-        1);
+    std::string level = intLit(op.getLevelAttr());
+    std::string code = "{}->HRotAdd({}, {}, {}, {}.GetRotationKey(" + d;
+    SmallVector<Value> operands{ctx, adaptor.getOutput(), adaptor.getInput(),
+                                adaptor.getAddend(), evk};
+    if (useCyclopsRuntime(op)) {
+      code +=
+          ", {}->BootSecretId(), {}->param_, " + level + ", KeyMode::kInherit";
+      operands.append({ctx, ctx});
+    }
+    code += "), " + d + ");";
+    markDestination(VerbatimOp::create(rewriter, op.getLoc(), code, operands),
+                    1);
     rewriter.eraseOp(op);
     return success();
   }
@@ -702,11 +740,16 @@ struct ConvertHConj : public OpConversionPattern<cheddar::HConjOp> {
       ConversionPatternRewriter& rewriter) const override {
     Value ctx = adaptor.getCtx();
     Value evk = adaptor.getEvk();
-    markDestination(
-        VerbatimOp::create(
-            rewriter, op.getLoc(), "{}->HConj({}, {}, {}.GetConjugationKey());",
-            ValueRange{ctx, adaptor.getOutput(), adaptor.getInput(), evk}),
-        1);
+    std::string code = "{}->HConj({}, {}, {}.GetConjugationKey(";
+    SmallVector<Value> operands{ctx, adaptor.getOutput(), adaptor.getInput(),
+                                evk};
+    if (useCyclopsRuntime(op)) {
+      code += "{}->BootSecretId()";
+      operands.push_back(ctx);
+    }
+    code += "));";
+    markDestination(VerbatimOp::create(rewriter, op.getLoc(), code, operands),
+                    1);
     rewriter.eraseOp(op);
     return success();
   }
@@ -719,11 +762,15 @@ struct ConvertHConjAdd : public OpConversionPattern<cheddar::HConjAddOp> {
       ConversionPatternRewriter& rewriter) const override {
     Value ctx = adaptor.getCtx();
     Value evk = adaptor.getEvk();
-    markDestination(VerbatimOp::create(
-                        rewriter, op.getLoc(),
-                        "{}->HConjAdd({}, {}, {}, {}.GetConjugationKey());",
-                        ValueRange{ctx, adaptor.getOutput(), adaptor.getInput(),
-                                   adaptor.getAddend(), evk}),
+    std::string code = "{}->HConjAdd({}, {}, {}, {}.GetConjugationKey(";
+    SmallVector<Value> operands{ctx, adaptor.getOutput(), adaptor.getInput(),
+                                adaptor.getAddend(), evk};
+    if (useCyclopsRuntime(op)) {
+      code += "{}->BootSecretId()";
+      operands.push_back(ctx);
+    }
+    code += "));";
+    markDestination(VerbatimOp::create(rewriter, op.getLoc(), code, operands),
                     1);
     rewriter.eraseOp(op);
     return success();
@@ -784,6 +831,26 @@ static std::string optionalMinKsArgument(bool minKs) {
   return minKs ? ", true" : "";
 }
 
+// Cyclops keeps one plaintext period per prime instead of a full ring-degree
+// plaintext, which is what dominates a prepared transform's device residency at
+// logN 16, and releases the full plaintexts once the compressed buffer exists.
+// msg_slot_period additionally lets Encode run a period-sized SpecialIFFT. The
+// two forks' constructors are positionally incompatible -- scale-snu takes
+// pre_rotation where Cyclops takes log_pt_size_per_prime -- so these arguments
+// are emitted only when lwe-to-cheddar marked the op for the Cyclops runtime.
+//
+// The default cache config is spelled `PlaintextCacheConfig()`, not `{}`:
+// emitc.verbatim reads `{}` as an operand placeholder, and value-initializing
+// that aggregate is equivalent to brace-initializing it.
+static std::string optionalCompactPlaintextArguments(IntegerAttr logPtSize,
+                                                     int64_t width) {
+  if (!logPtSize) return "";
+  return ", " + std::to_string(logPtSize.getInt()) +
+         ", PlaintextCacheConfig(), KeyMode::kInherit, "
+         "PlaintextMode::kCompiled, " +
+         std::to_string(width);
+}
+
 // Direct scale-snu LinearTransform lowering. A later optimization moves this
 // construction into split preprocessing so model evaluations can reuse it.
 struct ConvertLinearTransform
@@ -803,7 +870,10 @@ struct ConvertLinearTransform
         "LinearTransform<word> _lt(_lt_cp, _lt_matrix, " +
             intLit(op.getLevelAttr()) + ", {}->param_.GetScale(" +
             intLit(op.getLevelAttr()) + "), " + intLit(op.getBsAttr()) + ", " +
-            intLit(op.getGsAttr()) + ");",
+            intLit(op.getGsAttr()) +
+            optionalCompactPlaintextArguments(op.getLogPtSizePerPrimeAttr(),
+                                              diagonalsType.getDimSize(1)) +
+            ");",
         ValueRange{ctx});
     markDestination(
         VerbatimOp::create(
@@ -840,7 +910,10 @@ struct ConvertPrepareLinearTransform
             "_lt_cp, _lt_matrix, " +
                 intLit(op.getLevelAttr()) + ", {}->param_.GetScale(" +
                 intLit(op.getLevelAttr()) + "), " + intLit(op.getBsAttr()) +
-                ", " + intLit(op.getGsAttr()) + ");",
+                ", " + intLit(op.getGsAttr()) +
+                optionalCompactPlaintextArguments(op.getLogPtSizePerPrimeAttr(),
+                                                  diagonalsType.getDimSize(1)) +
+                ");",
             ValueRange{adaptor.getOutput(), ctx}),
         0);
     VerbatimOp::create(rewriter, loc, "}", ValueRange{});
@@ -942,12 +1015,17 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
           {ctxV});
     // Construct (no operands -> the coefficient brace-list is emitted
     // verbatim).
-    emit("EvalPoly<word> _ep(" + floatArrayLit(op.getCoefficientsAttr()) +
-             ", _ep_lvl, _ep_is, _ep_ts, true);",
+    std::string parity =
+        op.getSelectMultKeyAtUseLevel() ? "PolynomialParity::kFull, " : "";
+    emit("EvalPoly<word> _ep(std::vector<double>" +
+             floatArrayLit(op.getCoefficientsAttr()) + ", " + parity +
+             "_ep_lvl, _ep_is, _ep_ts, true);",
          {});
     emit("_ep.Compile(_ep_cp);", {});
     StringRef evaluate =
-        "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
+        op.getSelectMultKeyAtUseLevel()
+            ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
+            : "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
     markDestination(
         VerbatimOp::create(rewriter, loc, rewriter.getStringAttr(evaluate),
                            ValueRange{out, in, evk}),
@@ -1817,6 +1895,7 @@ struct CheddarToEmitCPass
 
   void runOnOperation() override {
     auto* ctx = &getContext();
+    getOperation()->removeAttr(kCheddarRuntimeAttrName);
     if (diagnoseUnsupportedGetters(getOperation())) {
       signalPassFailure();
       return;

@@ -1099,6 +1099,10 @@ struct CheddarEmitCEntryInterfacePass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    if (runtime != "cheddar" && runtime != "cyclops") {
+      module.emitError() << "unsupported C++ runtime '" << runtime << "'";
+      return signalPassFailure();
+    }
     FailureOr<EntryFunctions> functions =
         findEntryFunctions(module, entryFunction);
     // The C++ facade exposes Setup and KeyGen separately, so both are required.
@@ -1107,12 +1111,17 @@ struct CheddarEmitCEntryInterfacePass
                          << " is missing a setup or keygen function";
       return signalPassFailure();
     }
-    SmallVector<StringRef> extensionIncludes = {"extension/BootContext.h",
-                                                "extension/EvalPoly.h",
-                                                "extension/LinearTransform.h"};
+    SmallVector<StringRef> extensionIncludes;
+    if (runtime == "cyclops") {
+      extensionIncludes = {"extension/boot/BootContext.h",
+                           "extension/poly/EvalPoly.h",
+                           "extension/linalg/LinearTransform.h"};
+    } else {
+      extensionIncludes = {"extension/BootContext.h", "extension/EvalPoly.h",
+                           "extension/LinearTransform.h"};
+    }
     if (failed(functions) ||
-        failed(
-            buildInterface(module, *functions, "cheddar", extensionIncludes)))
+        failed(buildInterface(module, *functions, runtime, extensionIncludes)))
       signalPassFailure();
   }
 };

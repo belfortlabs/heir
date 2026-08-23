@@ -729,6 +729,7 @@ BackendPipelineBuilder toLattigoPipelineBuilder() {
 
 CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
   return [](OpPassManager& pm, const CheddarBackendOptions& options) {
+    bool useCyclops = options.runtime == CheddarRuntime::Cyclops;
     pm.addPass(ckks::createCKKSToLWE());
 
     lwe::AddDebugPortOptions debugOptions{
@@ -737,7 +738,10 @@ CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
     };
     pm.addPass(lwe::createAddDebugPort(debugOptions));
 
-    pm.addPass(lwe::createLWEToCheddar());
+    lwe::LWEToCheddarOptions loweringOptions;
+    loweringOptions.enableMinKs = !useCyclops;
+    loweringOptions.useCyclopsRuntime = useCyclops;
+    pm.addPass(lwe::createLWEToCheddar(loweringOptions));
     // Run generic externalization after target lowering so packed constants
     // materialized by kernel-to-Cheddar conversions are included as well.
     if (!extConstOutputDir.empty()) {
@@ -757,7 +761,10 @@ CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
 
     cheddar::CheddarConfigureCryptoContextOptions configureOptions;
     configureOptions.entryFunction = options.entryFunction;
-    configureOptions.logMessageRatio = options.logMessageRatio;
+    configureOptions.logMessageRatio =
+        options.logMessageRatio < 0 && useCyclops ? 4 : options.logMessageRatio;
+    configureOptions.prepareRotationKeysAtUseLevels = useCyclops;
+    configureOptions.useCyclopsRuntime = useCyclops;
     pm.addPass(cheddar::createCheddarConfigureCryptoContext(configureOptions));
 
     pm.addPass(createRemoveUnusedPureCall());

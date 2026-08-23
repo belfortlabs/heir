@@ -63,7 +63,8 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                          bool bootstraps, int64_t bootstrapNumSlots,
                          int64_t numCtsLevels, int64_t numStcLevels,
                          int64_t defaultEncLevel, int64_t denseHammingWeight,
-                         int64_t sparseHammingWeight, int64_t logMessageRatio) {
+                         int64_t sparseHammingWeight, int64_t logMessageRatio,
+                         bool useCyclopsRuntime) {
   MLIRContext* ctx = moduleOp.getContext();
   // EvalMod message headroom passed to CHEDDAR's BootParameter. This is the
   // reserved bits for the MESSAGE magnitude (~log2(max|m|)+margin), NOT a
@@ -154,9 +155,10 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                                  i64(distance), i64(level))
              ->getResult(0);
   if (bootstraps) {
-    auto prepare =
-        PrepareBootstrapOp::create(builder, loc, TypeRange{ctxTensor, uiTensor},
-                                   context, ui, i64(bootstrapNumSlots));
+    auto prepare = PrepareBootstrapOp::create(
+        builder, loc, TypeRange{ctxTensor, uiTensor}, context, ui,
+        i64(bootstrapNumSlots),
+        useCyclopsRuntime ? builder.getUnitAttr() : UnitAttr{});
     context = prepare->getResult(0);
     ui = prepare->getResult(1);
   }
@@ -330,7 +332,8 @@ struct CheddarConfigureCryptoContext
     buildConfigureFuncs(moduleOp, entry, logN, logDefaultScale, Q, P,
                         rotationKeys, bootstraps, bootstrapNumSlots, bootNumCts,
                         bootNumStc, defaultEncLevel, denseHammingWeight,
-                        sparseHammingWeight, logMessageRatio);
+                        sparseHammingWeight, logMessageRatio,
+                        useCyclopsRuntime);
 
     moduleOp->removeAttr(ckks::CKKSDialect::kSchemeParamAttrName);
     moduleOp->removeAttr("scheme.ckks");
