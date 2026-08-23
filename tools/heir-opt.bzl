@@ -51,6 +51,7 @@ def _heir_opt_impl(ctx):
         arguments = [args],
         env = env_vars,
         executable = ctx.executable._heir_opt_binary,
+        execution_requirements = {"no-remote": "1"},
     )
     runfiles = ctx.runfiles(files = [res_dir] if res_dir else [])
     runfiles = runfiles.merge(ctx.runfiles(collect_default = True))

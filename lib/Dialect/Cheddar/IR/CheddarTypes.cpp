@@ -13,9 +13,13 @@ llvm::StringRef getSupportKind(Type type) {
       .Case<ContextType>([](auto) { return ContextType::getMnemonic(); })
       .Case<BootContextType>(
           [](auto) { return BootContextType::getMnemonic(); })
+      .Case<ClientContextType>(
+          [](auto) { return ClientContextType::getMnemonic(); })
       .Case<EncoderType>([](auto) { return EncoderType::getMnemonic(); })
       .Case<UserInterfaceType>(
           [](auto) { return UserInterfaceType::getMnemonic(); })
+      .Case<DebugHandlerType>(
+          [](auto) { return DebugHandlerType::getMnemonic(); })
       .Case<EvalKeyType>([](auto) { return EvalKeyType::getMnemonic(); })
       .Case<EvkMapType>([](auto) { return EvkMapType::getMnemonic(); })
       .Default([](Type) { return llvm::StringRef(); });

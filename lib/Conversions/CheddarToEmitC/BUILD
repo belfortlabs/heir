@@ -27,6 +27,7 @@ cc_library(
         "@llvm-project//mlir:DestinationStyleOpInterface",
         "@llvm-project//mlir:EmitCDialect",
         "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:FuncToEmitC",
         "@llvm-project//mlir:FuncTransforms",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:MathDialect",

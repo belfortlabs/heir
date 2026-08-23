@@ -27,6 +27,16 @@ class Cheddar_Type<string name, string typeMnemonic, list<Trait> traits = []>
 
 // Context types
 
+def Cheddar_ClientContext : Cheddar_Type<"ClientContext", "client_context"> {
+  let description = [{Cyclops CPU context for encoding and client operations.}];
+  let asmName = "client_ctx";
+}
+
+def Cheddar_DebugHandler : Cheddar_Type<"DebugHandler", "debug_handler"> {
+  let description = [{Borrowed callback for ciphertext checkpoints.}];
+  let asmName = "debug_handler";
+}
+
 def Cheddar_Context : Cheddar_Type<"Context", "context"> {
   let description = [{
     This type represents a CHEDDAR Context, the main server-side computation
@@ -50,6 +60,8 @@ def Cheddar_BootContext : Cheddar_Type<"BootContext", "boot_context"> {
 // latter derives from the former in CHEDDAR). `cheddar.boot` is the exception:
 // it requires a Cheddar_BootContext.
 def Cheddar_AnyContext : AnyTypeOf<[Cheddar_Context, Cheddar_BootContext]>;
+def Cheddar_AnyClientContext :
+    AnyTypeOf<[Cheddar_ClientContext, Cheddar_Context, Cheddar_BootContext]>;
 
 def Cheddar_Parameter : Cheddar_Type<"Parameter", "parameter"> {
   let description = [{

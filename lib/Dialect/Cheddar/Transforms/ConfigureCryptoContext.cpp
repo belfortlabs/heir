@@ -11,6 +11,7 @@
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Utils/TransformUtils.h"
+#include "llvm/include/llvm/ADT/DenseMap.h"              // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"           // from @llvm-project
 #include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"   // from @llvm-project
 #include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
@@ -18,6 +19,7 @@
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinOps.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
+#include "mlir/include/mlir/IR/SymbolTable.h"            // from @llvm-project
 #include "mlir/include/mlir/Pass/PassManager.h"          // from @llvm-project
 #include "mlir/include/mlir/Transforms/Passes.h"         // from @llvm-project
 
@@ -34,6 +36,39 @@ namespace {
 // resulting SlotToCoeff start level.
 constexpr int64_t kBootstrapEvalModLevels = 8;
 constexpr int64_t kMinBootstrapSlots = 256;
+
+struct LinearTransformKeyShape {
+  DenseI32ArrayAttr indices;
+  int64_t width;
+  int64_t level;
+  int64_t bs;
+  int64_t gs;
+};
+
+SmallVector<LinearTransformKeyShape> collectLinearTransformKeyShapes(
+    ModuleOp moduleOp) {
+  SmallVector<LinearTransformKeyShape> shapes;
+  llvm::SmallDenseSet<std::tuple<Attribute, int64_t, int64_t, int64_t, int64_t>>
+      seen;
+  auto record = [&](DenseI32ArrayAttr indices, int64_t width, int64_t level,
+                    int64_t bs, int64_t gs) {
+    if (!seen.insert({indices, width, level, bs, gs}).second) return;
+    shapes.push_back({indices, width, level, bs, gs});
+  };
+  moduleOp->walk([&](Operation* op) {
+    if (auto transform = dyn_cast<LinearTransformOp>(op)) {
+      auto diagonals = cast<ShapedType>(transform.getDiagonals().getType());
+      record(transform.getDiagonalIndicesAttr(), diagonals.getDimSize(1),
+             transform.getLevel().getInt(), transform.getBs().getInt(),
+             transform.getGs().getInt());
+    } else if (auto prepare = dyn_cast<PrepareLinearTransformOp>(op)) {
+      record(prepare.getDiagonalIndicesAttr(), prepare.getWidth().getInt(),
+             prepare.getLevel().getInt(), prepare.getBs().getInt(),
+             prepare.getGs().getInt());
+    }
+  });
+  return shapes;
+}
 
 // Build setup and key-generation functions in destination-passing tensor form:
 //   %p   = cheddar.make_parameter ...
@@ -63,7 +98,9 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                          bool bootstraps, int64_t bootstrapNumSlots,
                          int64_t numCtsLevels, int64_t numStcLevels,
                          int64_t defaultEncLevel, int64_t denseHammingWeight,
-                         int64_t sparseHammingWeight, int64_t logMessageRatio) {
+                         int64_t sparseHammingWeight, int64_t logMessageRatio,
+                         bool useCyclopsRuntime,
+                         ArrayRef<LinearTransformKeyShape> transformShapes) {
   MLIRContext* ctx = moduleOp.getContext();
   // Reserve eight bits between the message and q0 to keep the sine-based
   // EvalMod approximation accurate on normalized bootstrap inputs. Parameter
@@ -90,7 +127,9 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   auto setupType = FunctionType::get(ctx, {}, {ctxTensor});
   auto setupFunc = func::FuncOp::create(builder, loc, setupName, setupType);
   setupFunc.setPublic();
-  setInterfaceRole(setupFunc, kClientSetupRole, roleAttr);
+  setInterfaceRole(setupFunc,
+                   useCyclopsRuntime ? kServerSetupRole : kClientSetupRole,
+                   roleAttr);
 
   Block* bodyBlock = setupFunc.addEntryBlock();
   builder.setInsertionPointToStart(bodyBlock);
@@ -123,7 +162,57 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
           : CreateContextOp::create(builder, loc, TypeRange{ctxTensor},
                                     ValueRange{params, ctxInit})
                 ->getResult(0);
+  if (useCyclopsRuntime && bootstraps) {
+    context =
+        PrepareBootstrapContextOp::create(builder, loc, TypeRange{ctxTensor},
+                                          context, i64(bootstrapNumSlots))
+            ->getResult(0);
+  }
   func::ReturnOp::create(builder, loc, context);
+
+  if (useCyclopsRuntime) {
+    setupFunc.setSymName(entry.getSymName().str() + "__server_setup");
+    builder.setInsertionPointToEnd(moduleOp.getBody());
+    ctxTensor = RankedTensorType::get({}, ClientContextType::get(ctx));
+    auto clientSetup = func::FuncOp::create(
+        builder, loc, setupName, FunctionType::get(ctx, {}, {ctxTensor}));
+    setInterfaceRole(clientSetup, kClientSetupRole, roleAttr);
+    builder.setInsertionPointToStart(clientSetup.addEntryBlock());
+    Value clientParams = builder.clone(*params.getDefiningOp())->getResult(0);
+    Value init = tensor::EmptyOp::create(builder, loc, ctxTensor.getShape(),
+                                         ctxTensor.getElementType());
+    Value clientContext =
+        CreateClientContextOp::create(builder, loc, TypeRange{ctxTensor},
+                                      clientParams, init)
+            ->getResult(0);
+    SmallVector<int64_t> requests;
+    for (auto [distance, level] : rotationKeys) {
+      requests.push_back(distance);
+      requests.push_back(level);
+    }
+    clientSetup->setAttr(kRotationKeysAttrName,
+                         builder.getDenseI64ArrayAttr(requests));
+    SmallVector<Attribute> shapes;
+    for (const LinearTransformKeyShape& shape : transformShapes) {
+      shapes.push_back(builder.getDictionaryAttr({
+          builder.getNamedAttr("indices", shape.indices),
+          builder.getNamedAttr("width", i64(shape.width)),
+          builder.getNamedAttr("level", i64(shape.level)),
+          builder.getNamedAttr("bs", i64(shape.bs)),
+          builder.getNamedAttr("gs", i64(shape.gs)),
+      }));
+    }
+    clientSetup->setAttr(kLinearTransformKeysAttrName,
+                         builder.getArrayAttr(shapes));
+    if (bootstraps) {
+      clientSetup->setAttr(kBootstrapSlotsAttrName, i64(bootstrapNumSlots));
+      clientSetup->setAttr(kBootstrapNumCtsAttrName, i64(numCtsLevels));
+      clientSetup->setAttr(kBootstrapNumStcAttrName, i64(numStcLevels));
+      clientSetup->setAttr(kBootstrapLogMessageRatioAttrName,
+                           i64(effLogMessageRatio));
+    }
+    func::ReturnOp::create(builder, loc, clientContext);
+  }
 
   builder.setInsertionPointToEnd(moduleOp.getBody());
   std::string keygenName = (entry.getSymName() + "__keygen").str();
@@ -139,18 +228,34 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   Value ui = CreateUserInterfaceOp::create(builder, loc, TypeRange{uiTensor},
                                            ValueRange{context, uiInit})
                  ->getResult(0);
-  for (auto [distance, level] : rotationKeys)
-    ui = PrepareRotKeyOp::create(builder, loc, TypeRange{uiTensor}, ui,
-                                 i64(distance), i64(level))
-             ->getResult(0);
-  if (bootstraps) {
-    auto prepare =
-        PrepareBootstrapOp::create(builder, loc, TypeRange{ctxTensor, uiTensor},
-                                   context, ui, i64(bootstrapNumSlots));
+  // With the Cyclops runtime the client derives the complete compiled key
+  // request from setup metadata, so this lowered keygen prepares nothing here.
+  if (!useCyclopsRuntime) {
+    for (auto [distance, level] : rotationKeys)
+      ui = PrepareRotKeyOp::create(builder, loc, TypeRange{uiTensor}, Value(),
+                                   ui, i64(distance), i64(level))
+               ->getResult(0);
+    // A runtime-planned transform contributes no distances above; ask the
+    // runtime instead, once per distinct transform shape.
+    for (const LinearTransformKeyShape& shape : transformShapes) {
+      if (shape.bs != 0 || shape.gs != 0) continue;
+      ui = PrepareLinearTransformKeysOp::create(
+               builder, loc, TypeRange{uiTensor}, context, ui, shape.indices,
+               i64(shape.width), i64(shape.level))
+               ->getResult(0);
+    }
+  }
+  if (bootstraps && !useCyclopsRuntime) {
+    auto prepare = PrepareBootstrapOp::create(
+        builder, loc, TypeRange{ctxTensor, uiTensor}, context, ui,
+        i64(bootstrapNumSlots),
+        useCyclopsRuntime ? builder.getUnitAttr() : UnitAttr{});
     context = prepare->getResult(0);
     ui = prepare->getResult(1);
   }
   func::ReturnOp::create(builder, loc, ValueRange{context, ui});
+
+  if (useCyclopsRuntime) return;
 
   // Keep the combined setup and key-generation entry point.
   builder.setInsertionPointToEnd(moduleOp.getBody());
@@ -165,6 +270,31 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   auto keygenCall =
       func::CallOp::create(builder, loc, keygenFunc, setupCall.getResult(0));
   func::ReturnOp::create(builder, loc, keygenCall.getResults());
+}
+
+// LWE debug lowering previously added secret-key arguments. Cyclops callbacks
+// no longer use them. Remove only unused keys, preserving the public entry's
+// logical arguments (RemoveDeadValues skips public functions).
+LogicalResult dropUnusedDebugKeys(ModuleOp module) {
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (auto function : module.getOps<func::FuncOp>()) {
+      if (function.isExternal()) continue;
+      for (unsigned i = function.getNumArguments(); i-- > 0;) {
+        BlockArgument argument = function.getArgument(i);
+        if (!argument.use_empty() ||
+            !isa<UserInterfaceType>(argument.getType()))
+          continue;
+        module.walk([&](func::CallOp call) {
+          if (call.getCallee() == function.getSymName()) call->eraseOperand(i);
+        });
+        if (failed(function.eraseArgument(i))) return failure();
+        changed = true;
+      }
+    }
+  }
+  return success();
 }
 
 }  // namespace
@@ -208,7 +338,8 @@ struct CheddarConfigureCryptoContext
       signalPassFailure();
       return;
     }
-    for (StringRef suffix : {"__setup", "__keygen", "__configure"}) {
+    for (StringRef suffix :
+         {"__setup", "__server_setup", "__keygen", "__configure"}) {
       std::string functionName = (entry.getSymName() + suffix).str();
       if (moduleOp.lookupSymbol<func::FuncOp>(functionName)) {
         entry.emitOpError()
@@ -320,7 +451,15 @@ struct CheddarConfigureCryptoContext
     buildConfigureFuncs(moduleOp, entry, logN, logDefaultScale, Q, P,
                         rotationKeys, bootstraps, bootstrapNumSlots, bootNumCts,
                         bootNumStc, defaultEncLevel, denseHammingWeight,
-                        sparseHammingWeight, logMessageRatio);
+                        sparseHammingWeight, logMessageRatio, useCyclopsRuntime,
+                        collectLinearTransformKeyShapes(moduleOp));
+
+    if (useCyclopsRuntime) {
+      if (failed(dropUnusedDebugKeys(moduleOp))) {
+        signalPassFailure();
+        return;
+      }
+    }
 
     moduleOp->removeAttr(ckks::CKKSDialect::kSchemeParamAttrName);
     moduleOp->removeAttr("scheme.ckks");

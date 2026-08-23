@@ -169,6 +169,11 @@ bool moduleIsCheddar(Operation* moduleOp) {
          nullptr;
 }
 
+StringRef getCheddarRuntime(Operation* moduleOp) {
+  auto runtime = moduleOp->getAttrOfType<StringAttr>(kCheddarRuntimeAttrName);
+  return runtime ? runtime.getValue() : StringRef();
+}
+
 void moduleClearBackend(Operation* moduleOp) {
   moduleOp->removeAttr(kOpenfheBackendAttrName);
   moduleOp->removeAttr(kLattigoBackendAttrName);
