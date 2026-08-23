@@ -1,4 +1,8 @@
 // RUN: heir-opt %s --lwe-to-cheddar | FileCheck %s
+// RUN: heir-opt %s --lwe-to-cheddar=use-cyclops-runtime=true | FileCheck %s --check-prefix=CYCLOPS
+
+// CYCLOPS: module attributes
+// CYCLOPS-SAME: cheddar.runtime = "cyclops"
 
 // Ct-pt plain ops. cheddar requires the ciphertext as the first operand, so the
 // converter puts it first. Addition is commutative, so a swap is fine. But
