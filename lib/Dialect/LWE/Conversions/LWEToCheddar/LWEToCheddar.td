@@ -31,7 +31,9 @@ def LWEToCheddar : Pass<"lwe-to-cheddar"> {
 
   let options = [
     Option<"enableMinKs", "enable-min-ks", "bool", "true",
-           "Use scale-snu's minimum-key-switch linear-transform evaluation">
+           "Use scale-snu's minimum-key-switch linear-transform evaluation">,
+    Option<"useCyclopsRuntime", "use-cyclops-runtime", "bool", "false",
+           "Select lowering choices required by the Cyclops runtime">
   ];
 }
 

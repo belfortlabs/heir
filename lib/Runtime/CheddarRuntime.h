@@ -48,8 +48,12 @@ const T& deref(const T* value) {
 }
 
 template <typename Keys, typename Context>
-decltype(auto) multiplicationKey(const Keys& keys, Context&) {
-  return keys.GetMultiplicationKey();
+decltype(auto) multiplicationKey(const Keys& keys, Context& context) {
+  if constexpr (requires { context.BootSecretId(); }) {
+    return keys.GetMultiplicationKey(context.BootSecretId());
+  } else {
+    return keys.GetMultiplicationKey();
+  }
 }
 
 template <typename T, std::size_t N>

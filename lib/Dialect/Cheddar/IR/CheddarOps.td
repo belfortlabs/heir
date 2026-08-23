@@ -111,6 +111,10 @@ def Cheddar_UserInterfaceResult : Variadic<RankedTensorOf<[Cheddar_UserInterface
 // by ops (e.g. create_user_interface) that work off whichever context the
 // program selected.
 def Cheddar_BootContextLike : TensorOrMemRef<[Cheddar_BootContext]>;
+// The setup/keygen ops run before the context handle is split by kind, so they
+// accept either in tensor or memref form.
+def Cheddar_AnyContextLike :
+    TensorOrMemRef<[Cheddar_Context, Cheddar_BootContext]>;
 def Cheddar_BootContextResult : Variadic<RankedTensorOf<[Cheddar_BootContext]>>;
 def Cheddar_AnyOwningContextLike :
     TensorOrMemRef<[Cheddar_Context, Cheddar_BootContext]>;
@@ -191,11 +195,16 @@ def Cheddar_PrepareBootstrapOp : Cheddar_ReadWriteDpsOp<
     uses the context's slot count). Must run after the boot context + user
     interface are created and (for programs that also rotate outside boot) after
     the program's own `prepare_rot_key`s, so all keys land in one EvkMap.
+    `useCyclopsRuntime` selects Cyclops' two spellings of that sequence: it
+    names the homomorphic DFT preparation `PrepareHomomorphicDFT`, and the last
+    call names the secret the keys belong to
+    (`ui->PrepareRotationKey(req, ctx->BootSecretId())`); see `prepare_rot_key`.
   }];
   let arguments = (ins
     Cheddar_BootContextLike:$ctx,
     Cheddar_UserInterfaceLike:$ui,
-    Builtin_IntegerAttr:$numSlots
+    Builtin_IntegerAttr:$numSlots,
+    OptionalAttr<UnitAttr>:$useCyclopsRuntime
   );
   let results = (outs
     Cheddar_BootContextResult:$ctxResult,
@@ -241,13 +250,53 @@ def Cheddar_PrepareRotKeyOp : Cheddar_ReadWriteDpsOp<
     next setup op / the configure return). Must be called before using rotation
     with that distance; `maxLevel` is the maximum ciphertext level at which the
     key will be used.
+
+    Cyclops indexes every evaluation key by the secret it must match, so its
+    `PrepareRotationKey` takes that handle and has no two-argument overload.
+    The optional `$ctx` operand supplies it (`ctx->BootSecretId()`), and its
+    presence is what selects the Cyclops form.
   }];
   let arguments = (ins
+    Optional<Cheddar_AnyContextLike>:$ctx,
     Cheddar_UserInterfaceLike:$ui,
     Builtin_IntegerAttr:$distance,
     Builtin_IntegerAttr:$maxLevel
   );
   let results = (outs Cheddar_UserInterfaceResult:$result);
+}
+
+def Cheddar_PrepareLinearTransformKeysOp : Cheddar_ReadWriteDpsOp<
+    "prepare_linear_transform_keys", [], "Ui"> {
+  let summary = "Generate the rotation keys a linear transform will ask for";
+  let description = [{
+    Generates the rotation keys that one linear transform shape needs, for a
+    runtime that plans its own baby/giant split.
+
+    Cyclops' BSGS planner chooses the split from the matrix's diagonal
+    rotations and width alone, and offers no way to pin that choice, so the
+    compiler cannot predict which rotations the transform will perform. It can
+    ask, though: a `PlaintextMode::kShapeOnly` transform records the BSGS index
+    structure and skips every plaintext encoding, so building one over a
+    zero-valued matrix with the same diagonal indices and width reproduces the
+    real transform's split at negligible cost. `AddRequiredRotations` then
+    reports exactly the rotations the real transform will use.
+
+    This runs in key generation, where the UserInterface (and therefore the
+    secret) lives; the real transform is built later, in preprocessing, which
+    holds only the public key.
+
+    DPS: `$ui` is the in-place destination and the result is the updated
+    UserInterface.
+  }];
+  let arguments = (ins
+    Cheddar_AnyContextLike:$ctx,
+    Cheddar_UserInterfaceLike:$ui,
+    DenseI32ArrayAttr:$diagonal_indices,
+    Builtin_IntegerAttr:$width,
+    Builtin_IntegerAttr:$level
+  );
+  let results = (outs Cheddar_UserInterfaceResult:$result);
+  let hasVerifier = 1;
 }
 
 def Cheddar_MakeParameterOp : Cheddar_Op<"make_parameter", [Pure]> {
@@ -292,13 +341,24 @@ def Cheddar_EncodeOp : Cheddar_DpsOp<"encode", [PlaintextEncodeOpInterface]> {
     Calls encoder.Encode(pt, level, scale, message). The message is a vector
     of complex numbers (or reals). `logScale` preserves HEIR's logarithmic
     scale metadata for future use. `$output` is the destination plaintext.
+    `useSlotsApi` selects Cyclops' real-message EncodeSlots(pt, level, scale,
+    reals) in place of scale-snu's complex-message Encode.
+
+    Cyclops containers start untagged and every operation that needs a secret
+    rejects an untagged one, so a plaintext that will be encrypted must be
+    tagged first. The optional `$ctx` operand names that secret
+    (`pt.SetSecretId(ctx->BootSecretId())`, the same tag
+    `UserInterface::EncryptMessage` applies), and its presence is what emits
+    the tag.
   }];
   let arguments = (ins
+    Optional<Cheddar_AnyContext>:$ctx,
     Cheddar_Encoder:$encoder,
     Cheddar_FloatLike:$message,
     Cheddar_PtLike:$output,
     Builtin_IntegerAttr:$level,
-    OptionalAttr<Builtin_IntegerAttr>:$logScale
+    OptionalAttr<Builtin_IntegerAttr>:$logScale,
+    OptionalAttr<UnitAttr>:$useSlotsApi
   );
   let results = (outs Cheddar_PtResult:$result);
 }
@@ -327,11 +387,14 @@ def Cheddar_DecodeOp : Cheddar_DpsOp<"decode", [], "Value"> {
     Calls encoder.Decode(message, pt). `value` is the destination buffer the
     decoded message is written into (the DPS init); the DPS interface verifier
     ties it 1:1 to the `decoded` result (same type).
+    `useSlotsApi` selects Cyclops' real-message DecodeSlots(reals, pt) in
+    place of scale-snu's complex-message Decode.
   }];
   let arguments = (ins
     Cheddar_Encoder:$encoder,
     Cheddar_PtLike:$plaintext,
-    Cheddar_FloatLike:$value
+    Cheddar_FloatLike:$value,
+    OptionalAttr<UnitAttr>:$useSlotsApi
   );
   let results = (outs Variadic<AnyRankedTensor>:$decoded);
 }
@@ -702,6 +765,13 @@ def Cheddar_LinearTransformOp : Cheddar_DpsOp<"linear_transform", [
     The `level` attribute specifies the modulus level for the operation.
     `min_ks` selects scale-snu's minimum-key-switch evaluation when the baby-
     and giant-step rotations are complete arithmetic progressions.
+    `log_pt_size_per_prime`, when present, is Cyclops' compact plaintext period:
+    the encoded diagonals repeat every `2^log_pt_size_per_prime` words per prime,
+    so it stores one period instead of a full ring-degree plaintext.
+
+    `bs` and `gs` are both zero when the runtime plans the split itself
+    The rotation keys are then requested at key-generation time by
+    `cheddar.prepare_linear_transform_keys`, not derived from this op.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
@@ -714,7 +784,8 @@ def Cheddar_LinearTransformOp : Cheddar_DpsOp<"linear_transform", [
     Builtin_IntegerAttr:$level,
     Builtin_IntegerAttr:$bs,
     Builtin_IntegerAttr:$gs,
-    DefaultValuedAttr<BoolAttr, "false">:$min_ks
+    DefaultValuedAttr<BoolAttr, "false">:$min_ks,
+    OptionalAttr<Builtin_IntegerAttr>:$log_pt_size_per_prime
   );
   let results = (outs Cheddar_CtResult:$result);
   let hasVerifier = 1;
@@ -732,6 +803,14 @@ def Cheddar_PrepareLinearTransformOp :
     If `source_row_indices` is present, diagonal `diagonal_indices[i]` is read
     from row `source_row_indices[i]`.
     `min_ks` records the key-switch strategy chosen by the source lowering.
+    `log_pt_size_per_prime`, when present, is Cyclops' compact plaintext period:
+    the encoded diagonals repeat every `2^log_pt_size_per_prime` words per prime,
+    so it stores one period instead of a full ring-degree plaintext.
+
+    `bs` and `gs` are both zero when the runtime plans the split itself
+    (Cyclops: its BSGS planner owns that choice and offers no way to pin it).
+    The rotation keys are then requested at key-generation time by
+    `cheddar.prepare_linear_transform_keys`, not derived from this op.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
@@ -743,7 +822,8 @@ def Cheddar_PrepareLinearTransformOp :
     Builtin_IntegerAttr:$level,
     Builtin_IntegerAttr:$bs,
     Builtin_IntegerAttr:$gs,
-    DefaultValuedAttr<BoolAttr, "false">:$min_ks
+    DefaultValuedAttr<BoolAttr, "false">:$min_ks,
+    OptionalAttr<Builtin_IntegerAttr>:$log_pt_size_per_prime
   );
   let results = (outs Cheddar_LinearTransformResult:$result);
   let hasVerifier = 1;
@@ -784,7 +864,8 @@ def Cheddar_EvalPolyOp : Cheddar_DpsOp<"eval_poly"> {
     Cheddar_EvkMap:$evkMap,
     Cheddar_CtLike:$output,
     F64ArrayAttr:$coefficients,
-    Builtin_IntegerAttr:$levelConsumption
+    Builtin_IntegerAttr:$levelConsumption,
+    OptionalAttr<UnitAttr>:$selectMultKeyAtUseLevel
   );
   let results = (outs Cheddar_CtResult:$result);
   let hasVerifier = 1;
