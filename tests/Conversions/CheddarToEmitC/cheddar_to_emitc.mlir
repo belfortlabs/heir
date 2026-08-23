@@ -228,12 +228,21 @@ func.func @eval_poly(%ctx: !context, %enc: !encoder, %ct: tensor<!ciphertext>, %
   return %r : tensor<!ciphertext>
 }
 
+// CHECK: func.func @eval_poly_level_key
+// CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
+func.func @eval_poly_level_key(%ctx: !context, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %r = cheddar.eval_poly %ctx, %ct, %evk, %d0 {coefficients = [1.0 : f64, 2.0 : f64, 3.0 : f64], levelConsumption = 2 : i64, selectMultKeyAtUseLevel} : (!context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %r : tensor<!ciphertext>
+}
+
 // scale-snu evaluates a single ciphertext, while HEIR represents ciphertext
 // payloads as one-element tensors. Both direct and prepared transforms must
 // therefore pass the array element, not the std::array itself.
 // CHECK: func.func @linear_transform
 // CHECK: emitc.verbatim "_lt_matrix[0] = std::vector<Complex>({} + 4, {} + 8);"
 // CHECK: emitc.verbatim "_lt_matrix[1] = std::vector<Complex>({} + 12, {} + 16);"
+// CHECK: emitc.verbatim "LinearTransform<word> _lt(_lt_cp, _lt_matrix, 1, {}->param_.GetScale(1), 2, 1);"
 // CHECK: emitc.verbatim "_lt.Evaluate(_lt_cp, {}[0], {}[0], {});"
 func.func @linear_transform(
     %ctx: !context, %ct: tensor<1x!ciphertext>, %evk: !evk_map,
@@ -259,6 +268,50 @@ func.func @linear_transform_min_ks(
       : (!context, tensor<1x!ciphertext>, !evk_map, tensor<4x4xf64>,
          tensor<1x!ciphertext>) -> tensor<1x!ciphertext>
   return %result : tensor<1x!ciphertext>
+}
+
+// A width-4 message repeats every 2 * 4 words per prime, so lwe-to-cheddar
+// records log_pt_size_per_prime = 3 and Cyclops keeps one period instead of a
+// full ring-degree plaintext. scale-snu CHEDDAR takes pre_rotation in that
+// position, so the arguments appear only when the attribute is present.
+// CHECK: func.func @linear_transform_compact_pt
+// CHECK: emitc.verbatim "LinearTransform<word> _lt(_lt_cp, _lt_matrix, 1, {}->param_.GetScale(1), 2, 1, 3, PlaintextCacheConfig(), KeyMode::kInherit, PlaintextMode::kCompiled, 4);"
+func.func @linear_transform_compact_pt(
+    %ctx: !context, %ct: tensor<1x!ciphertext>, %evk: !evk_map,
+    %diagonals: tensor<4x4xf64>) -> tensor<1x!ciphertext> {
+  %out = tensor.empty() : tensor<1x!ciphertext>
+  %result = cheddar.linear_transform %ctx, %ct, %evk, %diagonals, %out
+      {diagonal_indices = array<i32: 0, 1>, source_row_indices = array<i32: 1, 3>, level = 1 : i64,
+       bs = 2 : i64, gs = 1 : i64, log_pt_size_per_prime = 3 : i64}
+      : (!context, tensor<1x!ciphertext>, !evk_map, tensor<4x4xf64>,
+         tensor<1x!ciphertext>) -> tensor<1x!ciphertext>
+  return %result : tensor<1x!ciphertext>
+}
+
+// CHECK: func.func @prepare_linear_transform
+// CHECK: emitc.verbatim "{} = std::make_shared<LinearTransform<word>>(_lt_cp, _lt_matrix, 1, {}->param_.GetScale(1), 2, 1);"
+func.func @prepare_linear_transform(
+    %ctx: !context, %diagonals: tensor<2x4xf64>) -> tensor<!linear_transform> {
+  %out = tensor.empty() : tensor<!linear_transform>
+  %result = cheddar.prepare_linear_transform %ctx, %diagonals, %out
+      {diagonal_indices = array<i32: 0, 1>, width = 4 : i64, level = 1 : i64,
+       bs = 2 : i64, gs = 1 : i64}
+      : (!context, tensor<2x4xf64>, tensor<!linear_transform>)
+      -> tensor<!linear_transform>
+  return %result : tensor<!linear_transform>
+}
+
+// CHECK: func.func @prepare_linear_transform_compact_pt
+// CHECK: emitc.verbatim "{} = std::make_shared<LinearTransform<word>>(_lt_cp, _lt_matrix, 1, {}->param_.GetScale(1), 2, 1, 3, PlaintextCacheConfig(), KeyMode::kInherit, PlaintextMode::kCompiled, 4);"
+func.func @prepare_linear_transform_compact_pt(
+    %ctx: !context, %diagonals: tensor<2x4xf64>) -> tensor<!linear_transform> {
+  %out = tensor.empty() : tensor<!linear_transform>
+  %result = cheddar.prepare_linear_transform %ctx, %diagonals, %out
+      {diagonal_indices = array<i32: 0, 1>, width = 4 : i64, level = 1 : i64,
+       bs = 2 : i64, gs = 1 : i64, log_pt_size_per_prime = 3 : i64}
+      : (!context, tensor<2x4xf64>, tensor<!linear_transform>)
+      -> tensor<!linear_transform>
+  return %result : tensor<!linear_transform>
 }
 
 // CHECK: func.func @apply_prepared_linear_transform

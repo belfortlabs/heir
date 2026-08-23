@@ -783,6 +783,26 @@ static std::string optionalMinKsArgument(bool minKs) {
   return minKs ? ", true" : "";
 }
 
+// Cyclops keeps one plaintext period per prime instead of a full ring-degree
+// plaintext, which is what dominates a prepared transform's device residency at
+// logN 16, and releases the full plaintexts once the compressed buffer exists.
+// msg_slot_period additionally lets Encode run a period-sized SpecialIFFT. The
+// two forks' constructors are positionally incompatible -- scale-snu takes
+// pre_rotation where Cyclops takes log_pt_size_per_prime -- so these arguments
+// are emitted only when lwe-to-cheddar marked the op for the Cyclops runtime.
+//
+// The default cache config is spelled `PlaintextCacheConfig()`, not `{}`:
+// emitc.verbatim reads `{}` as an operand placeholder, and value-initializing
+// that aggregate is equivalent to brace-initializing it.
+static std::string optionalCompactPlaintextArguments(IntegerAttr logPtSize,
+                                                     int64_t width) {
+  if (!logPtSize) return "";
+  return ", " + std::to_string(logPtSize.getInt()) +
+         ", PlaintextCacheConfig(), KeyMode::kInherit, "
+         "PlaintextMode::kCompiled, " +
+         std::to_string(width);
+}
+
 // Direct scale-snu LinearTransform lowering. A later optimization moves this
 // construction into split preprocessing so model evaluations can reuse it.
 struct ConvertLinearTransform
@@ -802,7 +822,10 @@ struct ConvertLinearTransform
         "LinearTransform<word> _lt(_lt_cp, _lt_matrix, " +
             intLit(op.getLevelAttr()) + ", {}->param_.GetScale(" +
             intLit(op.getLevelAttr()) + "), " + intLit(op.getBsAttr()) + ", " +
-            intLit(op.getGsAttr()) + ");",
+            intLit(op.getGsAttr()) +
+            optionalCompactPlaintextArguments(op.getLogPtSizePerPrimeAttr(),
+                                              diagonalsType.getDimSize(1)) +
+            ");",
         ValueRange{ctx});
     markDestination(
         VerbatimOp::create(
@@ -839,7 +862,10 @@ struct ConvertPrepareLinearTransform
             "_lt_cp, _lt_matrix, " +
                 intLit(op.getLevelAttr()) + ", {}->param_.GetScale(" +
                 intLit(op.getLevelAttr()) + "), " + intLit(op.getBsAttr()) +
-                ", " + intLit(op.getGsAttr()) + ");",
+                ", " + intLit(op.getGsAttr()) +
+                optionalCompactPlaintextArguments(op.getLogPtSizePerPrimeAttr(),
+                                                  diagonalsType.getDimSize(1)) +
+                ");",
             ValueRange{adaptor.getOutput(), ctx}),
         0);
     VerbatimOp::create(rewriter, loc, "}", ValueRange{});
@@ -946,7 +972,9 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
          {});
     emit("_ep.Compile(_ep_cp);", {});
     StringRef evaluate =
-        "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
+        op.getSelectMultKeyAtUseLevel()
+            ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
+            : "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
     markDestination(
         VerbatimOp::create(rewriter, loc, rewriter.getStringAttr(evaluate),
                            ValueRange{out, in, evk}),
