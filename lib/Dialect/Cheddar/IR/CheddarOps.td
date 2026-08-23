@@ -702,6 +702,9 @@ def Cheddar_LinearTransformOp : Cheddar_DpsOp<"linear_transform", [
     The `level` attribute specifies the modulus level for the operation.
     `min_ks` selects scale-snu's minimum-key-switch evaluation when the baby-
     and giant-step rotations are complete arithmetic progressions.
+    `log_pt_size_per_prime`, when present, is Cyclops' compact plaintext period:
+    the encoded diagonals repeat every `2^log_pt_size_per_prime` words per prime,
+    so it stores one period instead of a full ring-degree plaintext.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
@@ -714,7 +717,8 @@ def Cheddar_LinearTransformOp : Cheddar_DpsOp<"linear_transform", [
     Builtin_IntegerAttr:$level,
     Builtin_IntegerAttr:$bs,
     Builtin_IntegerAttr:$gs,
-    DefaultValuedAttr<BoolAttr, "false">:$min_ks
+    DefaultValuedAttr<BoolAttr, "false">:$min_ks,
+    OptionalAttr<Builtin_IntegerAttr>:$log_pt_size_per_prime
   );
   let results = (outs Cheddar_CtResult:$result);
   let hasVerifier = 1;
@@ -732,6 +736,9 @@ def Cheddar_PrepareLinearTransformOp :
     If `source_row_indices` is present, diagonal `diagonal_indices[i]` is read
     from row `source_row_indices[i]`.
     `min_ks` records the key-switch strategy chosen by the source lowering.
+    `log_pt_size_per_prime`, when present, is Cyclops' compact plaintext period:
+    the encoded diagonals repeat every `2^log_pt_size_per_prime` words per prime,
+    so it stores one period instead of a full ring-degree plaintext.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
@@ -743,7 +750,8 @@ def Cheddar_PrepareLinearTransformOp :
     Builtin_IntegerAttr:$level,
     Builtin_IntegerAttr:$bs,
     Builtin_IntegerAttr:$gs,
-    DefaultValuedAttr<BoolAttr, "false">:$min_ks
+    DefaultValuedAttr<BoolAttr, "false">:$min_ks,
+    OptionalAttr<Builtin_IntegerAttr>:$log_pt_size_per_prime
   );
   let results = (outs Cheddar_LinearTransformResult:$result);
   let hasVerifier = 1;
@@ -784,7 +792,8 @@ def Cheddar_EvalPolyOp : Cheddar_DpsOp<"eval_poly"> {
     Cheddar_EvkMap:$evkMap,
     Cheddar_CtLike:$output,
     F64ArrayAttr:$coefficients,
-    Builtin_IntegerAttr:$levelConsumption
+    Builtin_IntegerAttr:$levelConsumption,
+    OptionalAttr<UnitAttr>:$selectMultKeyAtUseLevel
   );
   let results = (outs Cheddar_CtResult:$result);
   let hasVerifier = 1;

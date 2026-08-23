@@ -1,5 +1,6 @@
 // RUN: heir-opt --lwe-to-cheddar %s | FileCheck %s
 // RUN: heir-opt --lwe-to-cheddar=enable-min-ks=false %s | FileCheck %s --check-prefix=NO-MIN-KS
+// RUN: heir-opt --lwe-to-cheddar='enable-min-ks=false use-cyclops-runtime=true' %s | FileCheck %s --check-prefix=CYCLOPS
 
 #enc = #lwe.inverse_canonical_encoding<scaling_factor = 45>
 #key = #lwe.key<>
@@ -24,6 +25,7 @@ module attributes {backend.cheddar, ckks.schemeParam = #ckks.scheme_param<logN =
   // CHECK-SAME: diagonal_indices = array<i32: 0, 1, 3>
   // CHECK-SAME: gs = 1 : i64
   // CHECK-SAME: level = 1 : i64
+  // CHECK-NOT: log_pt_size_per_prime
   func.func @linear_transform(%ct: !ct_in) -> !ct_out {
     %diagonals = arith.constant dense<1.0> : tensor<3x8xf64>
     %0 = kernel.linear_transform %ct, %diagonals {diagonal_indices = array<i64: 0, 1, 3>} : !ct_in, tensor<3x8xf64> -> !ct_out
@@ -57,6 +59,9 @@ module attributes {backend.cheddar, ckks.schemeParam = #ckks.scheme_param<logN =
   // CHECK-SAME: gs = 1 : i64
   // CHECK-SAME: level = 1 : i64
   // CHECK-SAME: source_row_indices = array<i32: 0, 2, 4>
+  // CYCLOPS: func.func @prepare_linear_transform(
+  // CYCLOPS: cheddar.prepare_linear_transform
+  // CYCLOPS-SAME: log_pt_size_per_prime = 4 : i64
   func.func @prepare_linear_transform(%diagonals: tensor<5x8xf64>) -> !prepared {
     %0 = kernel.prepare_linear_transform %diagonals {diagonal_indices = array<i64: 0, 1, 3>, source_row_indices = array<i64: 0, 2, 4>} : tensor<5x8xf64> -> !prepared
     return %0 : !prepared
@@ -67,6 +72,39 @@ module attributes {backend.cheddar, ckks.schemeParam = #ckks.scheme_param<logN =
   // CHECK-SAME: min_ks = true
   func.func @apply_linear_transform(%ct: !ct_in, %prepared: !prepared) -> !ct_out {
     %0 = kernel.apply_linear_transform %ct, %prepared {diagonal_indices = array<i64: 0, 1, 2, 3, 4, 5, 6, 7>, diagonal_width = 8 : i64} : !ct_in, !prepared -> !ct_out
+    return %0 : !ct_out
+  }
+
+  // CYCLOPS: func.func @sparse_linear_transform
+  // CYCLOPS: cheddar.linear_transform
+  // CYCLOPS-SAME: bs = 240 : i64
+  // CYCLOPS-SAME: gs = 5 : i64
+  // CYCLOPS-SAME: log_pt_size_per_prime = 11 : i64
+  func.func @sparse_linear_transform(%ct: !ct_in) -> !ct_out {
+    %diagonals = arith.constant dense<1.0> : tensor<54x1024xf64>
+    %0 = kernel.linear_transform %ct, %diagonals {diagonal_indices = array<i64: 0, 47, 48, 95, 96, 143, 144, 191, 192, 239, 240, 287, 288, 335, 336, 383, 384, 431, 432, 479, 480, 495, 496, 527, 528, 543, 544, 575, 576, 591, 592, 623, 624, 639, 640, 671, 672, 687, 688, 719, 720, 735, 736, 783, 784, 831, 832, 879, 880, 927, 928, 975, 976, 1023>} : !ct_in, tensor<54x1024xf64> -> !ct_out
+    return %0 : !ct_out
+  }
+
+  // Cyclops discards any period at or above log_degree - 1 (a repetition ratio
+  // of 2 or less loses more to strided loads than it saves), so width 2048 at
+  // logN 13 -- ratio exactly 2 -- records nothing rather than a period the
+  // runtime would ignore. Width 4096 is past the ring's slot capacity entirely.
+  // CYCLOPS: func.func @ratio_two_linear_transform
+  // CYCLOPS: cheddar.linear_transform
+  // CYCLOPS-NOT: log_pt_size_per_prime
+  func.func @ratio_two_linear_transform(%ct: !ct_in) -> !ct_out {
+    %diagonals = arith.constant dense<1.0> : tensor<3x2048xf64>
+    %0 = kernel.linear_transform %ct, %diagonals {diagonal_indices = array<i64: 0, 1, 3>} : !ct_in, tensor<3x2048xf64> -> !ct_out
+    return %0 : !ct_out
+  }
+  // CYCLOPS: func.func @full_width_linear_transform
+  // CYCLOPS: cheddar.linear_transform
+  // CYCLOPS-NOT: log_pt_size_per_prime
+  // CYCLOPS: return
+  func.func @full_width_linear_transform(%ct: !ct_in) -> !ct_out {
+    %diagonals = arith.constant dense<1.0> : tensor<3x4096xf64>
+    %0 = kernel.linear_transform %ct, %diagonals {diagonal_indices = array<i64: 0, 1, 3>} : !ct_in, tensor<3x4096xf64> -> !ct_out
     return %0 : !ct_out
   }
 }

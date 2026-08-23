@@ -6,6 +6,7 @@
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -29,8 +30,10 @@
 #include "lib/Utils/RotationUtils.h"
 #include "lib/Utils/TargetUtils.h"
 #include "lib/Utils/Utils.h"
+#include "llvm/include/llvm/ADT/DenseSet.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"           // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"           // from @llvm-project
+#include "llvm/include/llvm/Support/MathExtras.h"      // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/IR/Bufferization.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"   // from @llvm-project
@@ -537,7 +540,69 @@ struct LinearTransformPlan {
   int64_t bs;
   int64_t gs;
   bool minKs;
+  // Cyclops' compact plaintext period, in log2 words per prime; nullopt leaves
+  // the transform's plaintexts at full ring width.
+  std::optional<int64_t> logPtSizePerPrime;
 };
+
+struct BsgsCandidate {
+  int64_t bs;
+  int64_t gs;
+  int64_t babySteps;
+  int64_t giantSteps;
+  int64_t cost;
+};
+
+BsgsCandidate getBsgsCandidate(ArrayRef<int32_t> rotations, int64_t stride,
+                               int64_t steps, int64_t bs) {
+  llvm::DenseSet<int64_t> babySteps;
+  llvm::DenseSet<int64_t> giantSteps;
+  int64_t bucketWidth = stride * bs;
+  for (int32_t rotation : rotations) {
+    int64_t baby = rotation % bucketWidth;
+    babySteps.insert(baby);
+    giantSteps.insert(rotation - baby);
+  }
+  int64_t nonZeroBabySteps =
+      babySteps.size() - static_cast<int64_t>(babySteps.contains(0));
+  int64_t nonZeroGiantSteps =
+      giantSteps.size() - static_cast<int64_t>(giantSteps.contains(0));
+  return BsgsCandidate{bs, (steps + bs - 1) / bs,
+                       static_cast<int64_t>(babySteps.size()),
+                       static_cast<int64_t>(giantSteps.size()),
+                       nonZeroBabySteps + 4 * nonZeroGiantSteps};
+}
+
+FailureOr<std::pair<int64_t, int64_t>> getCyclopsBsgsPlan(
+    Operation* op, ArrayRef<int32_t> rotations, int64_t stride, int64_t steps,
+    double ratio) {
+  constexpr int64_t kMaxBabySteps = 128;
+  constexpr int64_t kMaxGiantSteps = 16;
+
+  std::optional<BsgsCandidate> best;
+  auto score = [ratio](const BsgsCandidate& candidate) {
+    double ratioDistance =
+        std::abs(static_cast<double>(candidate.babySteps) /
+                     static_cast<double>(candidate.giantSteps) -
+                 ratio);
+    return std::tuple(candidate.cost, ratioDistance, candidate.giantSteps,
+                      candidate.babySteps, candidate.bs);
+  };
+  for (int64_t bs = 1; bs <= steps; ++bs) {
+    BsgsCandidate candidate = getBsgsCandidate(rotations, stride, steps, bs);
+    if (candidate.babySteps > kMaxBabySteps ||
+        candidate.giantSteps > kMaxGiantSteps ||
+        candidate.babySteps < 2 * candidate.giantSteps ||
+        candidate.babySteps > 8 * candidate.giantSteps)
+      continue;
+
+    if (!best || score(candidate) < score(*best)) best = candidate;
+  }
+  if (!best)
+    return op->emitOpError(
+        "cannot find a Cyclops-compatible BSGS decomposition");
+  return std::pair(best->bs, best->gs);
+}
 
 DenseI32ArrayAttr convertI64ArrayAttr(PatternRewriter& rewriter,
                                       DenseI64ArrayAttr attr) {
@@ -549,9 +614,31 @@ DenseI32ArrayAttr convertI64ArrayAttr(PatternRewriter& rewriter,
   return rewriter.getDenseI32ArrayAttr(values);
 }
 
+// Cyclops stores each encoded diagonal as a full ring-degree plaintext, which
+// dominates device residency at logN 16. A W-slot message is replicated across
+// the ring's slots, and slot encoding plus the NWNTT each double that period,
+// so the bit-reversed evaluation-form plaintext repeats every 2*W words per
+// prime. Handing Cyclops that period lets it keep one period and release the
+// full plaintexts (Hoist.cu: hoist_pt_map_.clear()). Widths are powers of two
+// (CheddarOps.cpp verifyLinearTransformShape), so the log is exact.
+//
+// The cutoff matches Cyclops' own: Hoist.cu discards any period at or above
+// log_degree - 1, because at a repetition ratio of 2 or less the interleaved
+// compressed layout costs more in strided plaintext loads than the footprint it
+// saves. Emitting there would put a compact period in the IR that the runtime
+// silently ignores, so require a ratio above 2 -- 4 * width < ringDegree.
+std::optional<int64_t> getCompactPlaintextPeriod(int64_t width,
+                                                 int64_t ringDegree,
+                                                 bool useCyclopsRuntime) {
+  if (!useCyclopsRuntime || ringDegree <= 0) return std::nullopt;
+  if (4 * width >= ringDegree) return std::nullopt;
+  return static_cast<int64_t>(llvm::Log2_64_Ceil(2 * width));
+}
+
 FailureOr<LinearTransformPlan> getLinearTransformPlan(
     Operation* op, int64_t width, ArrayRef<int64_t> diagonalIndices,
-    double ratio, bool enableMinKs, PatternRewriter& rewriter) {
+    double ratio, bool enableMinKs, bool useCyclopsRuntime, int64_t ringDegree,
+    PatternRewriter& rewriter) {
   if (width <= 0)
     return op->emitOpError("requires a statically known positive width");
   if (!std::isfinite(ratio) || ratio <= 0)
@@ -579,28 +666,51 @@ FailureOr<LinearTransformPlan> getLinearTransformPlan(
   int64_t gs = std::max<int64_t>(
       1, static_cast<int64_t>(std::ceil(std::sqrt(steps / ratio))));
   int64_t bs = (steps + gs - 1) / gs;
+  if (useCyclopsRuntime) {
+    auto plan = getCyclopsBsgsPlan(op, indices, stride, steps, ratio);
+    if (failed(plan)) return failure();
+    std::tie(bs, gs) = *plan;
+  }
   auto indicesAttr = rewriter.getDenseI32ArrayAttr(indices);
   return LinearTransformPlan{
-      indicesAttr, width, bs, gs,
-      enableMinKs && cheddar::supportsMinKs(indicesAttr, width, bs, gs)};
+      indicesAttr,
+      width,
+      bs,
+      gs,
+      enableMinKs && cheddar::supportsMinKs(indicesAttr, width, bs, gs),
+      getCompactPlaintextPeriod(width, ringDegree, useCyclopsRuntime)};
 }
 
 FailureOr<LinearTransformPlan> getLinearTransformPlan(
     Operation* op, Type diagonalsType, ArrayRef<int64_t> diagonalIndices,
-    double ratio, bool enableMinKs, PatternRewriter& rewriter) {
+    double ratio, bool enableMinKs, bool useCyclopsRuntime, int64_t ringDegree,
+    PatternRewriter& rewriter) {
   auto shapedType = dyn_cast<ShapedType>(diagonalsType);
   if (!shapedType || !shapedType.hasRank() || shapedType.getRank() != 2)
     return op->emitOpError("requires statically shaped 2D diagonals");
   return getLinearTransformPlan(op, shapedType.getDimSize(1), diagonalIndices,
-                                ratio, enableMinKs, rewriter);
+                                ratio, enableMinKs, useCyclopsRuntime,
+                                ringDegree, rewriter);
+}
+
+// Trailing optional attribute for the two ops that construct a LinearTransform.
+IntegerAttr compactPlaintextPeriodAttr(const LinearTransformPlan& plan,
+                                       PatternRewriter& rewriter) {
+  return plan.logPtSizePerPrime
+             ? rewriter.getI64IntegerAttr(*plan.logPtSizePerPrime)
+             : IntegerAttr{};
 }
 
 // kernel.linear_transform -> cheddar.linear_transform.
 struct ConvertKernelLinearTransformOp
     : public OpConversionPattern<kernel::LinearTransformOp> {
   ConvertKernelLinearTransformOp(const TypeConverter& converter,
-                                 MLIRContext* context, bool enableMinKs)
-      : OpConversionPattern(converter, context), enableMinKs(enableMinKs) {}
+                                 MLIRContext* context, bool enableMinKs,
+                                 bool useCyclopsRuntime, int64_t ringDegree)
+      : OpConversionPattern(converter, context),
+        enableMinKs(enableMinKs),
+        useCyclopsRuntime(useCyclopsRuntime),
+        ringDegree(ringDegree) {}
 
   LogicalResult matchAndRewrite(
       kernel::LinearTransformOp op, OpAdaptor adaptor,
@@ -634,9 +744,9 @@ struct ConvertKernelLinearTransformOp
     double ratio = 4.0;
     if (auto ratioAttr = op.getBsgsRatioAttr())
       ratio = ratioAttr.getValueAsDouble();
-    auto plan = getLinearTransformPlan(op, op.getDiagonals().getType(),
-                                       op.getDiagonalIndices(), ratio,
-                                       enableMinKs, rewriter);
+    auto plan = getLinearTransformPlan(
+        op, op.getDiagonals().getType(), op.getDiagonalIndices(), ratio,
+        enableMinKs, useCyclopsRuntime, ringDegree, rewriter);
     if (failed(plan)) return failure();
 
     Type resultType = typeConverter->convertType(op.getOutput().getType());
@@ -648,21 +758,28 @@ struct ConvertKernelLinearTransformOp
         convertI64ArrayAttr(rewriter, op.getSourceRowIndicesAttr()),
         rewriter.getI64IntegerAttr(inputLevel),
         rewriter.getI64IntegerAttr(plan->bs),
-        rewriter.getI64IntegerAttr(plan->gs),
-        rewriter.getBoolAttr(plan->minKs));
+        rewriter.getI64IntegerAttr(plan->gs), rewriter.getBoolAttr(plan->minKs),
+        compactPlaintextPeriodAttr(*plan, rewriter));
     rewriter.replaceOp(op, result.getResult());
     return success();
   }
 
  private:
   bool enableMinKs;
+  bool useCyclopsRuntime;
+  int64_t ringDegree;
 };
 
 struct ConvertKernelPrepareLinearTransformOp
     : public OpConversionPattern<kernel::PrepareLinearTransformOp> {
   ConvertKernelPrepareLinearTransformOp(const TypeConverter& converter,
-                                        MLIRContext* context, bool enableMinKs)
-      : OpConversionPattern(converter, context), enableMinKs(enableMinKs) {}
+                                        MLIRContext* context, bool enableMinKs,
+                                        bool useCyclopsRuntime,
+                                        int64_t ringDegree)
+      : OpConversionPattern(converter, context),
+        enableMinKs(enableMinKs),
+        useCyclopsRuntime(useCyclopsRuntime),
+        ringDegree(ringDegree) {}
 
   LogicalResult matchAndRewrite(
       kernel::PrepareLinearTransformOp op, OpAdaptor adaptor,
@@ -673,9 +790,9 @@ struct ConvertKernelPrepareLinearTransformOp
     double ratio = preparedType.getLogBsgsRatio() == 0
                        ? 4.0
                        : std::exp2(preparedType.getLogBsgsRatio());
-    auto plan = getLinearTransformPlan(op, op.getDiagonals().getType(),
-                                       op.getDiagonalIndices(), ratio,
-                                       enableMinKs, rewriter);
+    auto plan = getLinearTransformPlan(
+        op, op.getDiagonals().getType(), op.getDiagonalIndices(), ratio,
+        enableMinKs, useCyclopsRuntime, ringDegree, rewriter);
     if (failed(plan)) return failure();
 
     Type resultType = typeConverter->convertType(preparedType);
@@ -687,21 +804,28 @@ struct ConvertKernelPrepareLinearTransformOp
         rewriter.getI64IntegerAttr(plan->width),
         rewriter.getI64IntegerAttr(preparedType.getLevel()),
         rewriter.getI64IntegerAttr(plan->bs),
-        rewriter.getI64IntegerAttr(plan->gs),
-        rewriter.getBoolAttr(plan->minKs));
+        rewriter.getI64IntegerAttr(plan->gs), rewriter.getBoolAttr(plan->minKs),
+        compactPlaintextPeriodAttr(*plan, rewriter));
     rewriter.replaceOp(op, result.getResult());
     return success();
   }
 
  private:
   bool enableMinKs;
+  bool useCyclopsRuntime;
+  int64_t ringDegree;
 };
 
 struct ConvertKernelApplyLinearTransformOp
     : public OpConversionPattern<kernel::ApplyLinearTransformOp> {
   ConvertKernelApplyLinearTransformOp(const TypeConverter& converter,
-                                      MLIRContext* context, bool enableMinKs)
-      : OpConversionPattern(converter, context), enableMinKs(enableMinKs) {}
+                                      MLIRContext* context, bool enableMinKs,
+                                      bool useCyclopsRuntime,
+                                      int64_t ringDegree)
+      : OpConversionPattern(converter, context),
+        enableMinKs(enableMinKs),
+        useCyclopsRuntime(useCyclopsRuntime),
+        ringDegree(ringDegree) {}
 
   LogicalResult matchAndRewrite(
       kernel::ApplyLinearTransformOp op, OpAdaptor adaptor,
@@ -722,9 +846,9 @@ struct ConvertKernelApplyLinearTransformOp
     double ratio = preparedType.getLogBsgsRatio() == 0
                        ? 4.0
                        : std::exp2(preparedType.getLogBsgsRatio());
-    auto plan = getLinearTransformPlan(op, diagonalWidth.getInt(),
-                                       diagonalIndices.asArrayRef(), ratio,
-                                       enableMinKs, rewriter);
+    auto plan = getLinearTransformPlan(
+        op, diagonalWidth.getInt(), diagonalIndices.asArrayRef(), ratio,
+        enableMinKs, useCyclopsRuntime, ringDegree, rewriter);
     if (failed(plan)) return failure();
     auto result = cheddar::ApplyPreparedLinearTransformOp::create(
         rewriter, op.getLoc(), resultType, ctx.value(), adaptor.getInput(),
@@ -736,13 +860,18 @@ struct ConvertKernelApplyLinearTransformOp
 
  private:
   bool enableMinKs;
+  bool useCyclopsRuntime;
+  int64_t ringDegree;
 };
 
 // kernel.eval_chebyshev -> cheddar.eval_poly. Both operations use Chebyshev
 // coefficients on [-1, 1].
 struct ConvertKernelEvalChebyshevOp
     : public OpConversionPattern<kernel::EvalChebyshevOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertKernelEvalChebyshevOp(const TypeConverter& converter,
+                               MLIRContext* context, bool useCyclopsRuntime)
+      : OpConversionPattern(converter, context),
+        useCyclopsRuntime(useCyclopsRuntime) {}
 
   LogicalResult matchAndRewrite(
       kernel::EvalChebyshevOp op, OpAdaptor adaptor,
@@ -766,10 +895,14 @@ struct ConvertKernelEvalChebyshevOp
     auto result = cheddar::EvalPolyOp::create(
         rewriter, op.getLoc(), resultType, ctx.value(), adaptor.getInput(),
         evkMap.value(), dest, op.getCoefficientsAttr(),
-        rewriter.getI64IntegerAttr(requiredLevels));
+        rewriter.getI64IntegerAttr(requiredLevels),
+        useCyclopsRuntime ? rewriter.getUnitAttr() : UnitAttr{});
     rewriter.replaceOp(op, result.getResult());
     return success();
   }
+
+ private:
+  bool useCyclopsRuntime;
 };
 
 //===----------------------------------------------------------------------===//
@@ -1111,6 +1244,13 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
           IntegerAttr::get(IntegerType::get(context, 64),
                            std::max(*bootstrapSlots, kMinBootstrapSlots)));
 
+    // Ring degree for Cyclops' compact linear-transform plaintexts. Absent
+    // scheme parameters simply leave the plaintexts at full width.
+    int64_t ringDegree = 0;
+    if (auto schemeParamAttr = module->getAttrOfType<ckks::SchemeParamAttr>(
+            ckks::CKKSDialect::kSchemeParamAttrName))
+      ringDegree = int64_t{1} << schemeParamAttr.getLogN();
+
     ConversionTarget target(*context);
     target.addLegalDialect<cheddar::CheddarDialect>();
     target.addLegalDialect<bufferization::BufferizationDialect>();
@@ -1228,9 +1368,10 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
                  ConvertLWEDecryptOp>(typeConverter, context);
     patterns.add<ConvertKernelLinearTransformOp,
                  ConvertKernelPrepareLinearTransformOp,
-                 ConvertKernelApplyLinearTransformOp>(typeConverter, context,
-                                                      enableMinKs);
-    patterns.add<ConvertKernelEvalChebyshevOp>(typeConverter, context);
+                 ConvertKernelApplyLinearTransformOp>(
+        typeConverter, context, enableMinKs, useCyclopsRuntime, ringDegree);
+    patterns.add<ConvertKernelEvalChebyshevOp>(typeConverter, context,
+                                               useCyclopsRuntime);
     // Payload packing ops -> rank-reducing slice ops (benefit 2 so they win
     // over the structural tensor conversion for payload-typed tensors).
     patterns.add<ConvertPayloadExtract, ConvertPayloadInsert,

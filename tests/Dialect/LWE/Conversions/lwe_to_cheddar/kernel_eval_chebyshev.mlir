@@ -1,4 +1,5 @@
 // RUN: heir-opt --lwe-to-cheddar %s | FileCheck %s
+// RUN: heir-opt --lwe-to-cheddar=use-cyclops-runtime=true %s | FileCheck %s --check-prefix=CYCLOPS
 
 #enc = #lwe.inverse_canonical_encoding<scaling_factor = 45>
 #key = #lwe.key<>
@@ -19,6 +20,8 @@ module attributes {backend.cheddar, ckks.schemeParam = #ckks.scheme_param<logN =
   // CHECK: cheddar.eval_poly
   // CHECK-SAME: coefficients = [0.000000e+00, 7.500000e-01, 0.000000e+00, 2.500000e-01]
   // CHECK-SAME: levelConsumption = 2 : i64
+  // CYCLOPS: cheddar.eval_poly
+  // CYCLOPS-SAME: selectMultKeyAtUseLevel
   func.func @eval_chebyshev(%ct: !ct_in) -> !ct_out {
     %0 = kernel.eval_chebyshev %ct {coefficients = [0.0 : f64, 0.75 : f64, 0.0 : f64, 0.25 : f64]} : !ct_in -> !ct_out
     return %0 : !ct_out

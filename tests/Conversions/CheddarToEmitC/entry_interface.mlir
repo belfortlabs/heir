@@ -1,4 +1,6 @@
 // RUN: heir-opt --cheddar-emitc-entry-interface %s | FileCheck %s
+// RUN: heir-opt --cheddar-emitc-entry-interface=runtime=cyclops %s | FileCheck %s --check-prefix=CYCLOPS
+// RUN: not heir-opt --cheddar-emitc-entry-interface=runtime=invalid %s 2>&1 | FileCheck %s --check-prefix=INVALID
 
 !ctx = !emitc.ptr<!emitc.opaque<"Context<word>">>
 !boot_ctx = !emitc.ptr<!emitc.opaque<"BootContext<word>">>
@@ -113,6 +115,17 @@ func.func private @call_preprocessing(
 // CHECK: verbatim "using PreparedInputs = std::tuple<std::array<Plaintext<word>, 2>>;"
 // CHECK: verbatim "using EncryptedInputs = std::tuple<std::array<Ciphertext<word>, 1>, std::array<Ciphertext<word>, 1>>;"
 // CHECK: func @Setup() -> !emitc.opaque<"std::shared_ptr<Context>">
+
+// CYCLOPS: emitc.file "header"
+// CYCLOPS: include "extension/boot/BootContext.h"
+// CYCLOPS: include "extension/poly/EvalPoly.h"
+// CYCLOPS: include "extension/linalg/LinearTransform.h"
+// CYCLOPS: verbatim "using namespace ::cyclops;"
+// CYCLOPS: verbatim "using Context = ::cyclops::BootContext<word>;"
+// CYCLOPS: verbatim "using SecretKey = ::cyclops::UserInterface<word>*;"
+// CYCLOPS: emitc.file "source"
+// CYCLOPS: verbatim "using namespace ::cyclops;"
+// INVALID: error: unsupported C++ runtime 'invalid'
 // CHECK: func @Encrypt(!emitc.opaque<"Context&">, !emitc.opaque<"SecretKey">, !emitc.opaque<"CleartextInputs&">) -> !emitc.opaque<"EncryptedInputs">
 // CHECK: emitc.file "source"
 // CHECK: include "entry.h"
