@@ -2,6 +2,10 @@ module(name = "heir")
 
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "rules_cc", version = "0.2.22")
+bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+
+# The planner does not use pkg-config; avoid bootstrapping it and GNU Make.
+register_toolchains("@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain")
 
 # hermetic LLVM toolchain (for C++ compiler and linker)
 bazel_dep(name = "llvm", version = "0.8.16")
@@ -101,6 +105,10 @@ use_repo(
 # CHEDDAR GPU FHE library (opt-in, requires CUDA).
 cheddar_extensions = use_extension("//bazel:extensions.bzl", "cheddar_deps")
 use_repo(cheddar_extensions, "cheddar", "libtommath", "rmm")
+
+# The proprietary CPU-only Cyclops planner is a required compiler dependency.
+cyclops_extensions = use_extension("//bazel:extensions.bzl", "cyclops_deps")
+use_repo(cyclops_extensions, "cyclops")
 
 # CHEDDAR's headers leak spdlog (via RMM) and nlohmann_json includes.
 bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.2")

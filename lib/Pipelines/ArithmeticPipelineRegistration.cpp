@@ -10,6 +10,7 @@
 #include "lib/Dialect/Cheddar/Transforms/CheddarBufferize.h"
 #include "lib/Dialect/Cheddar/Transforms/ConfigureCryptoContext.h"
 #include "lib/Dialect/Cheddar/Transforms/FuseOps.h"
+#include "lib/Dialect/Cheddar/Transforms/PlanEvaluationKeys.h"
 #include "lib/Dialect/Debug/Transforms/ValidateNames.h"
 #include "lib/Dialect/Kernel/Transforms/PrepareLinearTransforms.h"
 #include "lib/Dialect/LWE/Conversions/LWEToCheddar/LWEToCheddar.h"
@@ -735,6 +736,7 @@ BackendPipelineBuilder toLattigoPipelineBuilder() {
 
 CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
   return [](OpPassManager& pm, const CheddarBackendOptions& options) {
+    bool useCyclops = options.runtime == CheddarRuntime::Cyclops;
     pm.addPass(ckks::createCKKSToLWE());
 
     lwe::AddDebugPortOptions debugOptions{
@@ -743,7 +745,10 @@ CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
     };
     pm.addPass(lwe::createAddDebugPort(debugOptions));
 
-    pm.addPass(lwe::createLWEToCheddar());
+    lwe::LWEToCheddarOptions loweringOptions;
+    loweringOptions.enableMinKs = !useCyclops;
+    loweringOptions.useCyclopsRuntime = useCyclops;
+    pm.addPass(lwe::createLWEToCheddar(loweringOptions));
     // Run generic externalization after target lowering so packed constants
     // materialized by kernel-to-Cheddar conversions are included as well.
     if (!extConstOutputDir.empty()) {
@@ -765,7 +770,14 @@ CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
     cheddar::CheddarConfigureCryptoContextOptions configureOptions;
     configureOptions.entryFunction = options.entryFunction;
     configureOptions.logMessageRatio = options.logMessageRatio;
+    configureOptions.prepareRotationKeysAtUseLevels = useCyclops;
+    configureOptions.useCyclopsRuntime = useCyclops;
     pm.addPass(cheddar::createCheddarConfigureCryptoContext(configureOptions));
+    if (useCyclops) {
+      // Resolve the key requirements the pass above recorded into the concrete
+      // key list the emitter bakes into the client. Needs the planner library.
+      pm.addPass(cheddar::createCheddarPlanEvaluationKeys());
+    }
     cheddar::CheddarBuildEntryInterfaceOptions facadeOptions;
     facadeOptions.entryFunction = options.entryFunction;
     pm.addPass(cheddar::createCheddarBuildEntryInterface(facadeOptions));

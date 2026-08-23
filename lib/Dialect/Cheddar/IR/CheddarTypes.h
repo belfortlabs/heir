@@ -34,6 +34,26 @@ constexpr ::llvm::StringLiteral kResourceDirSupportKind = "resource_dir";
 constexpr ::llvm::StringLiteral kEntryInputArgAttrName = "cheddar.entry_input";
 constexpr ::llvm::StringLiteral kPreparedArgAttrName = "cheddar.prepared";
 
+// Attributes cheddar-configure-crypto-context records on the Cyclops client
+// setup function for the compiled evaluation-key request.
+constexpr ::llvm::StringLiteral kRotationKeysAttrName = "cheddar.rotation_keys";
+constexpr ::llvm::StringLiteral kBootstrapSlotsAttrName =
+    "cheddar.bootstrap_slots";
+constexpr ::llvm::StringLiteral kBootstrapNumCtsAttrName =
+    "cheddar.bootstrap_num_cts";
+constexpr ::llvm::StringLiteral kBootstrapNumStcAttrName =
+    "cheddar.bootstrap_num_stc";
+constexpr ::llvm::StringLiteral kBootstrapLogMessageRatioAttrName =
+    "cheddar.bootstrap_log_message_ratio";
+constexpr ::llvm::StringLiteral kLinearTransformKeysAttrName =
+    "cheddar.linear_transform_keys";
+
+// What cheddar-plan-evaluation-keys leaves in place of the attributes above:
+// the resolved key list, as flat (family, rot_idx, level, key_mode,
+// required_num_aux) tuples.
+constexpr ::llvm::StringLiteral kEvaluationKeysAttrName =
+    "cheddar.evaluation_keys";
+
 }  // namespace cheddar
 }  // namespace heir
 }  // namespace mlir

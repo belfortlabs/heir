@@ -1,4 +1,5 @@
 // RUN: heir-opt --lwe-to-cheddar %s | FileCheck %s
+// RUN: heir-opt --lwe-to-cheddar=use-cyclops-runtime=true %s | FileCheck %s
 
 #enc = #lwe.inverse_canonical_encoding<scaling_factor = 1099511627776>
 #key = #lwe.key<>

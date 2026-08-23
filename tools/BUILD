@@ -29,6 +29,7 @@ cc_binary(
         "HEIR_YOSYS_SCRIPTS_DIR=\\\"" + WORKSPACE_PATH + "lib/Transforms/YosysOptimizer/yosys\\\"",
     ],
     includes = ["include"],
+    tags = ["no-remote"],
     deps = [
         "@heir//lib/Analysis/NoiseAnalysis",  # buildcleaner: keep
         "@heir//lib/Analysis/NoiseAnalysis/BFV:NoiseAnalysis",  # buildcleaner: keep
@@ -55,6 +56,7 @@ cc_binary(
         "@heir//lib/Dialect/Cheddar/Transforms:CheddarBufferize",
         "@heir//lib/Dialect/Cheddar/Transforms:ConfigureCryptoContext",
         "@heir//lib/Dialect/Cheddar/Transforms:FuseOps",
+        "@heir//lib/Dialect/Cheddar/Transforms:PlanEvaluationKeys",
         "@heir//lib/Dialect/Comb/IR:Dialect",
         "@heir//lib/Dialect/Debug/IR:Dialect",
         "@heir//lib/Dialect/Debug/Transforms",

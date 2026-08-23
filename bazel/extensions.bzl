@@ -3,6 +3,7 @@
 load("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
+load("//bazel/cyclops:version.bzl", "CYCLOPS_COMMIT")
 
 def _llvm_deps_impl(_):
     """Implementation of the llvm_deps module extension."""
@@ -62,3 +63,13 @@ def _cheddar_deps_impl(_):
     )
 
 cheddar_deps = module_extension(implementation = _cheddar_deps_impl)
+
+def _cyclops_deps_impl(_):
+    new_git_repository(
+        name = "cyclops",
+        build_file = "@heir//bazel/cyclops:cyclops.BUILD",
+        commit = CYCLOPS_COMMIT,
+        remote = "ssh://git@github.com/belfortlabs/cyclops.git",
+    )
+
+cyclops_deps = module_extension(implementation = _cyclops_deps_impl)
