@@ -1,0 +1,37 @@
+# Archive the Cyclops revision selected by Medusa to /tmp/cyclops-source.tar.gz,
+# then run: sky launch -y -c heir-cyclops-client sky/cyclops_client.yaml
+name: heir-cyclops-client
+workdir: .
+file_mounts:
+  /tmp/cyclops-source.tar.gz: /tmp/cyclops-source.tar.gz
+resources:
+  cloud: aws
+  cpus: 32+
+  memory: 64+
+  image_id: docker:ubuntu:24.04
+  autostop:
+    idle_minutes: 10
+setup: |
+  set -eu
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq build-essential libtommath-dev cmake git wget ca-certificates
+  wget -q https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -O /usr/local/bin/bazel
+  chmod +x /usr/local/bin/bazel
+  mkdir -p /tmp/cyclops-source
+  tar -xzf /tmp/cyclops-source.tar.gz -C /tmp/cyclops-source
+run: |
+  set -eu
+  bazel build //tools:heir-opt //tools:heir-translate \
+    --compilation_mode=opt --strip=always --cxxopt=-std=c++20 \
+    --@rules_python//python/config_settings:python_version=3.12 \
+    --remote_executor= --noremote_upload_local_results --bes_backend=
+  clang_dir=$(echo "$PWD"/bazel-*/external/llvm++llvm_toolchain_minimal+*/bin)
+  cmake -S tests/Examples/cyclops -B /tmp/cyclops-client-test \
+    -DCMAKE_C_COMPILER="$clang_dir/clang" -DCMAKE_CXX_COMPILER="$clang_dir/clang++" \
+    -DCYCLOPS_SOURCE_DIR=/tmp/cyclops-source -DHEIR_BIN_DIR="$PWD/bazel-bin/tools" \
+    -DCMAKE_BUILD_TYPE=Release
+  cmake --build /tmp/cyclops-client-test -j16
+  ctest --test-dir /tmp/cyclops-client-test --output-on-failure
+  ! command -v nvcc
+  ! ldd /tmp/cyclops-client-test/client_roundtrip | grep -Ei 'cuda|cudart'
