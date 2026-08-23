@@ -174,24 +174,15 @@ bool evaluationNeedsSecret(const EntryFunctions& functions) {
 }
 
 std::string contextTypeName(const EntryFunctions& functions) {
-  bool hasContext = false;
-  SmallVector<func::FuncOp> candidates;
-  for (const auto& helper : functions.inputHelpers)
-    candidates.push_back(helper.second);
-  candidates.push_back(functions.preprocess);
-  candidates.push_back(functions.evaluate);
-  for (const auto& helper : functions.outputHelpers)
-    candidates.push_back(helper.second);
-  for (func::FuncOp function : candidates) {
-    if (!function) continue;
-    for (Type type : function.getArgumentTypes()) {
-      if (!isContextPointer(type)) continue;
-      StringRef name = opaqueName(cast<PointerType>(type).getPointee());
-      if (name == "BootContext<word>") return name.str();
-      hasContext = true;
-    }
+  // Setup owns the context even when no evaluation or helper needs it as an
+  // argument (e.g. a passthrough entry with Cheddar encode/decode helpers).
+  for (Type type : getDestinationTypes(functions.setup)) {
+    StringRef name = opaqueName(type);
+    for (StringRef context : {"Context<word>", "BootContext<word>"})
+      if (name == "std::shared_ptr<" + context.str() + ">")
+        return context.str();
   }
-  return hasContext ? "Context<word>" : "";
+  return {};
 }
 
 void emitVerbatim(OpBuilder& builder, Location loc, StringRef text) {
@@ -286,18 +277,20 @@ SupportValues buildSupportValues(OpBuilder& builder, Location loc,
       CallOpaqueOp::create(builder, loc, TypeRange{uiPointer},
                            "static_cast<UserInterface<word>*>", key)
           .getResult(0);
-    values.evaluationKey =
-      MemberCallOpaqueOp::create(
-          builder, loc,
-          TypeRange{OpaqueType::get(ctx, "const EvaluationKey<word>&")},
-          values.userInterface, "GetMultiplicationKey", ArrayAttr{},
-          ArrayAttr{}, ValueRange{})
-          .getResult(0);
     values.evaluationKeyMap =
       MemberCallOpaqueOp::create(
           builder, loc, TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
           values.userInterface, "GetEvkMap", ArrayAttr{}, ArrayAttr{},
           ValueRange{})
+          .getResult(0);
+    // The multiplication key comes off the map, exactly as on the production
+    // path: a level-blind UserInterface getter is a scale-snu-only shape.
+    values.evaluationKey =
+      CallOpaqueOp::create(
+          builder, loc,
+          TypeRange{OpaqueType::get(ctx, "const EvaluationKey<word>&")},
+          "heir::multiplicationKey",
+          ValueRange{values.evaluationKeyMap, context})
           .getResult(0);
     return values;
   } else {
@@ -1101,6 +1094,10 @@ struct CheddarEmitCEntryInterfacePass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    if (runtime != "cheddar" && runtime != "cyclops") {
+      module.emitError() << "unsupported C++ runtime '" << runtime << "'";
+      return signalPassFailure();
+    }
     FailureOr<EntryFunctions> functions =
         findEntryFunctions(module, entryFunction);
     // The C++ facade exposes Setup and KeyGen separately, so both are required.
@@ -1109,12 +1106,17 @@ struct CheddarEmitCEntryInterfacePass
                          << " is missing a setup or keygen function";
       return signalPassFailure();
     }
-    SmallVector<StringRef> extensionIncludes = {"extension/BootContext.h",
-                                                "extension/EvalPoly.h",
-                                                "extension/LinearTransform.h"};
+    SmallVector<StringRef> extensionIncludes;
+    if (runtime == "cyclops") {
+      extensionIncludes = {"extension/boot/BootContext.h",
+                           "extension/poly/EvalPoly.h",
+                           "extension/linalg/LinearTransform.h"};
+    } else {
+      extensionIncludes = {"extension/BootContext.h", "extension/EvalPoly.h",
+                           "extension/LinearTransform.h"};
+    }
     if (failed(functions) ||
-        failed(
-            buildInterface(module, *functions, "cheddar", extensionIncludes)))
+        failed(buildInterface(module, *functions, runtime, extensionIncludes)))
       signalPassFailure();
   }
 };

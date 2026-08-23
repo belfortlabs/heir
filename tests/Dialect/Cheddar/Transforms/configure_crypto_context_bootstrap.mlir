@@ -1,5 +1,6 @@
 // RUN: heir-opt --cheddar-configure-crypto-context=entry-function=main %s | FileCheck %s --check-prefix=CONFIG
 // RUN: heir-opt --cheddar-configure-crypto-context=entry-function=main --cheddar-bufferize --fold-memref-alias-ops --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s --check-prefix=EMITC
+// RUN: heir-opt '--cheddar-configure-crypto-context=entry-function=main use-cyclops-runtime=true' --cheddar-bufferize --fold-memref-alias-ops --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s --check-prefix=CYCLOPS
 
 !boot_context = !cheddar.boot_context
 !ciphertext = !cheddar.ciphertext
@@ -59,3 +60,14 @@ module attributes {
 // EMITC: func.func @main__configure
 // EMITC: emitc.call_opaque "main__setup"
 // EMITC: emitc.call_opaque "main__keygen"
+
+// The same keygen under the Cyclops runtime. Both PrepareRotationKey overloads
+// must take the SecretId: the keys land in one EvkMap and compile against one
+// header, but the per-distance call learns the runtime from its optional $ctx
+// operand while the EvkRequest call learns it from prepare_bootstrap's
+// useCyclopsRuntime attribute. Check them together so the two cannot diverge.
+// CYCLOPS: emitc.verbatim "{}->PrepareRotationKey(7, {}->BootSecretId(), 13);"
+// CYCLOPS: emitc.verbatim "{}->PrepareEvalMod();"
+// CYCLOPS: emitc.verbatim "{}->PrepareHomomorphicDFT(256, BootVariant::kImaginaryRemoving);"
+// CYCLOPS: emitc.verbatim "EvkRequest boot_evk_req;"
+// CYCLOPS: emitc.verbatim "{}->PrepareRotationKey(boot_evk_req, {}->BootSecretId());"

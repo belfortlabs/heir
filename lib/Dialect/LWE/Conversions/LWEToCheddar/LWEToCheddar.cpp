@@ -7,7 +7,6 @@
 #include <numeric>
 #include <optional>
 #include <utility>
-#include <vector>
 
 #include "lib/Dialect/CKKS/IR/CKKSAttributes.h"
 #include "lib/Dialect/CKKS/IR/CKKSDialect.h"
@@ -31,6 +30,7 @@
 #include "lib/Utils/Utils.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"           // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"           // from @llvm-project
+#include "llvm/include/llvm/Support/MathExtras.h"      // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/IR/Bufferization.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"   // from @llvm-project
@@ -49,6 +49,8 @@
 #define DEBUG_TYPE "lwe-to-cheddar"
 
 namespace mlir::heir::lwe {
+
+constexpr StringLiteral kCheddarRuntimeAttrName = "cheddar.runtime";
 
 //===----------------------------------------------------------------------===//
 // Type converter
@@ -138,16 +140,6 @@ Value makeReusableDest(OpBuilder& b, Location loc, Type resultTy,
           cheddar::CheddarDialect::getDialectNamespace())
     return candidate;
   return makeEmptyDest(b, loc, resultTy);
-}
-
-template <typename... Dialects>
-bool containsArgumentOfDialect(Operation* op) {
-  auto funcOp = dyn_cast<func::FuncOp>(op);
-  if (!funcOp) return false;
-  return llvm::any_of(funcOp.getArgumentTypes(), [&](Type argType) {
-    return DialectEqual<Dialects...>()(
-        &getElementTypeOrSelf(argType).getDialect());
-  });
 }
 
 template <typename CheddarType>
@@ -460,7 +452,11 @@ struct ConvertCKKSBootstrapOp : public OpConversionPattern<ckks::BootstrapOp> {
 // Encode at the level and logarithmic scale chosen by the upstream CKKS scale
 // management pipeline. CHEDDAR accepts the corresponding linear scale.
 struct ConvertLWEEncodeOp : public OpConversionPattern<lwe::RLWEEncodeOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertLWEEncodeOp(const TypeConverter& converter, MLIRContext* context,
+                     bool useCyclopsRuntime)
+      : OpConversionPattern(converter, context),
+        useCyclopsRuntime(useCyclopsRuntime) {}
+
   LogicalResult matchAndRewrite(
       lwe::RLWEEncodeOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
@@ -472,12 +468,26 @@ struct ConvertLWEEncodeOp : public OpConversionPattern<lwe::RLWEEncodeOp> {
     int64_t level = op.getLevel().value();
     Type resultTy = typeConverter->convertType(op.getOutput().getType());
     Value dest = makeEmptyDest(rewriter, op.getLoc(), resultTy);
+    // Cyclops needs the context to tag the plaintext with its secret; the
+    // evaluator injection puts a Context in every function that encodes when
+    // the Cyclops runtime is selected.
+    Value ctx;
+    if (useCyclopsRuntime) {
+      auto contextualCtx = getContextualContext(op.getOperation());
+      if (failed(contextualCtx)) return contextualCtx;
+      ctx = contextualCtx.value();
+    }
     auto result = cheddar::EncodeOp::create(
-        rewriter, op.getLoc(), resultTy, encoder.value(), adaptor.getInput(),
-        dest, rewriter.getI64IntegerAttr(level), op.getScaleAttr());
+        rewriter, op.getLoc(), resultTy, ctx, encoder.value(),
+        adaptor.getInput(), dest, rewriter.getI64IntegerAttr(level),
+        op.getScaleAttr(),
+        useCyclopsRuntime ? rewriter.getUnitAttr() : UnitAttr{});
     rewriter.replaceOp(op, result);
     return success();
   }
+
+ private:
+  bool useCyclopsRuntime;
 };
 
 struct ConvertLWEDecryptOp : public OpConversionPattern<lwe::RLWEDecryptOp> {
@@ -514,7 +524,11 @@ struct ConvertLWEEncryptOp : public OpConversionPattern<lwe::RLWEEncryptOp> {
 
 // Decode is already destination-passing on the float `value` buffer.
 struct ConvertLWEDecodeOp : public OpConversionPattern<lwe::RLWEDecodeOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertLWEDecodeOp(const TypeConverter& converter, MLIRContext* context,
+                     bool useCyclopsRuntime)
+      : OpConversionPattern(converter, context),
+        useCyclopsRuntime(useCyclopsRuntime) {}
+
   LogicalResult matchAndRewrite(
       lwe::RLWEDecodeOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
@@ -523,12 +537,15 @@ struct ConvertLWEDecodeOp : public OpConversionPattern<lwe::RLWEDecodeOp> {
     auto outTy = cast<RankedTensorType>(op.getOutput().getType());
     Value dest = tensor::EmptyOp::create(
         rewriter, op.getLoc(), outTy.getShape(), outTy.getElementType());
-    auto result =
-        cheddar::DecodeOp::create(rewriter, op.getLoc(), outTy, encoder.value(),
-                                  adaptor.getInput(), dest);
+    auto result = cheddar::DecodeOp::create(
+        rewriter, op.getLoc(), outTy, encoder.value(), adaptor.getInput(), dest,
+        useCyclopsRuntime ? rewriter.getUnitAttr() : UnitAttr{});
     rewriter.replaceOp(op, result);
     return success();
   }
+
+ private:
+  bool useCyclopsRuntime;
 };
 
 struct LinearTransformPlan {
@@ -537,6 +554,9 @@ struct LinearTransformPlan {
   int64_t bs;
   int64_t gs;
   bool minKs;
+  // Cyclops' compact plaintext period, in log2 words per prime; nullopt leaves
+  // the transform's plaintexts at full ring width.
+  std::optional<int64_t> logPtSizePerPrime;
 };
 
 DenseI32ArrayAttr convertI64ArrayAttr(PatternRewriter& rewriter,
@@ -549,9 +569,31 @@ DenseI32ArrayAttr convertI64ArrayAttr(PatternRewriter& rewriter,
   return rewriter.getDenseI32ArrayAttr(values);
 }
 
+// Cyclops stores each encoded diagonal as a full ring-degree plaintext, which
+// dominates device residency at logN 16. A W-slot message is replicated across
+// the ring's slots, and slot encoding plus the NWNTT each double that period,
+// so the bit-reversed evaluation-form plaintext repeats every 2*W words per
+// prime. Handing Cyclops that period lets it keep one period and release the
+// full plaintexts (Hoist.cu: hoist_pt_map_.clear()). Widths are powers of two
+// (CheddarOps.cpp verifyLinearTransformShape), so the log is exact.
+//
+// The cutoff matches Cyclops' own: Hoist.cu discards any period at or above
+// log_degree - 1, because at a repetition ratio of 2 or less the interleaved
+// compressed layout costs more in strided plaintext loads than the footprint it
+// saves. Emitting there would put a compact period in the IR that the runtime
+// silently ignores, so require a ratio above 2 -- 4 * width < ringDegree.
+std::optional<int64_t> getCompactPlaintextPeriod(int64_t width,
+                                                 int64_t ringDegree,
+                                                 bool useCyclopsRuntime) {
+  if (!useCyclopsRuntime || ringDegree <= 0) return std::nullopt;
+  if (4 * width >= ringDegree) return std::nullopt;
+  return static_cast<int64_t>(llvm::Log2_64_Ceil(2 * width));
+}
+
 FailureOr<LinearTransformPlan> getLinearTransformPlan(
     Operation* op, int64_t width, ArrayRef<int64_t> diagonalIndices,
-    double ratio, bool enableMinKs, PatternRewriter& rewriter) {
+    double ratio, bool enableMinKs, bool useCyclopsRuntime, int64_t ringDegree,
+    PatternRewriter& rewriter) {
   if (width <= 0)
     return op->emitOpError("requires a statically known positive width");
   if (!std::isfinite(ratio) || ratio <= 0)
@@ -579,28 +621,51 @@ FailureOr<LinearTransformPlan> getLinearTransformPlan(
   int64_t gs = std::max<int64_t>(
       1, static_cast<int64_t>(std::ceil(std::sqrt(steps / ratio))));
   int64_t bs = (steps + gs - 1) / gs;
+  if (useCyclopsRuntime) {
+    bs = 0;
+    gs = 0;
+  }
   auto indicesAttr = rewriter.getDenseI32ArrayAttr(indices);
   return LinearTransformPlan{
-      indicesAttr, width, bs, gs,
-      enableMinKs && cheddar::supportsMinKs(indicesAttr, width, bs, gs)};
+      indicesAttr,
+      width,
+      bs,
+      gs,
+      enableMinKs && !useCyclopsRuntime &&
+          cheddar::supportsMinKs(indicesAttr, width, bs, gs),
+      getCompactPlaintextPeriod(width, ringDegree, useCyclopsRuntime)};
 }
 
 FailureOr<LinearTransformPlan> getLinearTransformPlan(
     Operation* op, Type diagonalsType, ArrayRef<int64_t> diagonalIndices,
-    double ratio, bool enableMinKs, PatternRewriter& rewriter) {
+    double ratio, bool enableMinKs, bool useCyclopsRuntime, int64_t ringDegree,
+    PatternRewriter& rewriter) {
   auto shapedType = dyn_cast<ShapedType>(diagonalsType);
   if (!shapedType || !shapedType.hasRank() || shapedType.getRank() != 2)
     return op->emitOpError("requires statically shaped 2D diagonals");
   return getLinearTransformPlan(op, shapedType.getDimSize(1), diagonalIndices,
-                                ratio, enableMinKs, rewriter);
+                                ratio, enableMinKs, useCyclopsRuntime,
+                                ringDegree, rewriter);
+}
+
+// Trailing optional attribute for the two ops that construct a LinearTransform.
+IntegerAttr compactPlaintextPeriodAttr(const LinearTransformPlan& plan,
+                                       PatternRewriter& rewriter) {
+  return plan.logPtSizePerPrime
+             ? rewriter.getI64IntegerAttr(*plan.logPtSizePerPrime)
+             : IntegerAttr{};
 }
 
 // kernel.linear_transform -> cheddar.linear_transform.
 struct ConvertKernelLinearTransformOp
     : public OpConversionPattern<kernel::LinearTransformOp> {
   ConvertKernelLinearTransformOp(const TypeConverter& converter,
-                                 MLIRContext* context, bool enableMinKs)
-      : OpConversionPattern(converter, context), enableMinKs(enableMinKs) {}
+                                 MLIRContext* context, bool enableMinKs,
+                                 bool useCyclopsRuntime, int64_t ringDegree)
+      : OpConversionPattern(converter, context),
+        enableMinKs(enableMinKs),
+        useCyclopsRuntime(useCyclopsRuntime),
+        ringDegree(ringDegree) {}
 
   LogicalResult matchAndRewrite(
       kernel::LinearTransformOp op, OpAdaptor adaptor,
@@ -634,9 +699,9 @@ struct ConvertKernelLinearTransformOp
     double ratio = 4.0;
     if (auto ratioAttr = op.getBsgsRatioAttr())
       ratio = ratioAttr.getValueAsDouble();
-    auto plan = getLinearTransformPlan(op, op.getDiagonals().getType(),
-                                       op.getDiagonalIndices(), ratio,
-                                       enableMinKs, rewriter);
+    auto plan = getLinearTransformPlan(
+        op, op.getDiagonals().getType(), op.getDiagonalIndices(), ratio,
+        enableMinKs, useCyclopsRuntime, ringDegree, rewriter);
     if (failed(plan)) return failure();
 
     Type resultType = typeConverter->convertType(op.getOutput().getType());
@@ -648,21 +713,28 @@ struct ConvertKernelLinearTransformOp
         convertI64ArrayAttr(rewriter, op.getSourceRowIndicesAttr()),
         rewriter.getI64IntegerAttr(inputLevel),
         rewriter.getI64IntegerAttr(plan->bs),
-        rewriter.getI64IntegerAttr(plan->gs),
-        rewriter.getBoolAttr(plan->minKs));
+        rewriter.getI64IntegerAttr(plan->gs), rewriter.getBoolAttr(plan->minKs),
+        compactPlaintextPeriodAttr(*plan, rewriter));
     rewriter.replaceOp(op, result.getResult());
     return success();
   }
 
  private:
   bool enableMinKs;
+  bool useCyclopsRuntime;
+  int64_t ringDegree;
 };
 
 struct ConvertKernelPrepareLinearTransformOp
     : public OpConversionPattern<kernel::PrepareLinearTransformOp> {
   ConvertKernelPrepareLinearTransformOp(const TypeConverter& converter,
-                                        MLIRContext* context, bool enableMinKs)
-      : OpConversionPattern(converter, context), enableMinKs(enableMinKs) {}
+                                        MLIRContext* context, bool enableMinKs,
+                                        bool useCyclopsRuntime,
+                                        int64_t ringDegree)
+      : OpConversionPattern(converter, context),
+        enableMinKs(enableMinKs),
+        useCyclopsRuntime(useCyclopsRuntime),
+        ringDegree(ringDegree) {}
 
   LogicalResult matchAndRewrite(
       kernel::PrepareLinearTransformOp op, OpAdaptor adaptor,
@@ -673,9 +745,9 @@ struct ConvertKernelPrepareLinearTransformOp
     double ratio = preparedType.getLogBsgsRatio() == 0
                        ? 4.0
                        : std::exp2(preparedType.getLogBsgsRatio());
-    auto plan = getLinearTransformPlan(op, op.getDiagonals().getType(),
-                                       op.getDiagonalIndices(), ratio,
-                                       enableMinKs, rewriter);
+    auto plan = getLinearTransformPlan(
+        op, op.getDiagonals().getType(), op.getDiagonalIndices(), ratio,
+        enableMinKs, useCyclopsRuntime, ringDegree, rewriter);
     if (failed(plan)) return failure();
 
     Type resultType = typeConverter->convertType(preparedType);
@@ -687,21 +759,28 @@ struct ConvertKernelPrepareLinearTransformOp
         rewriter.getI64IntegerAttr(plan->width),
         rewriter.getI64IntegerAttr(preparedType.getLevel()),
         rewriter.getI64IntegerAttr(plan->bs),
-        rewriter.getI64IntegerAttr(plan->gs),
-        rewriter.getBoolAttr(plan->minKs));
+        rewriter.getI64IntegerAttr(plan->gs), rewriter.getBoolAttr(plan->minKs),
+        compactPlaintextPeriodAttr(*plan, rewriter));
     rewriter.replaceOp(op, result.getResult());
     return success();
   }
 
  private:
   bool enableMinKs;
+  bool useCyclopsRuntime;
+  int64_t ringDegree;
 };
 
 struct ConvertKernelApplyLinearTransformOp
     : public OpConversionPattern<kernel::ApplyLinearTransformOp> {
   ConvertKernelApplyLinearTransformOp(const TypeConverter& converter,
-                                      MLIRContext* context, bool enableMinKs)
-      : OpConversionPattern(converter, context), enableMinKs(enableMinKs) {}
+                                      MLIRContext* context, bool enableMinKs,
+                                      bool useCyclopsRuntime,
+                                      int64_t ringDegree)
+      : OpConversionPattern(converter, context),
+        enableMinKs(enableMinKs),
+        useCyclopsRuntime(useCyclopsRuntime),
+        ringDegree(ringDegree) {}
 
   LogicalResult matchAndRewrite(
       kernel::ApplyLinearTransformOp op, OpAdaptor adaptor,
@@ -722,9 +801,9 @@ struct ConvertKernelApplyLinearTransformOp
     double ratio = preparedType.getLogBsgsRatio() == 0
                        ? 4.0
                        : std::exp2(preparedType.getLogBsgsRatio());
-    auto plan = getLinearTransformPlan(op, diagonalWidth.getInt(),
-                                       diagonalIndices.asArrayRef(), ratio,
-                                       enableMinKs, rewriter);
+    auto plan = getLinearTransformPlan(
+        op, diagonalWidth.getInt(), diagonalIndices.asArrayRef(), ratio,
+        enableMinKs, useCyclopsRuntime, ringDegree, rewriter);
     if (failed(plan)) return failure();
     auto result = cheddar::ApplyPreparedLinearTransformOp::create(
         rewriter, op.getLoc(), resultType, ctx.value(), adaptor.getInput(),
@@ -736,13 +815,18 @@ struct ConvertKernelApplyLinearTransformOp
 
  private:
   bool enableMinKs;
+  bool useCyclopsRuntime;
+  int64_t ringDegree;
 };
 
 // kernel.eval_chebyshev -> cheddar.eval_poly. Both operations use Chebyshev
 // coefficients on [-1, 1].
 struct ConvertKernelEvalChebyshevOp
     : public OpConversionPattern<kernel::EvalChebyshevOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertKernelEvalChebyshevOp(const TypeConverter& converter,
+                               MLIRContext* context, bool useCyclopsRuntime)
+      : OpConversionPattern(converter, context),
+        useCyclopsRuntime(useCyclopsRuntime) {}
 
   LogicalResult matchAndRewrite(
       kernel::EvalChebyshevOp op, OpAdaptor adaptor,
@@ -766,10 +850,14 @@ struct ConvertKernelEvalChebyshevOp
     auto result = cheddar::EvalPolyOp::create(
         rewriter, op.getLoc(), resultType, ctx.value(), adaptor.getInput(),
         evkMap.value(), dest, op.getCoefficientsAttr(),
-        rewriter.getI64IntegerAttr(requiredLevels));
+        rewriter.getI64IntegerAttr(requiredLevels),
+        useCyclopsRuntime ? rewriter.getUnitAttr() : UnitAttr{});
     rewriter.replaceOp(op, result.getResult());
     return success();
   }
+
+ private:
+  bool useCyclopsRuntime;
 };
 
 //===----------------------------------------------------------------------===//
@@ -886,30 +974,99 @@ struct ConvertPayloadSplat : public OpConversionPattern<tensor::SplatOp> {
 // Context-argument threading (mirrors LWEToLattigo)
 //===----------------------------------------------------------------------===//
 
+using SupportRequirements = DenseMap<func::FuncOp, SmallVector<Type>>;
+
+SmallVector<Type> getDirectSupportTypes(func::FuncOp function,
+                                        bool useCyclopsRuntime) {
+  auto* context = function.getContext();
+  Type ctxType = cheddar::ContextType::get(context);
+  Type bootType = cheddar::BootContextType::get(context);
+  Type encoderType = cheddar::EncoderType::get(context);
+  Type uiType = cheddar::UserInterfaceType::get(context);
+  Type keyType = cheddar::EvalKeyType::get(context);
+  Type mapType = cheddar::EvkMapType::get(context);
+  SmallVector<Type> required;
+  auto add = [&](Type type) {
+    if (!llvm::is_contained(required, type)) required.push_back(type);
+  };
+  function.walk([&](Operation* op) {
+    if (isa<ckks::AddOp, ckks::SubOp, ckks::MulOp, ckks::AddPlainOp,
+            ckks::SubPlainOp, ckks::MulPlainOp, ckks::NegateOp,
+            ckks::RelinearizeOp, ckks::RescaleOp, ckks::RotateOp,
+            ckks::LevelReduceOp, ckks::BootstrapOp, lwe::RAddOp, lwe::RSubOp,
+            lwe::RMulOp, lwe::RNegateOp, lwe::RAddPlainOp, lwe::RSubPlainOp,
+            lwe::RMulPlainOp, kernel::LinearTransformOp,
+            kernel::PrepareLinearTransformOp, kernel::ApplyLinearTransformOp,
+            kernel::EvalChebyshevOp>(op))
+      add(ctxType);
+    // Cyclops encode tags plaintexts with the context's secret.
+    if (useCyclopsRuntime && isa<lwe::RLWEEncodeOp>(op)) add(ctxType);
+    if (isa<ckks::BootstrapOp>(op)) add(bootType);
+    if (isa<lwe::RLWEEncodeOp, lwe::RLWEDecodeOp>(op)) add(encoderType);
+    if (isa<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp>(op)) add(uiType);
+    if (isa<ckks::RelinearizeOp>(op)) add(keyType);
+    if (isa<ckks::RotateOp, ckks::BootstrapOp, kernel::LinearTransformOp,
+            kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>(op))
+      add(mapType);
+    if (auto call = dyn_cast<func::CallOp>(op);
+        call && isDebugPort(call.getCallee())) {
+      add(encoderType);
+      add(uiType);
+    }
+  });
+  return required;
+}
+
+// Thread only support values consumed by the function or its callees.
+SupportRequirements collectSupportRequirements(Operation* module,
+                                               bool useCyclopsRuntime) {
+  SupportRequirements required;
+  module->walk([&](func::FuncOp function) {
+    required[function] = getDirectSupportTypes(function, useCyclopsRuntime);
+  });
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    module->walk([&](func::CallOp call) {
+      auto caller = call->getParentOfType<func::FuncOp>();
+      auto callee = getCalledFunction(call);
+      if (!caller || failed(callee) || caller == *callee) return;
+      for (Type type : required[*callee]) {
+        if (llvm::is_contained(required[caller], type)) continue;
+        required[caller].push_back(type);
+        changed = true;
+      }
+    });
+  }
+  return required;
+}
+
 struct AddCheddarContextArg : public OpConversionPattern<func::FuncOp> {
-  AddCheddarContextArg(
-      const TypeConverter& typeConverter, mlir::MLIRContext* context,
-      const std::vector<std::pair<Type, OpPredicate>>& evaluators)
+  AddCheddarContextArg(const TypeConverter& typeConverter,
+                       mlir::MLIRContext* context, ArrayRef<Type> supportTypes,
+                       const SupportRequirements& required)
       : OpConversionPattern<func::FuncOp>(typeConverter, context,
                                           /* benefit= */ 2),
-        evaluators(evaluators) {}
+        supportTypes(supportTypes),
+        required(required) {}
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(
       func::FuncOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     SmallVector<Type, 4> selectedTypes;
-    for (const auto& evaluator : evaluators) {
-      if (!evaluator.second(op)) continue;
+    auto requiredTypes = required.lookup(op);
+    for (Type supportType : supportTypes) {
+      if (!llvm::is_contained(requiredTypes, supportType)) continue;
       // Skip a context type already present as an argument: with --debug
       // enabled the lwe debug port adds an LWESecretKey arg that converts to a
       // UserInterface, which would otherwise be duplicated here (and break
       // call- site threading, which dedups by type).
       if (llvm::any_of(op.getArgumentTypes(), [&](Type type) {
-            return getTypeConverter()->convertType(type) == evaluator.first;
+            return getTypeConverter()->convertType(type) == supportType;
           }))
         continue;
-      selectedTypes.push_back(evaluator.first);
+      selectedTypes.push_back(supportType);
     }
     if (selectedTypes.empty())
       return rewriter.notifyMatchFailure(op, "no CHEDDAR context needed");
@@ -923,15 +1080,16 @@ struct AddCheddarContextArg : public OpConversionPattern<func::FuncOp> {
   }
 
  private:
-  std::vector<std::pair<Type, OpPredicate>> evaluators;
+  ArrayRef<Type> supportTypes;
+  const SupportRequirements& required;
 };
 
 struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
-  ConvertCheddarFuncCallOp(
-      const TypeConverter& typeConverter, mlir::MLIRContext* context,
-      const std::vector<std::pair<Type, OpPredicate>>& evaluators)
+  ConvertCheddarFuncCallOp(const TypeConverter& typeConverter,
+                           mlir::MLIRContext* context,
+                           ArrayRef<Type> supportTypes)
       : OpConversionPattern<func::CallOp>(typeConverter, context),
-        evaluators(evaluators) {}
+        supportTypes(supportTypes) {}
 
   LogicalResult matchAndRewrite(
       func::CallOp op, typename func::CallOp::Adaptor adaptor,
@@ -940,12 +1098,14 @@ struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
     if (failed(funcOp))
       return rewriter.notifyMatchFailure(op, "could not find callee function");
     SmallVector<Value> newOperands;
-    for (const auto& evaluator : evaluators) {
-      auto result =
-          getContextualArgFromFunc(op.getOperation(), evaluator.first);
+    for (Type supportType : supportTypes) {
+      auto result = getContextualArgFromFunc(op.getOperation(), supportType);
       if (failed(result)) continue;
-      if (!llvm::is_contained(funcOp.value().getArgumentTypes(),
-                              evaluator.first))
+      if (!llvm::is_contained(funcOp.value().getArgumentTypes(), supportType))
+        continue;
+      if (llvm::any_of(adaptor.getOperands(), [&](Value operand) {
+            return operand.getType() == supportType;
+          }))
         continue;
       newOperands.push_back(result.value());
     }
@@ -968,7 +1128,7 @@ struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
   }
 
  private:
-  std::vector<std::pair<Type, OpPredicate>> evaluators;
+  ArrayRef<Type> supportTypes;
 };
 
 //===----------------------------------------------------------------------===//
@@ -1065,6 +1225,10 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     auto* module = getOperation();
     ToCheddarTypeConverter typeConverter(context);
 
+    module->setAttr(
+        kCheddarRuntimeAttrName,
+        StringAttr::get(context, useCyclopsRuntime ? "cyclops" : "cheddar"));
+
     if (!moduleIsCKKS(module)) {
       module->emitOpError("CHEDDAR backend only supports CKKS scheme");
       return signalPassFailure();
@@ -1111,6 +1275,13 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
           IntegerAttr::get(IntegerType::get(context, 64),
                            std::max(*bootstrapSlots, kMinBootstrapSlots)));
 
+    // Ring degree for Cyclops' compact linear-transform plaintexts. Absent
+    // scheme parameters simply leave the plaintexts at full width.
+    int64_t ringDegree = 0;
+    if (auto schemeParamAttr = module->getAttrOfType<ckks::SchemeParamAttr>(
+            ckks::CKKSDialect::kSchemeParamAttrName))
+      ringDegree = int64_t{1} << schemeParamAttr.getLogN();
+
     ConversionTarget target(*context);
     target.addLegalDialect<cheddar::CheddarDialect>();
     target.addLegalDialect<bufferization::BufferizationDialect>();
@@ -1129,100 +1300,17 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     preprocessing::populatePreprocessingConversions(patterns, typeConverter,
                                                     context);
 
-    // BootContext and the rotation-key map (EvkMap) must be threaded
-    // transitively: a function that calls a function that bootstraps
-    // needs the right keys.
-    DenseMap<func::FuncOp, bool> bootstrapsTransitively;
-    DenseMap<func::FuncOp, bool> needsEvkMapTransitively;
-    DenseMap<func::FuncOp, bool> needsUserInterfaceTransitively;
-    module->walk([&](func::FuncOp f) {
-      bool boots = false;
-      bool evk = false;
-      bool secret = false;
-      f.walk([&](Operation* inner) {
-        if (isa<ckks::BootstrapOp>(inner)) boots = true;
-        if (isa<ckks::BootstrapOp, ckks::RotateOp, kernel::LinearTransformOp,
-                kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>(inner))
-          evk = true;
-        if (isa<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp>(inner)) secret = true;
-        if (auto call = dyn_cast<func::CallOp>(inner);
-            call && isDebugPort(call.getCallee()))
-          secret = true;
-      });
-      bootstrapsTransitively[f] = boots;
-      needsEvkMapTransitively[f] = evk;
-      needsUserInterfaceTransitively[f] = secret;
-    });
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      module->walk([&](func::CallOp call) {
-        auto caller = call->getParentOfType<func::FuncOp>();
-        FailureOr<func::FuncOp> callee = getCalledFunction(call);
-        if (!caller || failed(callee)) return;
-        if (bootstrapsTransitively[callee.value()] &&
-            !bootstrapsTransitively[caller]) {
-          bootstrapsTransitively[caller] = true;
-          changed = true;
-        }
-        if (needsEvkMapTransitively[callee.value()] &&
-            !needsEvkMapTransitively[caller]) {
-          needsEvkMapTransitively[caller] = true;
-          changed = true;
-        }
-        if (needsUserInterfaceTransitively[callee.value()] &&
-            !needsUserInterfaceTransitively[caller]) {
-          needsUserInterfaceTransitively[caller] = true;
-          changed = true;
-        }
-      });
-    }
-
-    auto hasCryptoOps = [&](Operation* op) -> bool {
-      return containsArgumentOfDialect<lwe::LWEDialect, ckks::CKKSDialect>(op);
-    };
-    auto hasPrepareLinearTransform = [&](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      if (!funcOp) return false;
-      return !funcOp.getOps<kernel::PrepareLinearTransformOp>().empty();
-    };
-    auto hasEncodeOps = [&](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      if (!funcOp) return false;
-      bool found = false;
-      funcOp->walk([&](lwe::RLWEEncodeOp) { found = true; });
-      return found;
-    };
-    auto needsEvkMap = [&needsEvkMapTransitively](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      return funcOp && needsEvkMapTransitively.lookup(funcOp);
-    };
-    auto needsUserInterface =
-        [&needsUserInterfaceTransitively](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      return funcOp && needsUserInterfaceTransitively.lookup(funcOp);
-    };
-    auto funcBootstraps = [&bootstrapsTransitively](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      return funcOp && bootstrapsTransitively.lookup(funcOp);
-    };
-    auto hasCryptoOrEncode = [&](Operation* op) {
-      return hasCryptoOps(op) || hasEncodeOps(op);
-    };
-    auto hasContextOps = [&](Operation* op) {
-      return hasCryptoOps(op) || hasPrepareLinearTransform(op);
-    };
-    std::vector<std::pair<Type, OpPredicate>> evaluators = {
-        {cheddar::ContextType::get(context), hasContextOps},
-        {cheddar::BootContextType::get(context), funcBootstraps},
-        {cheddar::EncoderType::get(context), hasCryptoOrEncode},
-        {cheddar::UserInterfaceType::get(context), needsUserInterface},
-        {cheddar::EvalKeyType::get(context), hasCryptoOps},
-        {cheddar::EvkMapType::get(context), needsEvkMap},
-    };
-
-    patterns.add<AddCheddarContextArg>(typeConverter, context, evaluators);
-    patterns.add<ConvertCheddarFuncCallOp>(typeConverter, context, evaluators);
+    const auto required = collectSupportRequirements(module, useCyclopsRuntime);
+    SmallVector<Type> supportTypes{cheddar::ContextType::get(context),
+                                   cheddar::BootContextType::get(context),
+                                   cheddar::EncoderType::get(context),
+                                   cheddar::UserInterfaceType::get(context),
+                                   cheddar::EvalKeyType::get(context),
+                                   cheddar::EvkMapType::get(context)};
+    patterns.add<AddCheddarContextArg>(typeConverter, context, supportTypes,
+                                       required);
+    patterns.add<ConvertCheddarFuncCallOp>(typeConverter, context,
+                                           supportTypes);
     // Debug ports get dedicated, higher-benefit handling (the generic call /
     // structural func patterns would mis-thread their context args).
     patterns.add<ConvertDebugFuncDecl, ConvertDebugCall>(typeConverter, context,
@@ -1237,13 +1325,16 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     patterns.add<ConvertRAddOp, ConvertRSubOp, ConvertRMulOp, ConvertRNegateOp,
                  ConvertRAddPlainOp, ConvertRSubPlainOp, ConvertRMulPlainOp>(
         typeConverter, context);
-    patterns.add<ConvertLWEEncodeOp, ConvertLWEDecodeOp, ConvertLWEEncryptOp,
-                 ConvertLWEDecryptOp>(typeConverter, context);
+    patterns.add<ConvertLWEEncryptOp, ConvertLWEDecryptOp>(typeConverter,
+                                                           context);
+    patterns.add<ConvertLWEEncodeOp, ConvertLWEDecodeOp>(typeConverter, context,
+                                                         useCyclopsRuntime);
     patterns.add<ConvertKernelLinearTransformOp,
                  ConvertKernelPrepareLinearTransformOp,
-                 ConvertKernelApplyLinearTransformOp>(typeConverter, context,
-                                                      enableMinKs);
-    patterns.add<ConvertKernelEvalChebyshevOp>(typeConverter, context);
+                 ConvertKernelApplyLinearTransformOp>(
+        typeConverter, context, enableMinKs, useCyclopsRuntime, ringDegree);
+    patterns.add<ConvertKernelEvalChebyshevOp>(typeConverter, context,
+                                               useCyclopsRuntime);
     // Payload packing ops -> rank-reducing slice ops (benefit 2 so they win
     // over the structural tensor conversion for payload-typed tensors).
     patterns.add<ConvertPayloadExtract, ConvertPayloadInsert,
@@ -1266,42 +1357,19 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     };
     target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
       if (isDebugPort(op.getName())) return isReshapedDebugDecl(op);
-      bool hasCheddarCtxArg =
-          op.getFunctionType().getNumInputs() > 0 &&
-          containsArgumentOfType<cheddar::ContextType, cheddar::BootContextType,
-                                 cheddar::EncoderType,
-                                 cheddar::UserInterfaceType,
-                                 cheddar::EvalKeyType, cheddar::EvkMapType>(op);
-      bool hasCryptoArg =
-          containsArgumentOfDialect<lwe::LWEDialect, ckks::CKKSDialect>(op);
-      bool hasEncodeOp = false;
-      op.walk([&](lwe::RLWEEncodeOp) { hasEncodeOp = true; });
-      bool hasPrepareOp =
-          !op.getOps<kernel::PrepareLinearTransformOp>().empty();
       return typeConverter.isSignatureLegal(op.getFunctionType()) &&
              typeConverter.isLegal(&op.getBody()) &&
-             (!(hasCryptoArg || hasEncodeOp || hasPrepareOp) ||
-              hasCheddarCtxArg);
+             llvm::all_of(required.lookup(op), [&](Type type) {
+               return llvm::is_contained(op.getArgumentTypes(), type);
+             });
     });
 
     target.addDynamicallyLegalOp<func::CallOp>([&](func::CallOp op) {
       if (isDebugPort(op.getCallee()))
         return isReshapedDebugSig(op.getCalleeType().getInputs());
-      auto operandTypes = op.getCalleeType().getInputs();
-      auto containsCryptoArg = llvm::any_of(operandTypes, [&](Type argType) {
-        return DialectEqual<lwe::LWEDialect, ckks::CKKSDialect>()(
-            &argType.getDialect());
-      });
-      auto hasCheddarCtxArg =
-          !operandTypes.empty() &&
-          mlir::isa<cheddar::ContextType, cheddar::BootContextType>(
-              *operandTypes.begin());
-      bool signatureConsistent = false;
-      FailureOr<func::FuncOp> callee = getCalledFunction(op);
-      if (succeeded(callee))
-        signatureConsistent =
-            callee.value().getFunctionType() == op.getCalleeType();
-      return (!containsCryptoArg || hasCheddarCtxArg) && signatureConsistent;
+      auto callee = getCalledFunction(op);
+      return succeeded(callee) && typeConverter.isLegal(op) &&
+             callee->getFunctionType() == op.getCalleeType();
     });
 
     target.markUnknownOpDynamicallyLegal(
