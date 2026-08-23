@@ -34,6 +34,13 @@ constexpr ::llvm::StringLiteral kResourceDirSupportKind = "resource_dir";
 constexpr ::llvm::StringLiteral kEntryInputArgAttrName = "cheddar.entry_input";
 constexpr ::llvm::StringLiteral kPreparedArgAttrName = "cheddar.prepared";
 
+// Attributes cheddar-configure-crypto-context records on the Cyclops server
+// setup function for the evaluation-key request: the compiled rotation keys
+// as flattened (distance, level) pairs, and the bootstrap slot count.
+constexpr ::llvm::StringLiteral kRotationKeysAttrName = "cheddar.rotation_keys";
+constexpr ::llvm::StringLiteral kBootstrapSlotsAttrName =
+    "cheddar.bootstrap_slots";
+
 }  // namespace cheddar
 }  // namespace heir
 }  // namespace mlir
