@@ -269,6 +269,11 @@ LogicalResult convertFuncForScheme(func::FuncOp op) {
 
   auto configFuncOp =
       func::FuncOp::create(builder, configFuncName, configFuncType);
+  // Lattigo fuses keygen into setup, so there is no keygen func to tag.
+  setInterfaceRole(
+      configFuncOp, kClientSetupRole,
+      builder.getDictionaryAttr({builder.getNamedAttr(
+          kClientHelperFuncName, builder.getStringAttr(op.getSymName()))}));
   builder.setInsertionPointToEnd(configFuncOp.addEntryBlock());
 
   auto* moduleOp = op->getParentOp();
