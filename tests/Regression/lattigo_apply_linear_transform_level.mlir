@@ -37,17 +37,12 @@ module attributes {
   scheme.ckks,
   scheme.requested_slot_count = 1024 : i64
 } {
-  // The dead low path leaves an L0 allocation at consumed depth 2. It must not
-  // become the destination of the L1 transform result. The dead bootstrap
-  // output remains at L2 and is safe to reuse: the emitter first gives the
-  // receiver the operand's runtime level, then Rescale shrinks it to L1.
   // CHECK: func.func @different_absolute_levels
-  // CHECK: %[[LOW:.*]] = lattigo.rlwe.drop_level_new
+  // CHECK: lattigo.rlwe.drop_level_new
   // CHECK: %[[BOOT:.*]] = lattigo.ckks.bootstrap
-  // CHECK: %[[APPLY:.*]] = lattigo.ckks.apply_linear_transform {{.*}}%[[BOOT]]
-  // CHECK: %[[HIGH:.*]] = lattigo.ckks.rescale {{.*}}%[[APPLY]], %[[BOOT]]
-  // CHECK-NOT: lattigo.ckks.rescale {{.*}}%[[APPLY]], %[[LOW]]
-  // CHECK: lattigo.ckks.add {{.*}}%[[HIGH]], %[[HIGH]], %[[BOOT]]
+  // CHECK-NEXT: %[[APPLY:.*]] = lattigo.ckks.apply_linear_transform {{.*}}%[[BOOT]]
+  // CHECK-NEXT: %[[HIGH:.*]] = lattigo.ckks.rescale_new {{.*}}%[[APPLY]]
+  // CHECK-NEXT: lattigo.ckks.add {{.*}}%[[HIGH]], %[[HIGH]], %[[HIGH]]
   func.func @different_absolute_levels(
       %base: !ct_L2, %boot_input: !ct_L0,
       %prepared: !prepared_L2) -> !ct_L1 {

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
 #include "llvm/include/llvm/Support/Debug.h"             // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"    // from @llvm-project
@@ -176,6 +177,10 @@ struct TensorExtToTensor
     patterns.add<ConvertRotateOp>(context);
 
     (void)walkAndApplyPatterns(getOperation(), std::move(patterns));
+
+    getOperation()->walk([](Operation* op) {
+      op->removeAttr(TensorExtDialect::kKernelInfoAttrName);
+    });
   }
 };
 
