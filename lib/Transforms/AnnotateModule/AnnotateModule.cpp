@@ -54,6 +54,14 @@ struct AnnotateModule : impl::AnnotateModuleBase<AnnotateModule> {
           break;
       }
     }
+
+    if (cheddarRuntime == "cyclops") {
+      moduleSetCyclopsRuntime(module);
+    } else if (!cheddarRuntime.empty() && cheddarRuntime != "cheddar") {
+      module.emitError() << "Unknown CHEDDAR runtime: " << cheddarRuntime;
+      signalPassFailure();
+      return;
+    }
   }
 };
 

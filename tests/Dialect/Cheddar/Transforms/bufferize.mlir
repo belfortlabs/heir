@@ -22,10 +22,10 @@ func.func @mad_unsafe(%ctx: !cheddar.context, %acc: tensor<!cheddar.ciphertext>,
 }
 
 // CHECK: func.func @prepare_rot_key
-// CHECK: cheddar.prepare_rot_key %{{.*}} {distance = 7 : i64, maxLevel = 13 : i64} : (memref<!user_interface>) -> ()
+// CHECK: cheddar.prepare_rot_key %{{.*}}, %{{.*}} {distance = 7 : i64, maxLevel = 13 : i64} : (memref<!context>, memref<!user_interface>) -> ()
 // CHECK: return
-func.func @prepare_rot_key(%ui: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
-  %result = cheddar.prepare_rot_key %ui {distance = 7 : i64, maxLevel = 13 : i64} : (tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+func.func @prepare_rot_key(%ctx: tensor<!cheddar.context>, %ui: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
+  %result = cheddar.prepare_rot_key %ctx, %ui {distance = 7 : i64, maxLevel = 13 : i64} : (tensor<!cheddar.context>, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
   return %result : tensor<!cheddar.user_interface>
 }
 

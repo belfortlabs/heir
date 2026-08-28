@@ -141,5 +141,15 @@ void moduleSetCheddar(Operation* moduleOp) {
                     mlir::UnitAttr::get(moduleOp->getContext()));
 }
 
+bool moduleIsCyclopsRuntime(Operation* moduleOp) {
+  return moduleOp->getAttrOfType<mlir::UnitAttr>(kCyclopsRuntimeAttrName) !=
+         nullptr;
+}
+
+void moduleSetCyclopsRuntime(Operation* moduleOp) {
+  moduleOp->setAttr(kCyclopsRuntimeAttrName,
+                    mlir::UnitAttr::get(moduleOp->getContext()));
+}
+
 }  // namespace heir
 }  // namespace mlir

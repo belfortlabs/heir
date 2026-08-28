@@ -253,7 +253,7 @@ struct SupportValues {
 };
 
 SupportValues buildSupportValues(OpBuilder& builder, Location loc,
-                                 Value context, Value key) {
+                                 Value context, Value key, bool cyclops) {
   auto* ctx = builder.getContext();
   SupportValues values;
   Type contextPointer = PointerType::get(OpaqueType::get(ctx, "Context"));
@@ -272,19 +272,38 @@ SupportValues buildSupportValues(OpBuilder& builder, Location loc,
       CallOpaqueOp::create(builder, loc, TypeRange{uiPointer},
                            "static_cast<UserInterface<word>*>", key)
           .getResult(0);
-  values.evaluationKey =
-      MemberCallOpaqueOp::create(
-          builder, loc,
-          TypeRange{OpaqueType::get(ctx, "const EvaluationKey<word>&")},
-          values.userInterface, "GetMultiplicationKey", ArrayAttr{},
-          ArrayAttr{}, ValueRange{})
-          .getResult(0);
   values.evaluationKeyMap =
       MemberCallOpaqueOp::create(
           builder, loc, TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
           values.userInterface, "GetEvkMap", ArrayAttr{}, ArrayAttr{},
           ValueRange{})
           .getResult(0);
+  // Cyclops dropped the UserInterface's multiplication-key getter with its
+  // client/server split: every key is indexed by the secret it was built for,
+  // so the lookup goes through the EvkMap and names the program's secret.
+  if (cyclops) {
+    Value secret =
+        MemberCallOpaqueOp::create(builder, loc,
+                                   TypeRange{OpaqueType::get(ctx, "SecretId")},
+                                   values.contextPointer, "BootSecretId",
+                                   ArrayAttr{}, ArrayAttr{}, ValueRange{})
+            .getResult(0);
+    values.evaluationKey =
+        MemberCallOpaqueOp::create(
+            builder, loc,
+            TypeRange{OpaqueType::get(ctx, "const EvaluationKey<word>&")},
+            values.evaluationKeyMap, "GetMultiplicationKey", ArrayAttr{},
+            ArrayAttr{}, ValueRange{secret})
+            .getResult(0);
+  } else {
+    values.evaluationKey =
+        MemberCallOpaqueOp::create(
+            builder, loc,
+            TypeRange{OpaqueType::get(ctx, "const EvaluationKey<word>&")},
+            values.userInterface, "GetMultiplicationKey", ArrayAttr{},
+            ArrayAttr{}, ValueRange{})
+            .getResult(0);
+  }
   return values;
 }
 
@@ -572,7 +591,8 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
 LogicalResult addPreprocessDefinition(OpBuilder& builder, Location loc,
                                       EntryFunctions& functions,
                                       ArrayRef<Type> preparedFields,
-                                      bool takesResourceDirectory) {
+                                      bool takesResourceDirectory,
+                                      bool cyclops) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   SmallVector<Type> inputs{OpaqueType::get(ctx, "Context&"),
@@ -583,7 +603,7 @@ LogicalResult addPreprocessDefinition(OpBuilder& builder, Location loc,
                           {OpaqueType::get(ctx, "PreparedInputs")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   SupportValues support = buildSupportValues(
-      builder, loc, function.getArgument(0), function.getArgument(1));
+      builder, loc, function.getArgument(0), function.getArgument(1), cyclops);
   Value prepared = createLocal(builder, loc, "PreparedInputs");
   if (!functions.preprocess) {
     ReturnOp::create(builder, loc,
@@ -621,7 +641,8 @@ LogicalResult addPreprocessDefinition(OpBuilder& builder, Location loc,
 LogicalResult addEncryptDefinition(OpBuilder& builder, Location loc,
                                    EntryFunctions& functions,
                                    ArrayRef<Type> logicalInputs,
-                                   ArrayRef<Type> encryptedFields) {
+                                   ArrayRef<Type> encryptedFields,
+                                   bool cyclops) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   SmallVector<Type> inputs{OpaqueType::get(ctx, "Context&"),
@@ -632,7 +653,7 @@ LogicalResult addEncryptDefinition(OpBuilder& builder, Location loc,
                           {OpaqueType::get(ctx, "EncryptedInputs")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   SupportValues support = buildSupportValues(
-      builder, loc, function.getArgument(0), function.getArgument(1));
+      builder, loc, function.getArgument(0), function.getArgument(1), cyclops);
   Value encrypted = createLocal(builder, loc, "EncryptedInputs");
   for (unsigned input = 0; input < logicalInputs.size(); ++input) {
     Type cleartextType = OpaqueType::get(ctx, "Input" + std::to_string(input));
@@ -697,7 +718,8 @@ LogicalResult addEvaluateDefinition(OpBuilder& builder, Location loc,
                                     EntryFunctions& functions,
                                     ArrayRef<Type> preparedFields,
                                     ArrayRef<Type> encryptedInputFields,
-                                    ArrayRef<Type> encryptedOutputFields) {
+                                    ArrayRef<Type> encryptedOutputFields,
+                                    bool cyclops) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   auto function = createEmitCFunction(
@@ -708,7 +730,7 @@ LogicalResult addEvaluateDefinition(OpBuilder& builder, Location loc,
       {OpaqueType::get(ctx, "EncryptedOutputs")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   SupportValues support = buildSupportValues(
-      builder, loc, function.getArgument(0), function.getArgument(1));
+      builder, loc, function.getArgument(0), function.getArgument(1), cyclops);
   Value outputs = createLocal(builder, loc, "EncryptedOutputs");
   SmallVector<Value> arguments;
   unsigned encryptedInput = 0;
@@ -753,7 +775,7 @@ LogicalResult addDecryptDefinition(OpBuilder& builder, Location loc,
                                    EntryFunctions& functions,
                                    ArrayRef<Type> encryptedOutputFields,
                                    ArrayRef<std::string> logicalOutputNames,
-                                   Type publicResultType) {
+                                   Type publicResultType, bool cyclops) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   auto function = createEmitCFunction(
@@ -763,7 +785,7 @@ LogicalResult addDecryptDefinition(OpBuilder& builder, Location loc,
       {publicResultType}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   SupportValues support = buildSupportValues(
-      builder, loc, function.getArgument(0), function.getArgument(1));
+      builder, loc, function.getArgument(0), function.getArgument(1), cyclops);
   SmallVector<Value> clearOutputs;
   for (unsigned index = 0; index < logicalOutputNames.size(); ++index)
     clearOutputs.push_back(
@@ -851,6 +873,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
   Location loc = functions.setup.getLoc();
   MLIRContext* ctx = module.getContext();
   std::string runtimeNamespaceName = runtimeNamespace.str();
+  bool cyclops = runtimeNamespace == "cyclops";
 
   ArrayAttr inputTypeAttrs =
       getLogicalTypes(functions.contract, kEntryInputTypesAttrName);
@@ -1013,15 +1036,15 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
       failed(addKeygenDefinition(builder, loc, functions,
                                  keygenDestinations.front())) ||
       failed(addPreprocessDefinition(builder, loc, functions, preparedFields,
-                                     takesResourceDirectory)) ||
+                                     takesResourceDirectory, cyclops)) ||
       failed(addEncryptDefinition(builder, loc, functions, logicalInputs,
-                                  encryptedInputFields)) ||
+                                  encryptedInputFields, cyclops)) ||
       failed(addEvaluateDefinition(builder, loc, functions, preparedFields,
-                                   encryptedInputFields,
-                                   encryptedOutputFields)) ||
+                                   encryptedInputFields, encryptedOutputFields,
+                                   cyclops)) ||
       failed(addDecryptDefinition(builder, loc, functions,
                                   encryptedOutputFields, outputNames,
-                                  publicResultType)))
+                                  publicResultType, cyclops)))
     return failure();
   emitVerbatim(builder, loc, "}  // namespace " + namespaceName);
 
@@ -1044,6 +1067,13 @@ struct CheddarEmitCEntryInterfacePass
       module.emitError() << "unsupported C++ runtime '" << runtime << "'";
       return signalPassFailure();
     }
+    // `--scheme-to-cheddar=runtime=cyclops` records the runtime on the module,
+    // and `cheddar-to-emitc` has already emitted the function bodies against
+    // it. Follow that rather than the option, so the facade cannot disagree
+    // with the code it wraps; the option is what a test starting from
+    // cheddar-dialect IR uses.
+    std::string effectiveRuntime =
+        moduleIsCyclopsRuntime(module) ? std::string("cyclops") : runtime;
     FailureOr<EntryFunctions> functions =
         findEntryFunctions(module, entryFunction);
     // The C++ facade exposes Setup and KeyGen separately, so both are required.
@@ -1053,7 +1083,7 @@ struct CheddarEmitCEntryInterfacePass
       return signalPassFailure();
     }
     SmallVector<StringRef> extensionIncludes;
-    if (runtime == "cyclops") {
+    if (effectiveRuntime == "cyclops") {
       extensionIncludes = {"extension/boot/BootContext.h",
                            "extension/poly/EvalPoly.h",
                            "extension/linalg/LinearTransform.h"};
@@ -1061,8 +1091,9 @@ struct CheddarEmitCEntryInterfacePass
       extensionIncludes = {"extension/BootContext.h", "extension/EvalPoly.h",
                            "extension/LinearTransform.h"};
     }
-    if (failed(functions) ||
-        failed(buildInterface(module, *functions, runtime, extensionIncludes)))
+    if (failed(functions) || failed(buildInterface(module, *functions,
+                                                   effectiveRuntime,
+                                                   extensionIncludes)))
       signalPassFailure();
   }
 };

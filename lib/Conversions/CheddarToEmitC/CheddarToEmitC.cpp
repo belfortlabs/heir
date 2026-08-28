@@ -9,6 +9,7 @@
 #include "lib/Dialect/Cheddar/IR/CheddarDialect.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Preprocessing/IR/PreprocessingOps.h"
 #include "lib/Utils/TargetUtils.h"
 #include "llvm/include/llvm/ADT/DenseSet.h"         // from @llvm-project
@@ -135,6 +136,23 @@ std::string floatArrayLit(ArrayAttr a) {
     s += floatLit(cast<FloatAttr>(a[i]));
   }
   return s + "}";
+}
+
+// Whether the emitted C++ targets Belfort's Cyclops fork rather than scale-snu's
+// CHEDDAR. The two APIs diverged with Cyclops' client/server split: the encoder
+// exposes EncodeSlots/DecodeSlots over real vectors instead of Encode/Decode
+// over std::complex, and every evaluation key is keyed by the secret it was
+// built for, so the UserInterface's level- and secret-blind Get*Key() getters
+// are gone -- the Context's EvkMap overloads resolve the right key per
+// ciphertext instead.
+//
+// The choice reaches here as a module attribute (`--lwe-to-cheddar=
+// use-cyclops-runtime=true`, or `--annotate-module=cheddar-runtime=cyclops`):
+// these patterns are populated through the stock `--convert-to-emitc`, which
+// has no options of its own to carry it.
+bool targetsCyclops(Operation* op) {
+  auto module = op->getParentOfType<ModuleOp>();
+  return module && moduleIsCyclopsRuntime(module);
 }
 
 int64_t numElements(ArrayRef<int64_t> shape) {
@@ -486,11 +504,22 @@ struct ConvertPrepareRotKey
   LogicalResult matchAndRewrite(
       cheddar::PrepareRotKeyOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    VerbatimOp::create(rewriter, op.getLoc(),
-                       "{}->PrepareRotationKey(" +
-                           intLit(op.getDistanceAttr()) + ", " +
-                           intLit(op.getMaxLevelAttr()) + ");",
-                       ValueRange{adaptor.getUi()});
+    // Cyclops indexes every evaluation key by the secret it was built for, so
+    // the key request names the program's secret between the distance and the
+    // level it must cover.
+    if (targetsCyclops(op))
+      VerbatimOp::create(rewriter, op.getLoc(),
+                         "{}->PrepareRotationKey(" +
+                             intLit(op.getDistanceAttr()) +
+                             ", {}->BootSecretId(), " +
+                             intLit(op.getMaxLevelAttr()) + ");",
+                         ValueRange{adaptor.getUi(), adaptor.getCtx()});
+    else
+      VerbatimOp::create(rewriter, op.getLoc(),
+                         "{}->PrepareRotationKey(" +
+                             intLit(op.getDistanceAttr()) + ", " +
+                             intLit(op.getMaxLevelAttr()) + ");",
+                         ValueRange{adaptor.getUi()});
     rewriter.eraseOp(op);
     return success();
   }
@@ -524,28 +553,50 @@ struct ConvertPrepareBootstrap
       ConversionPatternRewriter& rewriter) const override {
     std::string slots = std::to_string(op.getNumSlots().getInt());
     Value context = adaptor.getCtx();
+    bool cyclops = targetsCyclops(op);
     VerbatimOp::create(rewriter, op.getLoc(), "{}->PrepareEvalMod();",
                        ValueRange{context});
-    VerbatimOp::create(rewriter, op.getLoc(),
-                       "{}->PrepareEvalSpecialFFT(" + slots +
-                           ", BootVariant::kImaginaryRemoving);",
-                       ValueRange{context});
+    // Cyclops renamed the CtS/StC precompute to PrepareHomomorphicDFT; the
+    // arguments are unchanged.
+    VerbatimOp::create(
+        rewriter, op.getLoc(),
+        "{}->" +
+            std::string(cyclops ? "PrepareHomomorphicDFT"
+                                : "PrepareEvalSpecialFFT") +
+            "(" + slots + ", BootVariant::kImaginaryRemoving);",
+        ValueRange{context});
     VerbatimOp::create(rewriter, op.getLoc(), "EvkRequest boot_evk_req;",
                        ValueRange{});
     VerbatimOp::create(rewriter, op.getLoc(),
                        "{}->AddRequiredRotations(boot_evk_req, " + slots + ");",
                        ValueRange{context});
-    VerbatimOp::create(rewriter, op.getLoc(),
-                       "{}->PrepareRotationKey(boot_evk_req);",
-                       ValueRange{adaptor.getUi()});
+    if (cyclops)
+      VerbatimOp::create(
+          rewriter, op.getLoc(),
+          "{}->PrepareRotationKey(boot_evk_req, {}->BootSecretId());",
+          ValueRange{adaptor.getUi(), context});
+    else
+      VerbatimOp::create(rewriter, op.getLoc(),
+                         "{}->PrepareRotationKey(boot_evk_req);",
+                         ValueRange{adaptor.getUi()});
     rewriter.eraseOp(op);
     return success();
   }
 };
 
-// cheddar.encode: fill a std::vector<Complex> from the float message buffer,
-// then encode at the requested logarithmic scale, or CHEDDAR's canonical scale
-// for the level when no explicit scale is present.
+// The C++ type a slot message travels in, and the encoder entry point that
+// takes it. Cyclops' client/server split moved the slot path onto real vectors
+// -- no std::complex crosses the encoder API any more -- and renamed the two
+// entry points after the domain they read from / write to, leaving the
+// coefficient-domain pair (EncodeCoeffs/DecodeCoeffs) beside them. HEIR only
+// ever encodes real messages, so the real overload is the whole story here.
+StringRef slotVectorType(bool cyclops) {
+  return cyclops ? "std::vector<double>" : "std::vector<Complex>";
+}
+
+// cheddar.encode: fill the slot vector from the float message buffer, then
+// encode at the requested logarithmic scale, or CHEDDAR's canonical scale for
+// the level when no explicit scale is present.
 struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
@@ -559,17 +610,25 @@ struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
       return rewriter.notifyMatchFailure(
           op, "encode requires a static message shape");
     int64_t n = numElements(messageType.getShape());
+    bool cyclops = targetsCyclops(op);
+    // Cyclops' slot vector is real, so a complex message has nowhere to put its
+    // imaginary part (EncodeSlots' complex overload takes the two parts as
+    // separate vectors). Nothing produces one today; say so rather than emit
+    // C++ that will not compile if something starts to.
+    if (cyclops && !isa<FloatType>(messageType.getElementType()))
+      return rewriter.notifyMatchFailure(
+          op, "Cyclops encode requires a real message");
+    std::string vecType = slotVectorType(cyclops).str();
     // Flatten both a whole (possibly multidimensional) C array and a subview
     // pointer to the first scalar element before constructing the vector.
     Value begin = addressOfFirstElement(rewriter, op.getLoc(), msg);
-    Value vec =
-        VariableOp::create(rewriter, op.getLoc(),
-                           LValueType::get(OpaqueType::get(
-                               rewriter.getContext(), "std::vector<Complex>")),
-                           OpaqueAttr::get(rewriter.getContext(), ""));
+    Value vec = VariableOp::create(
+        rewriter, op.getLoc(),
+        LValueType::get(OpaqueType::get(rewriter.getContext(), vecType)),
+        OpaqueAttr::get(rewriter.getContext(), ""));
     VerbatimOp::create(
         rewriter, op.getLoc(),
-        "{} = std::vector<Complex>({}, {} + " + std::to_string(n) + ");",
+        "{} = " + vecType + "({}, {} + " + std::to_string(n) + ");",
         ValueRange{vec, begin, begin});
     // TODO(#2364): Use scale from op once HEIR can do precise scale tracking.
     std::string scale = "{}.GetScale(" + lvl + ")";
@@ -578,7 +637,9 @@ struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
     operands.push_back(vec);
     markDestination(
         VerbatimOp::create(rewriter, op.getLoc(),
-                           "{}.Encode({}, " + lvl + ", " + scale + ", {});",
+                           "{}." +
+                               std::string(cyclops ? "EncodeSlots" : "Encode") +
+                               "({}, " + lvl + ", " + scale + ", {});",
                            operands),
         1);
     rewriter.eraseOp(op);
@@ -624,25 +685,50 @@ struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
     auto shape = memTy.getShape();
     int64_t n = numElements(shape);
     auto* ctx = rewriter.getContext();
+    bool cyclops = targetsCyclops(op);
     Value vec = VariableOp::create(
         rewriter, op.getLoc(),
-        LValueType::get(OpaqueType::get(ctx, "std::vector<Complex>")),
+        LValueType::get(OpaqueType::get(ctx, slotVectorType(cyclops))),
         OpaqueAttr::get(ctx, ""));
     markDestination(
         VerbatimOp::create(
-            rewriter, op.getLoc(), "{}.Decode({}, {});",
+            rewriter, op.getLoc(),
+            "{}." + std::string(cyclops ? "DecodeSlots" : "Decode") +
+                "({}, {});",
             ValueRange{adaptor.getEncoder(), vec, adaptor.getPlaintext()}),
         1);
+    // Cyclops decodes straight into the real part, so there is no .real() to
+    // take.
     markDestination(
         VerbatimOp::create(rewriter, op.getLoc(),
                            "for (size_t _i = 0; _i < " + std::to_string(n) +
-                               "; ++_i) {}[_i] = {}.at(_i).real();",
+                               "; ++_i) {}[_i] = {}.at(_i)" +
+                               std::string(cyclops ? "" : ".real()") + ";",
                            ValueRange{dst, vec}),
         0);
     rewriter.eraseOp(op);
     return success();
   }
 };
+
+// The key argument the H{Rot,Conj}{,Add} call takes.
+//
+// scale-snu resolves rotation and conjugation keys straight off the
+// UserInterface, one key per distance. Cyclops has no such getter any more: a
+// key is qualified by the secret it was built for and by the levels it covers,
+// and `prepare-rotation-keys-at-use-levels` (which the Cyclops pipeline turns
+// on) generates several keys per distance. So hand the Context the whole EvkMap
+// instead and let its own overload pick the best fit for the ciphertext's
+// secret and level -- the library's documented preference over passing a raw
+// key, which is a hard error when it does not cover the ciphertext's primes.
+std::string rotationKeyArgument(bool cyclops, StringRef distance) {
+  if (cyclops) return "{}->GetEvkMap()";
+  return ("{}->GetRotationKey(" + distance + ")").str();
+}
+
+std::string conjugationKeyArgument(bool cyclops) {
+  return cyclops ? "{}->GetEvkMap()" : "{}->GetConjugationKey()";
+}
 
 // HRot/HRotAdd/HConj/HConjAdd: look up the rotation/conjugation key inline.
 struct ConvertHRot : public OpConversionPattern<cheddar::HRotOp> {
@@ -652,21 +738,30 @@ struct ConvertHRot : public OpConversionPattern<cheddar::HRotOp> {
       ConversionPatternRewriter& rewriter) const override {
     Value ui = adaptor.getUi();
     Value out = adaptor.getOutput();
+    bool cyclops = targetsCyclops(op);
     if (auto sd = op.getStaticDistanceAttr()) {
       std::string d = intLit(sd);
       markDestination(
           VerbatimOp::create(
               rewriter, op.getLoc(),
-              "{}->HRot({}, {}, {}->GetRotationKey(" + d + "), " + d + ");",
+              "{}->HRot({}, {}, " + rotationKeyArgument(cyclops, d) + ", " + d +
+                  ");",
               ValueRange{adaptor.getCtx(), out, adaptor.getInput(), ui}),
           1);
     } else {
       Value dyn = adaptor.getDynamicDistance();
+      // The dynamic distance is an SSA value, so it fills a placeholder rather
+      // than being spelled inline: once for the key (scale-snu only) and once
+      // for the rotation itself.
+      SmallVector<Value> operands{adaptor.getCtx(), out, adaptor.getInput(),
+                                  ui};
+      if (!cyclops) operands.push_back(dyn);
+      operands.push_back(dyn);
       markDestination(
           VerbatimOp::create(rewriter, op.getLoc(),
-                             "{}->HRot({}, {}, {}->GetRotationKey({}), {});",
-                             ValueRange{adaptor.getCtx(), out,
-                                        adaptor.getInput(), ui, dyn, dyn}),
+                             "{}->HRot({}, {}, " +
+                                 rotationKeyArgument(cyclops, "{}") + ", {});",
+                             operands),
           1);
     }
     rewriter.eraseOp(op);
@@ -684,8 +779,8 @@ struct ConvertHRotAdd : public OpConversionPattern<cheddar::HRotAddOp> {
     markDestination(
         VerbatimOp::create(
             rewriter, op.getLoc(),
-            "{}->HRotAdd({}, {}, {}, {}->GetRotationKey(" + d + "), " + d +
-                ");",
+            "{}->HRotAdd({}, {}, {}, " +
+                rotationKeyArgument(targetsCyclops(op), d) + ", " + d + ");",
             ValueRange{adaptor.getCtx(), adaptor.getOutput(),
                        adaptor.getInput(), adaptor.getAddend(), ui}),
         1);
@@ -702,7 +797,9 @@ struct ConvertHConj : public OpConversionPattern<cheddar::HConjOp> {
     Value ui = adaptor.getUi();
     markDestination(
         VerbatimOp::create(rewriter, op.getLoc(),
-                           "{}->HConj({}, {}, {}->GetConjugationKey());",
+                           "{}->HConj({}, {}, " +
+                               conjugationKeyArgument(targetsCyclops(op)) +
+                               ");",
                            ValueRange{adaptor.getCtx(), adaptor.getOutput(),
                                       adaptor.getInput(), ui}),
         1);
@@ -720,7 +817,8 @@ struct ConvertHConjAdd : public OpConversionPattern<cheddar::HConjAddOp> {
     markDestination(
         VerbatimOp::create(
             rewriter, op.getLoc(),
-            "{}->HConjAdd({}, {}, {}, {}->GetConjugationKey());",
+            "{}->HConjAdd({}, {}, {}, " +
+                conjugationKeyArgument(targetsCyclops(op)) + ");",
             ValueRange{adaptor.getCtx(), adaptor.getOutput(),
                        adaptor.getInput(), adaptor.getAddend(), ui}),
         1);
@@ -971,8 +1069,12 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
              ", _ep_lvl, _ep_is, _ep_ts, true);",
          {});
     emit("_ep.Compile(_ep_cp);", {});
+    // Cyclops' EvalPoly takes a MultKeySelector, which resolves the key per
+    // ciphertext -- every EvkMap lookup there names the secret the key was
+    // built for, and the selector reads it off the ciphertext. scale-snu takes
+    // the key itself.
     StringRef evaluate =
-        op.getSelectMultKeyAtUseLevel()
+        (targetsCyclops(op) || op.getSelectMultKeyAtUseLevel())
             ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
             : "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
     markDestination(

@@ -74,6 +74,17 @@ void moduleSetOpenfhe(Operation* moduleOp);
 void moduleSetLattigo(Operation* moduleOp);
 void moduleSetCheddar(Operation* moduleOp);
 
+// Which of the two CHEDDAR C++ runtimes the cheddar backend emits against.
+// Belfort's Cyclops fork renamed the namespace, moved the extension headers,
+// and (after its client/server split) re-shaped the encoder and key-lookup
+// APIs, so the C++ emitter has to know which one it is writing for. The
+// attribute is a unit: absent means scale-snu's CHEDDAR.
+constexpr const static ::llvm::StringLiteral kCyclopsRuntimeAttrName =
+    "cheddar.runtime.cyclops";
+
+bool moduleIsCyclopsRuntime(Operation* moduleOp);
+void moduleSetCyclopsRuntime(Operation* moduleOp);
+
 // Func attributes for client helpers
 //
 // This corresponds to a named attribute client.enc_func whose

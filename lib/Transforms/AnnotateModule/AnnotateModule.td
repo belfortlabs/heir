@@ -22,6 +22,13 @@ def AnnotateModule : Pass<"annotate-module"> {
       - `lattigo`
       - `cheddar`
 
+    The cheddar backend targets one of two C++ runtimes, selected by
+    `cheddar-runtime`:
+      - `cheddar` (default) -- scale-snu's CHEDDAR
+      - `cyclops` -- Belfort's fork
+    `--scheme-to-cheddar=runtime=cyclops` sets this itself; the option exists
+    for tests that start from cheddar-dialect IR.
+
     (* example filepath=tests/Transforms/annotate_module/pass.mlir *)
   }];
 
@@ -30,6 +37,9 @@ def AnnotateModule : Pass<"annotate-module"> {
            "The scheme to annotate the module with.">,
     Option<"backend", "backend", "std::string", /*default=*/"\"\"",
             "The backend to annotate the module with.">,
+    Option<"cheddarRuntime", "cheddar-runtime", "std::string",
+           /*default=*/"\"\"",
+           "The CHEDDAR C++ runtime to target: cheddar or cyclops.">,
   ];
 }
 

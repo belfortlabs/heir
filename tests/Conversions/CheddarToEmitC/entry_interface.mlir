@@ -125,6 +125,12 @@ func.func private @call_preprocessing(
 // CYCLOPS: verbatim "using SecretKey = ::cyclops::UserInterface<word>*;"
 // CYCLOPS: emitc.file "source"
 // CYCLOPS: verbatim "using namespace ::cyclops;"
+// Cyclops has no secret-blind multiplication-key getter on the UserInterface:
+// the lookup goes through the EvkMap and names the program's secret.
+// CYCLOPS: member_call_opaque %{{.*}} "GetEvkMap"
+// CYCLOPS: member_call_opaque %{{.*}} "BootSecretId"
+// CYCLOPS: member_call_opaque %{{.*}} "GetMultiplicationKey"
+// CYCLOPS-SAME: !emitc.opaque<"SecretId">
 // INVALID: error: unsupported C++ runtime 'invalid'
 // CHECK: func @Encrypt(!emitc.opaque<"Context&">, !emitc.opaque<"SecretKey">, !emitc.opaque<"CleartextInputs&">) -> !emitc.opaque<"EncryptedInputs">
 // CHECK: emitc.file "source"
@@ -146,6 +152,9 @@ func.func private @call_preprocessing(
 // CHECK: call_opaque "heir::getPointer"
 // CHECK: func @Encrypt
 // CHECK: !emitc.ptr<!emitc.opaque<"Context">>
+// scale-snu's multiplication key comes straight off the UserInterface.
+// CHECK: member_call_opaque %{{.*}} "GetMultiplicationKey"()
+// CHECK-SAME: !emitc.ptr<!emitc.opaque<"UserInterface<word>">>, () ->
 // CHECK: call_opaque "std::get<0>"
 // CHECK: call_opaque "heir::data"
 // CHECK: call_opaque "::heir::generated::detail::entry__encrypt__arg0"

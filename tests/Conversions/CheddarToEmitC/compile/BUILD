@@ -16,28 +16,46 @@ package(
 # dialect and pass are registered unconditionally in heir-opt/-translate, so
 # this needs neither a GPU nor --//:enable_cheddar.
 
+# The lowering itself is runtime-independent; only `--annotate-module` differs,
+# and the emitter reads the runtime back off the module.
+KERNEL_PASS_FLAGS = [
+    "--cheddar-bufferize",
+    "--fold-memref-alias-ops",
+    "--cse",
+    "--canonicalize",
+    "--drop-equivalent-buffer-results",
+    "--buffer-results-to-out-params=hoist-static-allocs=true modify-public-functions=true add-result-attr=true",
+    "--canonicalize",
+    "--convert-to-emitc=filter-dialects=cheddar,arith,scf",
+    "--cheddar-emitc-boundary",
+    "--reconcile-unrealized-casts",
+]
+
 heir_opt(
     name = "kernels_emitc",
     src = "kernels.mlir",
     generated_filename = "kernels_emitc.mlir",
-    pass_flags = [
-        "--cheddar-bufferize",
-        "--fold-memref-alias-ops",
-        "--cse",
-        "--canonicalize",
-        "--drop-equivalent-buffer-results",
-        "--buffer-results-to-out-params=hoist-static-allocs=true modify-public-functions=true add-result-attr=true",
-        "--canonicalize",
-        "--convert-to-emitc=filter-dialects=cheddar,arith,scf",
-        "--cheddar-emitc-boundary",
-        "--reconcile-unrealized-casts",
-    ],
+    pass_flags = KERNEL_PASS_FLAGS,
 )
 
 heir_translate(
     name = "kernels_cpp_raw",
     src = ":kernels_emitc.mlir",
     generated_filename = "kernels_raw.cc",
+    pass_flags = ["--mlir-to-cpp"],
+)
+
+heir_opt(
+    name = "kernels_cyclops_emitc",
+    src = "kernels.mlir",
+    generated_filename = "kernels_cyclops_emitc.mlir",
+    pass_flags = ["--annotate-module=cheddar-runtime=cyclops"] + KERNEL_PASS_FLAGS,
+)
+
+heir_translate(
+    name = "kernels_cyclops_cpp_raw",
+    src = ":kernels_cyclops_emitc.mlir",
+    generated_filename = "kernels_cyclops_raw.cc",
     pass_flags = ["--mlir-to-cpp"],
 )
 
@@ -74,7 +92,7 @@ cc_library(
 
 genrule(
     name = "kernels_cyclops_lib_src",
-    srcs = [":kernels_raw.cc"],
+    srcs = [":kernels_cyclops_raw.cc"],
     outs = ["kernels_cyclops_lib.cc"],
     cmd = """cat > $@ <<'PRELUDE_EOF'
 // AUTO-GENERATED: do not edit. See tests/Conversions/CheddarToEmitC/compile/BUILD.
@@ -88,7 +106,7 @@ genrule(
 using namespace cheddar;
 using word = uint64_t;
 PRELUDE_EOF
-cat $(location :kernels_raw.cc) >> $@
+cat $(location :kernels_cyclops_raw.cc) >> $@
 """,
 )
 
@@ -153,22 +171,24 @@ build_test(
     targets = [":kernels_real_compiled"],
 )
 
+SETUP_PASS_FLAGS = [
+    "--cheddar-configure-crypto-context=entry-function=kernel",
+    "--cheddar-bufferize",
+    "--fold-memref-alias-ops",
+    "--cse",
+    "--canonicalize",
+    "--drop-equivalent-buffer-results",
+    "--canonicalize",
+    "--convert-to-emitc=filter-dialects=cheddar,arith,scf",
+    "--cheddar-emitc-boundary",
+    "--reconcile-unrealized-casts",
+]
+
 heir_opt(
     name = "setup_emitc",
     src = "setup.mlir",
     generated_filename = "setup_emitc.mlir",
-    pass_flags = [
-        "--cheddar-configure-crypto-context=entry-function=kernel",
-        "--cheddar-bufferize",
-        "--fold-memref-alias-ops",
-        "--cse",
-        "--canonicalize",
-        "--drop-equivalent-buffer-results",
-        "--canonicalize",
-        "--convert-to-emitc=filter-dialects=cheddar,arith,scf",
-        "--cheddar-emitc-boundary",
-        "--reconcile-unrealized-casts",
-    ],
+    pass_flags = SETUP_PASS_FLAGS,
 )
 
 heir_translate(
@@ -176,6 +196,87 @@ heir_translate(
     src = ":setup_emitc.mlir",
     generated_filename = "setup_raw.cc",
     pass_flags = ["--mlir-to-cpp"],
+)
+
+heir_opt(
+    name = "setup_cyclops_emitc",
+    src = "setup.mlir",
+    generated_filename = "setup_cyclops_emitc.mlir",
+    pass_flags = ["--annotate-module=cheddar-runtime=cyclops"] + SETUP_PASS_FLAGS,
+)
+
+heir_translate(
+    name = "setup_cyclops_cpp_raw",
+    src = ":setup_cyclops_emitc.mlir",
+    generated_filename = "setup_cyclops_raw.cc",
+    pass_flags = ["--mlir-to-cpp"],
+)
+
+# The setup/keygen path against the stub, once per runtime. Key generation and
+# the bootstrap precompute are where the two APIs diverge most -- Cyclops names
+# the secret in every key request -- and unlike the `@cheddar` targets below
+# this runs without a GPU or an opt-in flag.
+genrule(
+    name = "setup_stub_lib_src",
+    srcs = [":setup_raw.cc"],
+    outs = ["setup_stub_lib.cc"],
+    cmd = """cat > $@ <<'PRELUDE_EOF'
+// AUTO-GENERATED: do not edit. See tests/Conversions/CheddarToEmitC/compile/BUILD.
+#include <array>
+#include <complex>
+#include <cstdint>
+#include <initializer_list>
+#include <memory>
+#include <utility>
+#include <vector>
+#include "tests/Conversions/CheddarToEmitC/compile/cheddar_stub.h"
+using namespace cheddar;
+using word = uint64_t;
+PRELUDE_EOF
+cat $(location :setup_raw.cc) >> $@
+""",
+)
+
+cc_library(
+    name = "setup_stub_compiled",
+    srcs = [":setup_stub_lib_src"],
+    deps = [":cheddar_stub"],
+)
+
+genrule(
+    name = "setup_cyclops_stub_lib_src",
+    srcs = [":setup_cyclops_raw.cc"],
+    outs = ["setup_cyclops_stub_lib.cc"],
+    cmd = """cat > $@ <<'PRELUDE_EOF'
+// AUTO-GENERATED: do not edit. See tests/Conversions/CheddarToEmitC/compile/BUILD.
+#include <array>
+#include <complex>
+#include <cstdint>
+#include <initializer_list>
+#include <memory>
+#include <utility>
+#include <vector>
+#define HEIR_CYCLOPS_STUB
+#include "tests/Conversions/CheddarToEmitC/compile/cheddar_stub.h"
+using namespace cheddar;
+using word = uint64_t;
+PRELUDE_EOF
+cat $(location :setup_cyclops_raw.cc) >> $@
+""",
+)
+
+cc_library(
+    name = "setup_cyclops_stub_compiled",
+    srcs = [":setup_cyclops_stub_lib_src"],
+    deps = [":cheddar_stub"],
+)
+
+build_test(
+    name = "setup_compile_test",
+    targets = [
+        ":setup_stub_compiled",
+        ":setup_cyclops_stub_compiled",
+    ],
 )
 
 genrule(

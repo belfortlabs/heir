@@ -19,6 +19,11 @@
 // CHECK-SAME: logMessageRatio = 1
 // CHECK-SAME: numCtsLevels = 4
 // CHECK-SAME: numStcLevels = 2
+// The runtime travels on the module: cheddar-to-emitc runs its lowering
+// patterns under the stock --convert-to-emitc, which has no options to carry
+// it, and the entry-interface facade follows the same attribute.
+// CYCLOPS: module attributes
+// CYCLOPS-SAME: cheddar.runtime.cyclops
 // CYCLOPS: cheddar.create_boot_context
 // CYCLOPS-SAME: logMessageRatio = 4
 // CHECK: func.func @bootstrap__keygen

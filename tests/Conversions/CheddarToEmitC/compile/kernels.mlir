@@ -171,6 +171,22 @@ func.func @linear_transform(%ctx: !context, %ct: tensor<!ciphertext>,
   return %0 : tensor<!ciphertext>
 }
 
+// The client-side message path: encode a float buffer into a plaintext and
+// decode one back out. The two runtimes disagree here -- scale-snu's
+// Encode/Decode take a std::vector<Complex>, Cyclops' EncodeSlots/DecodeSlots a
+// std::vector<double> -- so this is what keeps both emissions honest.
+func.func @encode_decode(%enc: !encoder, %msg: tensor<8xf32>,
+                         %pt: tensor<!plaintext>)
+    -> (tensor<!plaintext>, tensor<8xf32>) {
+  %d0 = tensor.empty() : tensor<!plaintext>
+  %0 = cheddar.encode %enc, %msg, %d0 {level = 1 : i64}
+      : (!encoder, tensor<8xf32>, tensor<!plaintext>) -> tensor<!plaintext>
+  %d1 = tensor.empty() : tensor<8xf32>
+  %1 = cheddar.decode %enc, %pt, %d1
+      : (!encoder, tensor<!plaintext>, tensor<8xf32>) -> tensor<8xf32>
+  return %0, %1 : tensor<!plaintext>, tensor<8xf32>
+}
+
 // Encrypt / Decrypt out-param calls on the UserInterface.
 func.func @encrypt_decrypt(%ui: !cheddar.user_interface, %pt: tensor<!plaintext>,
                            %ct: tensor<!ciphertext>)

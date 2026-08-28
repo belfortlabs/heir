@@ -41,7 +41,7 @@ constexpr int64_t kMinBootstrapSlots = 256;
 //   return %ctx
 //
 //   %ui0 = cheddar.create_user_interface %ctx, %ui_init
-//   %ui1 = cheddar.prepare_rot_key %ui0 {distance, maxLevel}   // per distance
+//   %ui1 = cheddar.prepare_rot_key %ctx, %ui0 {distance, maxLevel}  // per dist
 //   return %ctx, %uiN
 // Params come from the CKKS scheme attrs (logN/scale/Q/P); the rotation
 // distances come from the shared RotationAnalysis (the same way the lattigo and
@@ -150,7 +150,7 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                                            ValueRange{context, uiInit})
                  ->getResult(0);
   for (auto [distance, level] : rotationKeys)
-    ui = PrepareRotKeyOp::create(builder, loc, TypeRange{uiTensor}, ui,
+    ui = PrepareRotKeyOp::create(builder, loc, TypeRange{uiTensor}, context, ui,
                                  i64(distance), i64(level))
              ->getResult(0);
   if (bootstraps) {

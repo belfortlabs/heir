@@ -241,8 +241,13 @@ def Cheddar_PrepareRotKeyOp : Cheddar_ReadWriteDpsOp<
     next setup op / the configure return). Must be called before using rotation
     with that distance; `maxLevel` is the maximum ciphertext level at which the
     key will be used.
+
+    `$ctx` is read-only: Cyclops keys every evaluation key by the secret it was
+    built for, and the handle of the program's secret comes off the context
+    (`ctx->BootSecretId()`).
   }];
   let arguments = (ins
+    Cheddar_AnyOwningContextLike:$ctx,
     Cheddar_UserInterfaceLike:$ui,
     Builtin_IntegerAttr:$distance,
     Builtin_IntegerAttr:$maxLevel

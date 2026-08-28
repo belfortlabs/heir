@@ -1203,6 +1203,11 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
       return signalPassFailure();
     }
 
+    // Record the runtime on the module: `cheddar-to-emitc` runs its lowering
+    // patterns under the stock `--convert-to-emitc`, which carries no options
+    // of its own, so the choice has to travel with the IR.
+    if (useCyclopsRuntime) moduleSetCyclopsRuntime(module);
+
     // Configure bootstrap transforms for the slots actually represented by
     // each ciphertext, not the enclosing RLWE ring's polynomial degree.
     // Preparing twice the CKKS slot capacity wastes FFT transforms and rotation

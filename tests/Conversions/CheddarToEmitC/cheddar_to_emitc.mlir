@@ -1,4 +1,5 @@
 // RUN: heir-opt --cheddar-bufferize --fold-memref-alias-ops --cse --canonicalize --drop-equivalent-buffer-results "--buffer-results-to-out-params=hoist-static-allocs=true modify-public-functions=true add-result-attr=true" --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s
+// RUN: heir-opt --annotate-module=cheddar-runtime=cyclops --cheddar-bufferize --fold-memref-alias-ops --cse --canonicalize --drop-equivalent-buffer-results "--buffer-results-to-out-params=hoist-static-allocs=true modify-public-functions=true add-result-attr=true" --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s --check-prefix=CYCLOPS
 
 // End-to-end op coverage for the cheddar -> EmitC lowering, now driven by stock
 // `--convert-to-emitc` (cheddar's dialect interface) + the
@@ -41,13 +42,14 @@ memref.global "private" constant @negative_zero_splat : memref<4xf32> = dense<-0
 // CHECK: emitc.verbatim "{} = Context<word>::Create({});"
 // CHECK: emitc.verbatim "{} = std::make_unique<UserInterface<word>>({});"
 // CHECK: emitc.verbatim "{}->PrepareRotationKey(3, 2);"
+// CYCLOPS: emitc.verbatim "{}->PrepareRotationKey(3, {}->BootSecretId(), 2);"
 func.func @configure() -> (tensor<!context>, tensor<!user_interface>) {
   %p = cheddar.make_parameter {logN = 14 : i64, logScale = 45 : i64, mainPrimes = array<i64: 1, 2, 3>, auxPrimes = array<i64: 4, 5>} : !parameter
   %context_dest = tensor.empty() : tensor<!context>
   %context = cheddar.create_context %p, %context_dest : (!parameter, tensor<!context>) -> tensor<!context>
   %ui_dest = tensor.empty() : tensor<!user_interface>
   %ui = cheddar.create_user_interface %context, %ui_dest : (tensor<!context>, tensor<!user_interface>) -> tensor<!user_interface>
-  %prepared = cheddar.prepare_rot_key %ui {distance = 3 : i64, maxLevel = 2 : i64} : (tensor<!user_interface>) -> tensor<!user_interface>
+  %prepared = cheddar.prepare_rot_key %context, %ui {distance = 3 : i64, maxLevel = 2 : i64} : (tensor<!context>, tensor<!user_interface>) -> tensor<!user_interface>
   return %context, %prepared : tensor<!context>, tensor<!user_interface>
 }
 
@@ -136,12 +138,14 @@ func.func @hmult(%ctx: !context, %a: tensor<!ciphertext>, %b: tensor<!ciphertext
   return %r : tensor<!ciphertext>
 }
 
-// Encode bridges a float message buffer through a std::vector<Complex> and
-// uses CHEDDAR's canonical per-level scale; encrypt is an out-param method
-// call.
+// Encode bridges a float message buffer through a slot vector and uses
+// CHEDDAR's canonical per-level scale; encrypt is an out-param method call.
+// Cyclops takes real slots (EncodeSlots) where scale-snu takes complex ones.
 // CHECK: func.func @enc_chain
 // CHECK-SAME: !emitc.ptr<f64>
 // CHECK: emitc.verbatim "{}.Encode({}, 5, {}.GetScale(5), {});"
+// CYCLOPS: emitc.verbatim "{} = std::vector<double>({}, {} + 4);"
+// CYCLOPS: emitc.verbatim "{}.EncodeSlots({}, 5, {}.GetScale(5), {});"
 // CHECK: emitc.member_call_opaque %arg2 "Encrypt"
 func.func @enc_chain(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
   %dp = tensor.empty() : tensor<!plaintext>
@@ -151,13 +155,16 @@ func.func @enc_chain(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) 
   return %ct : tensor<!ciphertext>
 }
 
-// Decrypt is an out-param method call; decode reads into a temporary
-// std::vector<Complex> then copies the real parts into the float buffer.
+// Decrypt is an out-param method call; decode reads into a temporary slot
+// vector then copies it into the float buffer -- taking .real() only on
+// scale-snu, whose slots are complex.
 // CHECK: func.func @dec_chain
 // CHECK-SAME: !emitc.ptr<f32>
 // CHECK: emitc.member_call_opaque %arg1 "Decrypt"
 // CHECK: emitc.verbatim "{}.Decode({}, {});"
 // CHECK: emitc.verbatim "for (size_t _i = 0; _i < 4; ++_i) {}[_i] = {}.at(_i).real();"
+// CYCLOPS: emitc.verbatim "{}.DecodeSlots({}, {});"
+// CYCLOPS: emitc.verbatim "for (size_t _i = 0; _i < 4; ++_i) {}[_i] = {}.at(_i);"
 func.func @dec_chain(%enc: !encoder, %ui: !user_interface, %ct: tensor<!ciphertext>, %dst: tensor<1x4xf32>) -> tensor<1x4xf32> {
   %dp = tensor.empty() : tensor<!plaintext>
   %pt = cheddar.decrypt %ui, %ct, %dp : (!user_interface, tensor<!ciphertext>, tensor<!plaintext>) -> tensor<!plaintext>
@@ -169,6 +176,7 @@ func.func @dec_chain(%enc: !encoder, %ui: !user_interface, %ct: tensor<!cipherte
 // the format string; dynamic distance threads the SSA value twice.
 // CHECK: func.func @hrot_static
 // CHECK: emitc.verbatim "{}->HRot({}, {}, {}->GetRotationKey(5), 5);"
+// CYCLOPS: emitc.verbatim "{}->HRot({}, {}, {}->GetEvkMap(), 5);"
 func.func @hrot_static(%ctx: !context, %ui: !user_interface, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
   %r = cheddar.hrot %ctx, %ui, %ct, %d0 {level = 4 : i64, static_distance = 5 : i64} : (!context, !user_interface, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
@@ -178,6 +186,9 @@ func.func @hrot_static(%ctx: !context, %ui: !user_interface, %ct: tensor<!cipher
 // CHECK: func.func @hrot_dyn
 // CHECK: emitc.verbatim "{}->HRot({}, {}, {}->GetRotationKey({}), {});"
 // CHECK-SAME: %arg3, %arg3
+// The EvkMap overload resolves the key itself, so the distance is threaded once.
+// CYCLOPS: emitc.verbatim "{}->HRot({}, {}, {}->GetEvkMap(), {});"
+// CYCLOPS-SAME: %arg1, %arg3
 func.func @hrot_dyn(%ctx: !context, %ui: !user_interface, %ct: tensor<!ciphertext>, %d: index) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
   %r = cheddar.hrot %ctx, %ui, %ct, %d0, %d {level = 4 : i64} : (!context, !user_interface, tensor<!ciphertext>, tensor<!ciphertext>, index) -> tensor<!ciphertext>
@@ -186,6 +197,7 @@ func.func @hrot_dyn(%ctx: !context, %ui: !user_interface, %ct: tensor<!ciphertex
 
 // CHECK: func.func @hconj_add
 // CHECK: emitc.verbatim "{}->HConjAdd({}, {}, {}, {}->GetConjugationKey());"
+// CYCLOPS: emitc.verbatim "{}->HConjAdd({}, {}, {}, {}->GetEvkMap());"
 func.func @hconj_add(%ctx: !context, %ui: !user_interface, %a: tensor<!ciphertext>, %b: tensor<!ciphertext>) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
   %r = cheddar.hconj_add %ctx, %ui, %a, %b, %d0 : (!context, !user_interface, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
@@ -221,6 +233,7 @@ func.func @boot(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map) -
 // CHECK: emitc.verbatim "EvalPoly<word> _ep({1, 2, 3}, _ep_lvl, _ep_is, _ep_ts, true);"
 // CHECK: emitc.verbatim "_ep.Compile(_ep_cp);"
 // CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());"
+// CYCLOPS: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
 // CHECK: emitc.verbatim "}"
 func.func @eval_poly(%ctx: !context, %enc: !encoder, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>

@@ -56,7 +56,10 @@ def CheddarEmitCEntryInterface
     Option<"entryFunction", "entry-function", "std::string", "\"\"",
            "Entry function to expose when the module contains more than one">,
     Option<"runtime", "runtime", "std::string", "\"cheddar\"",
-           "C++ runtime API to target: cheddar or cyclops">
+           "C++ runtime API to target: cheddar or cyclops. Ignored when the "
+           "module already carries the runtime (as it does after "
+           "--scheme-to-cheddar=runtime=cyclops), so the facade always matches "
+           "the bodies cheddar-to-emitc emitted.">
   ];
 }
 

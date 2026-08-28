@@ -1,6 +1,7 @@
 !boot_context = !cheddar.boot_context
 !ciphertext = !cheddar.ciphertext
 !evk_map = !cheddar.evk_map
+!user_interface = !cheddar.user_interface
 
 module attributes {
   cheddar.boot.num_cts = 4 : i64,
@@ -9,9 +10,19 @@ module attributes {
   scheme.actual_slot_count = 1024 : i64,
   scheme.requested_slot_count = 1024 : i64
 } {
-  func.func @kernel(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
+  // The rotation is here so that key generation emits a per-distance
+  // `prepare_rot_key` alongside the bootstrap's bulk request: the two take
+  // different PrepareRotationKey overloads, and on Cyclops both name the
+  // secret the keys are built for.
+  func.func @kernel(%ctx: !boot_context, %ui: !user_interface,
+                    %ct: tensor<!ciphertext>, %evk: !evk_map)
+      -> tensor<!ciphertext> {
+    %rot_dest = tensor.empty() : tensor<!ciphertext>
+    %rot = cheddar.hrot %ctx, %ui, %ct, %rot_dest
+        {level = 1 : i64, static_distance = 7 : i64}
+        : (!boot_context, !user_interface, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
     %dest = tensor.empty() : tensor<!ciphertext>
-    %result = cheddar.boot %ctx, %ct, %evk, %dest : (!boot_context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
+    %result = cheddar.boot %ctx, %rot, %evk, %dest : (!boot_context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
     return %result : tensor<!ciphertext>
   }
 }
