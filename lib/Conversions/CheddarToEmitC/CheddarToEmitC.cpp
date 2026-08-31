@@ -543,9 +543,10 @@ struct ConvertPrepareBootstrap
   }
 };
 
-// cheddar.encode: fill a std::vector<Complex> from the float message buffer,
-// then encode at the requested logarithmic scale, or CHEDDAR's canonical scale
-// for the level when no explicit scale is present.
+// cheddar.encode: fill a std::vector from the float message buffer, then
+// encode at the requested logarithmic scale, or CHEDDAR's canonical scale
+// for the level when no explicit scale is present. Cyclops' slots API takes
+// the message as real doubles (EncodeSlots); scale-snu takes Complex (Encode).
 struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
@@ -559,17 +560,20 @@ struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
       return rewriter.notifyMatchFailure(
           op, "encode requires a static message shape");
     int64_t n = numElements(messageType.getShape());
+    bool slots = op.getUseSlotsApi().value_or(false);
+    std::string vecType =
+        slots ? "std::vector<double>" : "std::vector<Complex>";
+    std::string method = slots ? "EncodeSlots" : "Encode";
     // Flatten both a whole (possibly multidimensional) C array and a subview
     // pointer to the first scalar element before constructing the vector.
     Value begin = addressOfFirstElement(rewriter, op.getLoc(), msg);
-    Value vec =
-        VariableOp::create(rewriter, op.getLoc(),
-                           LValueType::get(OpaqueType::get(
-                               rewriter.getContext(), "std::vector<Complex>")),
-                           OpaqueAttr::get(rewriter.getContext(), ""));
+    Value vec = VariableOp::create(
+        rewriter, op.getLoc(),
+        LValueType::get(OpaqueType::get(rewriter.getContext(), vecType)),
+        OpaqueAttr::get(rewriter.getContext(), ""));
     VerbatimOp::create(
         rewriter, op.getLoc(),
-        "{} = std::vector<Complex>({}, {} + " + std::to_string(n) + ");",
+        "{} = " + vecType + "({}, {} + " + std::to_string(n) + ");",
         ValueRange{vec, begin, begin});
     // TODO(#2364): Use scale from op once HEIR can do precise scale tracking.
     std::string scale = "{}.GetScale(" + lvl + ")";
@@ -577,9 +581,9 @@ struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
                                 adaptor.getEncoder()};
     operands.push_back(vec);
     markDestination(
-        VerbatimOp::create(rewriter, op.getLoc(),
-                           "{}.Encode({}, " + lvl + ", " + scale + ", {});",
-                           operands),
+        VerbatimOp::create(
+            rewriter, op.getLoc(),
+            "{}." + method + "({}, " + lvl + ", " + scale + ", {});", operands),
         1);
     rewriter.eraseOp(op);
     return success();
@@ -606,8 +610,9 @@ struct ConvertEncodeConstant
   }
 };
 
-// cheddar.decode: decode into a temporary complex vector, copy real parts into
-// the float destination buffer.
+// cheddar.decode: decode into a temporary vector, copy into the float
+// destination buffer. Cyclops' slots API decodes straight to real doubles
+// (DecodeSlots); scale-snu decodes to Complex, whose real parts are kept.
 struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
@@ -624,19 +629,23 @@ struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
     auto shape = memTy.getShape();
     int64_t n = numElements(shape);
     auto* ctx = rewriter.getContext();
+    bool slots = op.getUseSlotsApi().value_or(false);
+    std::string vecType =
+        slots ? "std::vector<double>" : "std::vector<Complex>";
     Value vec = VariableOp::create(
-        rewriter, op.getLoc(),
-        LValueType::get(OpaqueType::get(ctx, "std::vector<Complex>")),
+        rewriter, op.getLoc(), LValueType::get(OpaqueType::get(ctx, vecType)),
         OpaqueAttr::get(ctx, ""));
     markDestination(
         VerbatimOp::create(
-            rewriter, op.getLoc(), "{}.Decode({}, {});",
+            rewriter, op.getLoc(),
+            slots ? "{}.DecodeSlots({}, {});" : "{}.Decode({}, {});",
             ValueRange{adaptor.getEncoder(), vec, adaptor.getPlaintext()}),
         1);
     markDestination(
         VerbatimOp::create(rewriter, op.getLoc(),
                            "for (size_t _i = 0; _i < " + std::to_string(n) +
-                               "; ++_i) {}[_i] = {}.at(_i).real();",
+                               "; ++_i) {}[_i] = {}.at(_i)" +
+                               (slots ? "" : ".real()") + ";",
                            ValueRange{dst, vec}),
         0);
     rewriter.eraseOp(op);

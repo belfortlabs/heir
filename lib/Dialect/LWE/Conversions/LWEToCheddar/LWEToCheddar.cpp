@@ -463,7 +463,11 @@ struct ConvertCKKSBootstrapOp : public OpConversionPattern<ckks::BootstrapOp> {
 // Encode at the level and logarithmic scale chosen by the upstream CKKS scale
 // management pipeline. CHEDDAR accepts the corresponding linear scale.
 struct ConvertLWEEncodeOp : public OpConversionPattern<lwe::RLWEEncodeOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertLWEEncodeOp(const TypeConverter& converter, MLIRContext* context,
+                     bool useCyclopsRuntime)
+      : OpConversionPattern(converter, context),
+        useCyclopsRuntime(useCyclopsRuntime) {}
+
   LogicalResult matchAndRewrite(
       lwe::RLWEEncodeOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
@@ -477,10 +481,14 @@ struct ConvertLWEEncodeOp : public OpConversionPattern<lwe::RLWEEncodeOp> {
     Value dest = makeEmptyDest(rewriter, op.getLoc(), resultTy);
     auto result = cheddar::EncodeOp::create(
         rewriter, op.getLoc(), resultTy, encoder.value(), adaptor.getInput(),
-        dest, rewriter.getI64IntegerAttr(level), op.getScaleAttr());
+        dest, rewriter.getI64IntegerAttr(level), op.getScaleAttr(),
+        useCyclopsRuntime ? rewriter.getUnitAttr() : UnitAttr{});
     rewriter.replaceOp(op, result);
     return success();
   }
+
+ private:
+  bool useCyclopsRuntime;
 };
 
 struct ConvertLWEDecryptOp : public OpConversionPattern<lwe::RLWEDecryptOp> {
@@ -517,7 +525,11 @@ struct ConvertLWEEncryptOp : public OpConversionPattern<lwe::RLWEEncryptOp> {
 
 // Decode is already destination-passing on the float `value` buffer.
 struct ConvertLWEDecodeOp : public OpConversionPattern<lwe::RLWEDecodeOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertLWEDecodeOp(const TypeConverter& converter, MLIRContext* context,
+                     bool useCyclopsRuntime)
+      : OpConversionPattern(converter, context),
+        useCyclopsRuntime(useCyclopsRuntime) {}
+
   LogicalResult matchAndRewrite(
       lwe::RLWEDecodeOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
@@ -526,12 +538,15 @@ struct ConvertLWEDecodeOp : public OpConversionPattern<lwe::RLWEDecodeOp> {
     auto outTy = cast<RankedTensorType>(op.getOutput().getType());
     Value dest = tensor::EmptyOp::create(
         rewriter, op.getLoc(), outTy.getShape(), outTy.getElementType());
-    auto result =
-        cheddar::DecodeOp::create(rewriter, op.getLoc(), outTy, encoder.value(),
-                                  adaptor.getInput(), dest);
+    auto result = cheddar::DecodeOp::create(
+        rewriter, op.getLoc(), outTy, encoder.value(), adaptor.getInput(), dest,
+        useCyclopsRuntime ? rewriter.getUnitAttr() : UnitAttr{});
     rewriter.replaceOp(op, result);
     return success();
   }
+
+ private:
+  bool useCyclopsRuntime;
 };
 
 struct LinearTransformPlan {
@@ -1364,8 +1379,10 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     patterns.add<ConvertRAddOp, ConvertRSubOp, ConvertRMulOp, ConvertRNegateOp,
                  ConvertRAddPlainOp, ConvertRSubPlainOp, ConvertRMulPlainOp>(
         typeConverter, context);
-    patterns.add<ConvertLWEEncodeOp, ConvertLWEDecodeOp, ConvertLWEEncryptOp,
-                 ConvertLWEDecryptOp>(typeConverter, context);
+    patterns.add<ConvertLWEEncryptOp, ConvertLWEDecryptOp>(typeConverter,
+                                                           context);
+    patterns.add<ConvertLWEEncodeOp, ConvertLWEDecodeOp>(typeConverter, context,
+                                                         useCyclopsRuntime);
     patterns.add<ConvertKernelLinearTransformOp,
                  ConvertKernelPrepareLinearTransformOp,
                  ConvertKernelApplyLinearTransformOp>(

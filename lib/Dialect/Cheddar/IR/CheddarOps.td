@@ -292,13 +292,16 @@ def Cheddar_EncodeOp : Cheddar_DpsOp<"encode", [PlaintextEncodeOpInterface]> {
     Calls encoder.Encode(pt, level, scale, message). The message is a vector
     of complex numbers (or reals). `logScale` preserves HEIR's logarithmic
     scale metadata for future use. `$output` is the destination plaintext.
+    `useSlotsApi` selects Cyclops' real-message EncodeSlots(pt, level, scale,
+    reals) in place of scale-snu's complex-message Encode.
   }];
   let arguments = (ins
     Cheddar_Encoder:$encoder,
     Cheddar_FloatLike:$message,
     Cheddar_PtLike:$output,
     Builtin_IntegerAttr:$level,
-    OptionalAttr<Builtin_IntegerAttr>:$logScale
+    OptionalAttr<Builtin_IntegerAttr>:$logScale,
+    OptionalAttr<UnitAttr>:$useSlotsApi
   );
   let results = (outs Cheddar_PtResult:$result);
 }
@@ -327,11 +330,14 @@ def Cheddar_DecodeOp : Cheddar_DpsOp<"decode", [], "Value"> {
     Calls encoder.Decode(message, pt). `value` is the destination buffer the
     decoded message is written into (the DPS init); the DPS interface verifier
     ties it 1:1 to the `decoded` result (same type).
+    `useSlotsApi` selects Cyclops' real-message DecodeSlots(reals, pt) in
+    place of scale-snu's complex-message Decode.
   }];
   let arguments = (ins
     Cheddar_Encoder:$encoder,
     Cheddar_PtLike:$plaintext,
-    Cheddar_FloatLike:$value
+    Cheddar_FloatLike:$value,
+    OptionalAttr<UnitAttr>:$useSlotsApi
   );
   let results = (outs Variadic<AnyRankedTensor>:$decoded);
 }

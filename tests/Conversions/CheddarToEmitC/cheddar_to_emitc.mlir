@@ -165,6 +165,31 @@ func.func @dec_chain(%enc: !encoder, %ui: !user_interface, %ct: tensor<!cipherte
   return %msg : tensor<1x4xf32>
 }
 
+// With `useSlotsApi` (the Cyclops runtime), encode bridges the message
+// through a std::vector<double> and calls EncodeSlots.
+// CHECK: func.func @enc_chain_slots
+// CHECK: emitc.verbatim "{} = std::vector<double>({}, {} + 4);"
+// CHECK: emitc.verbatim "{}.EncodeSlots({}, 5, {}.GetScale(5), {});"
+func.func @enc_chain_slots(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
+  %dp = tensor.empty() : tensor<!plaintext>
+  %pt = cheddar.encode %enc, %msg, %dp {level = 5 : i64, logScale = 37 : i64, useSlotsApi} : (!encoder, tensor<4xf64>, tensor<!plaintext>) -> tensor<!plaintext>
+  %dc = tensor.empty() : tensor<!ciphertext>
+  %ct = cheddar.encrypt %ui, %pt, %dc : (!user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %ct : tensor<!ciphertext>
+}
+
+// With `useSlotsApi`, decode reads real doubles straight out of DecodeSlots;
+// no `.real()` projection.
+// CHECK: func.func @dec_chain_slots
+// CHECK: emitc.verbatim "{}.DecodeSlots({}, {});"
+// CHECK: emitc.verbatim "for (size_t _i = 0; _i < 4; ++_i) {}[_i] = {}.at(_i);"
+func.func @dec_chain_slots(%enc: !encoder, %ui: !user_interface, %ct: tensor<!ciphertext>, %dst: tensor<1x4xf32>) -> tensor<1x4xf32> {
+  %dp = tensor.empty() : tensor<!plaintext>
+  %pt = cheddar.decrypt %ui, %ct, %dp : (!user_interface, tensor<!ciphertext>, tensor<!plaintext>) -> tensor<!plaintext>
+  %msg = cheddar.decode %enc, %pt, %dst {useSlotsApi} : (!encoder, tensor<!plaintext>, tensor<1x4xf32>) -> tensor<1x4xf32>
+  return %msg : tensor<1x4xf32>
+}
+
 // HRot/HConj keep their verbatim form. Static distance bakes the distance into
 // the format string; dynamic distance threads the SSA value twice.
 // CHECK: func.func @hrot_static
