@@ -653,29 +653,39 @@ struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
   }
 };
 
-// HRot/HRotAdd/HConj/HConjAdd: look up the rotation/conjugation key inline.
+// HRot/HRotAdd/HConj/HConjAdd: look up the rotation/conjugation key inline on
+// the EvkMap operand, as UserInterface's own getters do -- the secret handle
+// and the parameters come off the context, so no UserInterface is needed on
+// the evaluating side.
 struct ConvertHRot : public OpConversionPattern<cheddar::HRotOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
       cheddar::HRotOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    Value ui = adaptor.getUi();
+    Value evk = adaptor.getEvk();
     Value out = adaptor.getOutput();
     if (auto sd = op.getStaticDistanceAttr()) {
       std::string d = intLit(sd);
       markDestination(
           VerbatimOp::create(
               rewriter, op.getLoc(),
-              "{}->HRot({}, {}, {}->GetRotationKey(" + d + "), " + d + ");",
-              ValueRange{adaptor.getCtx(), out, adaptor.getInput(), ui}),
+              "{}->HRot({}, {}, {}.GetRotationKey(" + d +
+                  ", {}->BootSecretId(), {}->param_, -1, KeyMode::kInherit), " +
+                  d + ");",
+              ValueRange{adaptor.getCtx(), out, adaptor.getInput(), evk,
+                         adaptor.getCtx(), adaptor.getCtx()}),
           1);
     } else {
       Value dyn = adaptor.getDynamicDistance();
       markDestination(
           VerbatimOp::create(rewriter, op.getLoc(),
-                             "{}->HRot({}, {}, {}->GetRotationKey({}), {});",
+                             "{}->HRot({}, {}, {}.GetRotationKey({}, "
+                             "{}->BootSecretId(), {}->param_, -1, "
+                             "KeyMode::kInherit), {});",
                              ValueRange{adaptor.getCtx(), out,
-                                        adaptor.getInput(), ui, dyn, dyn}),
+                                        adaptor.getInput(), evk, dyn,
+                                        adaptor.getCtx(), adaptor.getCtx(),
+                                        dyn}),
           1);
     }
     rewriter.eraseOp(op);
@@ -688,15 +698,17 @@ struct ConvertHRotAdd : public OpConversionPattern<cheddar::HRotAddOp> {
   LogicalResult matchAndRewrite(
       cheddar::HRotAddOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    Value ui = adaptor.getUi();
+    Value evk = adaptor.getEvk();
     std::string d = intLit(op.getDistanceAttr());
     markDestination(
         VerbatimOp::create(
             rewriter, op.getLoc(),
-            "{}->HRotAdd({}, {}, {}, {}->GetRotationKey(" + d + "), " + d +
-                ");",
+            "{}->HRotAdd({}, {}, {}, {}.GetRotationKey(" + d +
+                ", {}->BootSecretId(), {}->param_, -1, KeyMode::kInherit), " +
+                d + ");",
             ValueRange{adaptor.getCtx(), adaptor.getOutput(),
-                       adaptor.getInput(), adaptor.getAddend(), ui}),
+                       adaptor.getInput(), adaptor.getAddend(), evk,
+                       adaptor.getCtx(), adaptor.getCtx()}),
         1);
     rewriter.eraseOp(op);
     return success();
@@ -708,12 +720,14 @@ struct ConvertHConj : public OpConversionPattern<cheddar::HConjOp> {
   LogicalResult matchAndRewrite(
       cheddar::HConjOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    Value ui = adaptor.getUi();
+    Value evk = adaptor.getEvk();
     markDestination(
         VerbatimOp::create(rewriter, op.getLoc(),
-                           "{}->HConj({}, {}, {}->GetConjugationKey());",
+                           "{}->HConj({}, {}, "
+                           "{}.GetConjugationKey({}->BootSecretId()));",
                            ValueRange{adaptor.getCtx(), adaptor.getOutput(),
-                                      adaptor.getInput(), ui}),
+                                      adaptor.getInput(), evk,
+                                      adaptor.getCtx()}),
         1);
     rewriter.eraseOp(op);
     return success();
@@ -725,13 +739,15 @@ struct ConvertHConjAdd : public OpConversionPattern<cheddar::HConjAddOp> {
   LogicalResult matchAndRewrite(
       cheddar::HConjAddOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    Value ui = adaptor.getUi();
+    Value evk = adaptor.getEvk();
     markDestination(
         VerbatimOp::create(
             rewriter, op.getLoc(),
-            "{}->HConjAdd({}, {}, {}, {}->GetConjugationKey());",
+            "{}->HConjAdd({}, {}, {}, "
+            "{}.GetConjugationKey({}->BootSecretId()));",
             ValueRange{adaptor.getCtx(), adaptor.getOutput(),
-                       adaptor.getInput(), adaptor.getAddend(), ui}),
+                       adaptor.getInput(), adaptor.getAddend(), evk,
+                       adaptor.getCtx()}),
         1);
     rewriter.eraseOp(op);
     return success();

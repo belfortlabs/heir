@@ -40,6 +40,21 @@ T* data(T& value) {
   return &value;
 }
 
+// A key-only public key is a pointer to the evaluation-key map; the compute
+// functions take the map by reference.
+template <typename T>
+const T& deref(const T* value) {
+  return *value;
+}
+
+// The boot secret's multiplication key, as `UserInterface::GetMultiplicationKey()`
+// finds it -- but off the map alone, so an evaluating process needs no
+// UserInterface and therefore holds no secret.
+template <typename Keys, typename Context>
+decltype(auto) multiplicationKey(const Keys& keys, Context& context) {
+  return keys.GetMultiplicationKey(context.BootSecretId());
+}
+
 template <typename T, std::size_t N>
 CArrayElementTypeT<T>* data(std::array<T, N>& value) {
   return reinterpret_cast<CArrayElementTypeT<T>*>(value.data());
