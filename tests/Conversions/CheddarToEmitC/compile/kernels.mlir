@@ -104,23 +104,24 @@ func.func @hmult(%ctx: !context, %a: tensor<!ciphertext>,
   return %0 : tensor<!ciphertext>
 }
 
-// Rotation / conjugation: the key is looked up inline via the UserInterface
-// argument, so these functions must carry a user_interface arg.
-func.func @rotations(%ctx: !context, %ui: !cheddar.user_interface,
+// Rotation / conjugation: the key is looked up inline on the EvkMap argument
+// (secret handle and parameters off the context), so these functions carry an
+// evk_map arg and need no UserInterface.
+func.func @rotations(%ctx: !context, %evk: !cheddar.evk_map,
                      %a: tensor<!ciphertext>, %b: tensor<!ciphertext>)
     -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
-  %0 = cheddar.hrot %ctx, %ui, %a, %d0 {level = 4 : i64, static_distance = 5 : i64}
-      : (!context, !cheddar.user_interface, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  %0 = cheddar.hrot %ctx, %evk, %a, %d0 {level = 4 : i64, static_distance = 5 : i64}
+      : (!context, !cheddar.evk_map, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   %d1 = tensor.empty() : tensor<!ciphertext>
-  %1 = cheddar.hrot_add %ctx, %ui, %0, %b, %d1 {distance = 7 : i64, level = 4 : i64}
-      : (!context, !cheddar.user_interface, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  %1 = cheddar.hrot_add %ctx, %evk, %0, %b, %d1 {distance = 7 : i64, level = 4 : i64}
+      : (!context, !cheddar.evk_map, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   %d2 = tensor.empty() : tensor<!ciphertext>
-  %2 = cheddar.hconj %ctx, %ui, %1, %d2
-      : (!context, !cheddar.user_interface, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  %2 = cheddar.hconj %ctx, %evk, %1, %d2
+      : (!context, !cheddar.evk_map, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   %d3 = tensor.empty() : tensor<!ciphertext>
-  %3 = cheddar.hconj_add %ctx, %ui, %2, %b, %d3
-      : (!context, !cheddar.user_interface, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  %3 = cheddar.hconj_add %ctx, %evk, %2, %b, %d3
+      : (!context, !cheddar.evk_map, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   return %3 : tensor<!ciphertext>
 }
 
