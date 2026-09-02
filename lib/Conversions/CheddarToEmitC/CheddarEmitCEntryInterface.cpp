@@ -162,9 +162,17 @@ bool isSupportArgument(Type type) {
          name.contains("EvaluationKey<word>") || name.contains("EvkMap<word>");
 }
 
-// A serving process runs on evkMap instead of UserInterface and holds no secret --
-// unless evaluation still needs a UserInterface (e.g. debug mode).
-bool evaluationNeedsSecret(const EntryFunctions& functions) {
+// A serving process runs on evkMap instead of UserInterface and holds no secret
+// -- unless evaluation still needs a UserInterface (e.g. debug mode).
+//
+// Only Cyclops can back the key-only split: the map getters it needs
+// (`EvkMap::GetRotationKey(distance, secret, params, level, key_mode)` and
+// `GetMultiplicationKey(secret)`) do not exist on scale-snu CHEDDAR's EvkMap,
+// whose key getters live on the UserInterface. So for the `cheddar` runtime the
+// public key stays a UserInterface, and `lwe-to-cheddar` threads one into every
+// function that touches ciphertexts.
+bool evaluationNeedsSecret(const EntryFunctions& functions, StringRef runtime) {
+  if (runtime != "cyclops") return true;
   for (func::FuncOp function : {functions.evaluate, functions.preprocess}) {
     if (!function) continue;
     for (Type type : function.getArgumentTypes())
@@ -304,7 +312,8 @@ SupportValues buildSupportValues(OpBuilder& builder, Location loc,
     // Production path
     values.evaluationKeyMap =
         CallOpaqueOp::create(
-            builder, loc, TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
+            builder, loc,
+            TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
             "heir::deref", key)
             .getResult(0);
     values.evaluationKey =
@@ -597,16 +606,16 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
       // is good for as long as the KeyPair is.
       Value map = MemberCallOpaqueOp::create(
                       builder, loc,
-                      TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")}, ui,
-                      "GetEvkMap", ArrayAttr{}, ArrayAttr{}, ValueRange{})
+                      TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
+                      ui, "GetEvkMap", ArrayAttr{}, ArrayAttr{}, ValueRange{})
                       .getResult(0);
       value = CallOpaqueOp::create(builder, loc, TypeRange{aliasType},
                                    "std::addressof", map)
                   .getResult(0);
     } else {
-      value = CallOpaqueOp::create(builder, loc, TypeRange{aliasType},
-                                   "static_cast<" + cppTypeName(aliasType) + ">",
-                                   ui)
+      value = CallOpaqueOp::create(
+                  builder, loc, TypeRange{aliasType},
+                  "static_cast<" + cppTypeName(aliasType) + ">", ui)
                   .getResult(0);
     }
     emitc::AssignOp::create(builder, loc, member, value);
@@ -900,11 +909,11 @@ LogicalResult addDecryptDefinition(OpBuilder& builder, Location loc,
 }
 
 LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
-                             StringRef runtimeNamespace,
+                             StringRef runtime,
                              ArrayRef<StringRef> extensionIncludes) {
   Location loc = functions.setup.getLoc();
   MLIRContext* ctx = module.getContext();
-  std::string runtimeNamespaceName = runtimeNamespace.str();
+  std::string runtimeNamespaceName = runtime.str();
 
   ArrayAttr inputTypeAttrs =
       getLogicalTypes(functions.contract, kEntryInputTypesAttrName);
@@ -1009,8 +1018,9 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
   emitVerbatim(builder, loc,
                "using SecretKey = ::" + runtimeNamespaceName +
                    "::UserInterface<word>*;");
-  // See `evaluationNeedsSecret`: key-only unless evaluation must decrypt.
-  const bool needsSecret = evaluationNeedsSecret(functions);
+  // See `evaluationNeedsSecret`: key-only unless evaluation must decrypt, and
+  // never for the scale-snu runtime.
+  const bool needsSecret = evaluationNeedsSecret(functions, runtime);
   emitVerbatim(builder, loc,
                "using PublicKey = " +
                    std::string(needsSecret ? "::" + runtimeNamespaceName +
@@ -1097,12 +1107,26 @@ struct CheddarEmitCEntryInterfacePass
           CheddarEmitCEntryInterfacePass> {
   using CheddarEmitCEntryInterfaceBase::CheddarEmitCEntryInterfaceBase;
 
+  FailureOr<std::string> resolveRuntime(ModuleOp module) {
+    std::optional<StringRef> recorded = getCheddarRuntime(module);
+    if (recorded && !runtime.empty() && *recorded != runtime)
+      return module.emitError()
+             << "runtime option '" << runtime << "' contradicts the '"
+             << *recorded << "' runtime the module was lowered for";
+    std::string resolved = recorded          ? recorded->str()
+                           : runtime.empty() ? std::string("cheddar")
+                                             : std::string(runtime);
+    if (resolved != "cheddar" && resolved != "cyclops")
+      return module.emitError()
+             << "unsupported C++ runtime '" << resolved << "'";
+    return resolved;
+  }
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    if (runtime != "cheddar" && runtime != "cyclops") {
-      module.emitError() << "unsupported C++ runtime '" << runtime << "'";
-      return signalPassFailure();
-    }
+    FailureOr<std::string> resolvedRuntime = resolveRuntime(module);
+    if (failed(resolvedRuntime)) return signalPassFailure();
+    StringRef runtime = *resolvedRuntime;
     FailureOr<EntryFunctions> functions =
         findEntryFunctions(module, entryFunction);
     // The C++ facade exposes Setup and KeyGen separately, so both are required.

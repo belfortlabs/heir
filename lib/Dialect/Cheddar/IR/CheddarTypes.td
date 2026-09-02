@@ -130,4 +130,12 @@ def Cheddar_EvkMap : Cheddar_Type<"EvkMap", "evk_map"> {
 // Type aliases for op constraints
 def Cheddar_CiphertextOrPlaintext : AnyTypeOf<[Cheddar_Ciphertext, Cheddar_Plaintext]>;
 
+// A rotation or conjugation key comes from one of two places, and which one
+// depends on the runtime. Cyclops reads the key off an EvkMap, so an
+// evaluating process needs no secret. Scale-snu CHEDDAR exposes the key
+// getters on the UserInterface only, which holds the secret. `lwe-to-cheddar`
+// picks the operand type from its `use-cyclops-runtime` option, and the
+// emitter reads the choice back off the operand type.
+def Cheddar_KeySource : AnyTypeOf<[Cheddar_UserInterface, Cheddar_EvkMap]>;
+
 #endif  // LIB_DIALECT_CHEDDAR_IR_CHEDDARTYPES_TD_

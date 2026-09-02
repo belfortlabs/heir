@@ -124,7 +124,7 @@ struct FuseHRotAdd : public OpRewritePattern<AddOp> {
 
     auto fused = HRotAddOp::create(
         rewriter, addOp.getLoc(), addOp->getResultTypes(), hrotOp.getCtx(),
-        hrotOp.getEvk(), hrotOp.getInput(), otherOperand, addOp.getOutput(),
+        hrotOp.getKeys(), hrotOp.getInput(), otherOperand, addOp.getOutput(),
         distanceAttr, hrotOp.getLevelAttr());
     rewriter.replaceOp(addOp, fused);
     rewriter.eraseOp(hrotOp);
@@ -143,7 +143,7 @@ struct FuseHConjAdd : public OpRewritePattern<AddOp> {
 
     auto fused = HConjAddOp::create(
         rewriter, addOp.getLoc(), addOp->getResultTypes(), hconjOp.getCtx(),
-        hconjOp.getEvk(), hconjOp.getInput(), otherOperand, addOp.getOutput());
+        hconjOp.getKeys(), hconjOp.getInput(), otherOperand, addOp.getOutput());
     rewriter.replaceOp(addOp, fused);
     rewriter.eraseOp(hconjOp);
     return success();

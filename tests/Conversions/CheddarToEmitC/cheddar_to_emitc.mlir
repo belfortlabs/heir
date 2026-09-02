@@ -190,13 +190,17 @@ func.func @dec_chain_slots(%enc: !encoder, %ui: !user_interface, %ct: tensor<!ci
   return %msg : tensor<1x4xf32>
 }
 
-// HRot/HConj keep their verbatim form, looking the key up on the EvkMap operand
-// with the secret handle and parameters taken off the context -- so an
-// evaluating process needs no UserInterface. Rotations pass the op's level so
-// the lookup best-fits the key prepared for it. Static distance bakes the
-// distance into the format string; dynamic distance threads the SSA value twice.
+// HRot/HConj keep their verbatim form. An EvkMap key operand (the Cyclops
+// runtime) looks the key up on the map, and so must say which key it wants:
+// the secret comes off the ciphertext being rotated and the level off the op,
+// with the parameters off the context -- so an evaluating process needs no
+// UserInterface. Static distance bakes the distance into the format string;
+// dynamic distance threads the SSA value twice.
 // CHECK: func.func @hrot_static
-// CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey(5, {}->BootSecretId(), {}->param_, 4, KeyMode::kInherit), 5);"
+// CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey(5, {}.GetSecretId(), {}->param_, 4, KeyMode::kInherit), 5);"
+// The rotated ciphertext appears twice: as the HRot input and as the secret
+// the key must match.
+// CHECK-SAME: %arg0, %arg3, %arg2, %arg1, %arg2, %arg0
 func.func @hrot_static(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
   %r = cheddar.hrot %ctx, %evk, %ct, %d0 {level = 4 : i64, static_distance = 5 : i64} : (!context, !evk_map, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
@@ -204,8 +208,8 @@ func.func @hrot_static(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>)
 }
 
 // CHECK: func.func @hrot_dyn
-// CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey({}, {}->BootSecretId(), {}->param_, 4, KeyMode::kInherit), {});"
-// CHECK-SAME: %arg3, %arg0, %arg0, %arg3
+// CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey({}, {}.GetSecretId(), {}->param_, 4, KeyMode::kInherit), {});"
+// CHECK-SAME: %arg0, %arg4, %arg2, %arg1, %arg3, %arg2, %arg0, %arg3
 func.func @hrot_dyn(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>, %d: index) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
   %r = cheddar.hrot %ctx, %evk, %ct, %d0, %d {level = 4 : i64} : (!context, !evk_map, tensor<!ciphertext>, tensor<!ciphertext>, index) -> tensor<!ciphertext>
@@ -213,10 +217,37 @@ func.func @hrot_dyn(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>, %d
 }
 
 // CHECK: func.func @hconj_add
-// CHECK: emitc.verbatim "{}->HConjAdd({}, {}, {}, {}.GetConjugationKey({}->BootSecretId()));"
+// CHECK: emitc.verbatim "{}->HConjAdd({}, {}, {}, {}.GetConjugationKey({}.GetSecretId()));"
 func.func @hconj_add(%ctx: !context, %evk: !evk_map, %a: tensor<!ciphertext>, %b: tensor<!ciphertext>) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
   %r = cheddar.hconj_add %ctx, %evk, %a, %b, %d0 : (!context, !evk_map, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %r : tensor<!ciphertext>
+}
+
+// A UserInterface key operand (the scale-snu runtime) takes the one-argument
+// getters that fork exposes: no secret handle, no parameters, no level and no
+// KeyMode.
+// CHECK: func.func @hrot_ui
+// CHECK: emitc.verbatim "{}->HRot({}, {}, {}->GetRotationKey(5), 5);"
+func.func @hrot_ui(%ctx: !context, %ui: !user_interface, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %r = cheddar.hrot %ctx, %ui, %ct, %d0 {level = 4 : i64, static_distance = 5 : i64} : (!context, !user_interface, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %r : tensor<!ciphertext>
+}
+
+// CHECK: func.func @hrot_add_ui
+// CHECK: emitc.verbatim "{}->HRotAdd({}, {}, {}, {}->GetRotationKey(2), 2);"
+func.func @hrot_add_ui(%ctx: !context, %ui: !user_interface, %a: tensor<!ciphertext>, %b: tensor<!ciphertext>) -> tensor<!ciphertext> {
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %r = cheddar.hrot_add %ctx, %ui, %a, %b, %d0 {distance = 2 : i64, level = 3 : i64} : (!context, !user_interface, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %r : tensor<!ciphertext>
+}
+
+// CHECK: func.func @hconj_add_ui
+// CHECK: emitc.verbatim "{}->HConjAdd({}, {}, {}, {}->GetConjugationKey());"
+func.func @hconj_add_ui(%ctx: !context, %ui: !user_interface, %a: tensor<!ciphertext>, %b: tensor<!ciphertext>) -> tensor<!ciphertext> {
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %r = cheddar.hconj_add %ctx, %ui, %a, %b, %d0 : (!context, !user_interface, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   return %r : tensor<!ciphertext>
 }
 

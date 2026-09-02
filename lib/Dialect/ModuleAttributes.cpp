@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 
 #include "lib/Dialect/BGV/IR/BGVDialect.h"
 #include "lib/Dialect/CKKS/IR/CKKSDialect.h"
@@ -139,6 +140,18 @@ void moduleSetCheddar(Operation* moduleOp) {
   moduleClearBackend(moduleOp);
   moduleOp->setAttr(kCheddarBackendAttrName,
                     mlir::UnitAttr::get(moduleOp->getContext()));
+}
+
+std::optional<llvm::StringRef> getCheddarRuntime(Operation* moduleOp) {
+  auto attr =
+      moduleOp->getAttrOfType<mlir::StringAttr>(kCheddarRuntimeAttrName);
+  if (!attr) return std::nullopt;
+  return attr.getValue();
+}
+
+void setCheddarRuntime(Operation* moduleOp, llvm::StringRef runtime) {
+  moduleOp->setAttr(kCheddarRuntimeAttrName,
+                    mlir::StringAttr::get(moduleOp->getContext(), runtime));
 }
 
 }  // namespace heir

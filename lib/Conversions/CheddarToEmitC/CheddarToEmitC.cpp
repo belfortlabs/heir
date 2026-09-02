@@ -653,40 +653,79 @@ struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
   }
 };
 
+// A single-ciphertext payload buffer emits as a `std::array<Ciphertext, 1>&`,
+// so reaching the ciphertext itself needs a subscript; a rank-0 payload emits
+// as the ciphertext reference already.
+static std::string payloadRef(Type type) {
+  auto shaped = dyn_cast<ShapedType>(type);
+  return shaped && shaped.hasStaticShape() && shaped.getRank() > 0 &&
+                 shaped.getNumElements() == 1
+             ? "{}[0]"
+             : "{}";
+}
+
+static bool keysAreEvkMap(Value keys) {
+  return isa<cheddar::EvkMapType>(keys.getType());
+}
+
+static std::string rotationKeyLookup(bool useEvkMap, Value keys, Value input,
+                                     StringRef inputRef, Value ctx,
+                                     StringRef distance, Value distanceValue,
+                                     StringRef level,
+                                     SmallVectorImpl<Value>& operands) {
+  operands.push_back(keys);
+  std::string fragment =
+      (useEvkMap ? "{}.GetRotationKey(" : "{}->GetRotationKey(") +
+      distance.str();
+  if (distanceValue) operands.push_back(distanceValue);
+  if (useEvkMap) {
+    fragment += ", " + inputRef.str() + ".GetSecretId(), {}->param_, " +
+                level.str() + ", KeyMode::kInherit";
+    operands.push_back(input);
+    operands.push_back(ctx);
+  }
+  return fragment + ")";
+}
+
+static std::string conjugationKeyLookup(bool useEvkMap, Value keys, Value input,
+                                        StringRef inputRef,
+                                        SmallVectorImpl<Value>& operands) {
+  operands.push_back(keys);
+  if (!useEvkMap) return "{}->GetConjugationKey()";
+  operands.push_back(input);
+  return "{}.GetConjugationKey(" + inputRef.str() + ".GetSecretId())";
+}
+
 // HRot/HRotAdd/HConj/HConjAdd: look up the rotation/conjugation key inline on
-// the EvkMap operand. Rotations pass the op's `level` so the best-fit key
+// the key operand. Rotations pass the op's `level` so the best-fit key
 // prepared for that level is used.
 struct ConvertHRot : public OpConversionPattern<cheddar::HRotOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
       cheddar::HRotOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    Value ctx = adaptor.getCtx();
-    Value evk = adaptor.getEvk();
-    Value out = adaptor.getOutput();
-    Value in = adaptor.getInput();
+    bool useEvkMap = keysAreEvkMap(op.getKeys());
     std::string level = intLit(op.getLevelAttr());
+    std::string inputRef = payloadRef(op.getInput().getType());
+    SmallVector<Value> operands{adaptor.getCtx(), adaptor.getOutput(),
+                                adaptor.getInput()};
+    std::string fmt;
     if (auto sd = op.getStaticDistanceAttr()) {
       std::string d = intLit(sd);
-      markDestination(
-          VerbatimOp::create(
-              rewriter, op.getLoc(),
-              "{}->HRot({}, {}, {}.GetRotationKey(" + d +
-                  ", {}->BootSecretId(), {}->param_, " + level +
-                  ", KeyMode::kInherit), " + d + ");",
-              ValueRange{ctx, out, in, evk, ctx, ctx}),
-          1);
+      std::string key = rotationKeyLookup(
+          useEvkMap, adaptor.getKeys(), adaptor.getInput(), inputRef,
+          adaptor.getCtx(), d, Value(), level, operands);
+      fmt = "{}->HRot({}, {}, " + key + ", " + d + ");";
     } else {
       Value dyn = adaptor.getDynamicDistance();
-      markDestination(
-          VerbatimOp::create(rewriter, op.getLoc(),
-                             "{}->HRot({}, {}, {}.GetRotationKey({}, "
-                             "{}->BootSecretId(), {}->param_, " +
-                                 level + ", KeyMode::kInherit), {});",
-                             ValueRange{ctx, out, in, evk,
-                                        dyn, ctx, ctx, dyn}),
-          1);
+      std::string key = rotationKeyLookup(
+          useEvkMap, adaptor.getKeys(), adaptor.getInput(), inputRef,
+          adaptor.getCtx(), "{}", dyn, level, operands);
+      fmt = "{}->HRot({}, {}, " + key + ", {});";
+      operands.push_back(dyn);
     }
+    markDestination(VerbatimOp::create(rewriter, op.getLoc(), fmt, operands),
+                    1);
     rewriter.eraseOp(op);
     return success();
   }
@@ -697,18 +736,17 @@ struct ConvertHRotAdd : public OpConversionPattern<cheddar::HRotAddOp> {
   LogicalResult matchAndRewrite(
       cheddar::HRotAddOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    Value ctx = adaptor.getCtx();
-    Value evk = adaptor.getEvk();
     std::string d = intLit(op.getDistanceAttr());
-    std::string level = intLit(op.getLevelAttr());
+    SmallVector<Value> operands{adaptor.getCtx(), adaptor.getOutput(),
+                                adaptor.getInput(), adaptor.getAddend()};
+    std::string key = rotationKeyLookup(
+        keysAreEvkMap(op.getKeys()), adaptor.getKeys(), adaptor.getInput(),
+        payloadRef(op.getInput().getType()), adaptor.getCtx(), d, Value(),
+        intLit(op.getLevelAttr()), operands);
     markDestination(
-        VerbatimOp::create(
-            rewriter, op.getLoc(),
-            "{}->HRotAdd({}, {}, {}, {}.GetRotationKey(" + d +
-                ", {}->BootSecretId(), {}->param_, " + level +
-                ", KeyMode::kInherit), " + d + ");",
-            ValueRange{ctx, adaptor.getOutput(), adaptor.getInput(),
-                       adaptor.getAddend(), evk, ctx, ctx}),
+        VerbatimOp::create(rewriter, op.getLoc(),
+                           "{}->HRotAdd({}, {}, {}, " + key + ", " + d + ");",
+                           operands),
         1);
     rewriter.eraseOp(op);
     return success();
@@ -720,14 +758,14 @@ struct ConvertHConj : public OpConversionPattern<cheddar::HConjOp> {
   LogicalResult matchAndRewrite(
       cheddar::HConjOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    Value ctx = adaptor.getCtx();
-    Value evk = adaptor.getEvk();
+    SmallVector<Value> operands{adaptor.getCtx(), adaptor.getOutput(),
+                                adaptor.getInput()};
+    std::string key = conjugationKeyLookup(
+        keysAreEvkMap(op.getKeys()), adaptor.getKeys(), adaptor.getInput(),
+        payloadRef(op.getInput().getType()), operands);
     markDestination(
         VerbatimOp::create(rewriter, op.getLoc(),
-                           "{}->HConj({}, {}, "
-                           "{}.GetConjugationKey({}->BootSecretId()));",
-                           ValueRange{ctx, adaptor.getOutput(),
-                                      adaptor.getInput(), evk, ctx}),
+                           "{}->HConj({}, {}, " + key + ");", operands),
         1);
     rewriter.eraseOp(op);
     return success();
@@ -739,15 +777,14 @@ struct ConvertHConjAdd : public OpConversionPattern<cheddar::HConjAddOp> {
   LogicalResult matchAndRewrite(
       cheddar::HConjAddOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    Value ctx = adaptor.getCtx();
-    Value evk = adaptor.getEvk();
+    SmallVector<Value> operands{adaptor.getCtx(), adaptor.getOutput(),
+                                adaptor.getInput(), adaptor.getAddend()};
+    std::string key = conjugationKeyLookup(
+        keysAreEvkMap(op.getKeys()), adaptor.getKeys(), adaptor.getInput(),
+        payloadRef(op.getInput().getType()), operands);
     markDestination(
-        VerbatimOp::create(
-            rewriter, op.getLoc(),
-            "{}->HConjAdd({}, {}, {}, "
-            "{}.GetConjugationKey({}->BootSecretId()));",
-            ValueRange{ctx, adaptor.getOutput(), adaptor.getInput(),
-                       adaptor.getAddend(), evk, ctx}),
+        VerbatimOp::create(rewriter, op.getLoc(),
+                           "{}->HConjAdd({}, {}, {}, " + key + ");", operands),
         1);
     rewriter.eraseOp(op);
     return success();
@@ -792,14 +829,6 @@ static void emitLinearTransformPreamble(OpBuilder& builder, Location loc,
                          ValueRange{diagonals, diagonals});
     }
   }
-}
-
-static std::string linearTransformPayloadRef(Type type) {
-  auto shaped = dyn_cast<ShapedType>(type);
-  return shaped && shaped.hasStaticShape() && shaped.getRank() > 0 &&
-                 shaped.getNumElements() == 1
-             ? "{}[0]"
-             : "{}";
 }
 
 // Scale-snu defaults min_ks to false, while Cyclops exposes only the
@@ -853,14 +882,13 @@ struct ConvertLinearTransform
             ");",
         ValueRange{ctx});
     markDestination(
-        VerbatimOp::create(
-            rewriter, loc,
-            "_lt.Evaluate(_lt_cp, " +
-                linearTransformPayloadRef(op.getOutput().getType()) + ", " +
-                linearTransformPayloadRef(op.getInput().getType()) + ", {}" +
-                optionalMinKsArgument(op.getMinKs()) + ");",
-            ValueRange{adaptor.getOutput(), adaptor.getInput(),
-                       adaptor.getEvkMap()}),
+        VerbatimOp::create(rewriter, loc,
+                           "_lt.Evaluate(_lt_cp, " +
+                               payloadRef(op.getOutput().getType()) + ", " +
+                               payloadRef(op.getInput().getType()) + ", {}" +
+                               optionalMinKsArgument(op.getMinKs()) + ");",
+                           ValueRange{adaptor.getOutput(), adaptor.getInput(),
+                                      adaptor.getEvkMap()}),
         0);
     VerbatimOp::create(rewriter, loc, "}", ValueRange{});
     rewriter.eraseOp(op);
@@ -913,9 +941,8 @@ struct ConvertApplyPreparedLinearTransform
     markDestination(
         VerbatimOp::create(
             rewriter, op.getLoc(),
-            "{}->Evaluate(_lt_cp, " +
-                linearTransformPayloadRef(op.getOutput().getType()) + ", " +
-                linearTransformPayloadRef(op.getInput().getType()) + ", {}" +
+            "{}->Evaluate(_lt_cp, " + payloadRef(op.getOutput().getType()) +
+                ", " + payloadRef(op.getInput().getType()) + ", {}" +
                 optionalMinKsArgument(op.getMinKs()) + ");",
             ValueRange{adaptor.getTransform(), adaptor.getOutput(),
                        adaptor.getInput(), adaptor.getEvkMap()}),

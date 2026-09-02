@@ -2,6 +2,7 @@
 #define LIB_DIALECT_MODULEATTRIBUTES_H_
 
 #include <cstdint>
+#include <optional>
 
 #include "llvm/include/llvm/ADT/StringRef.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Attributes.h"  // from @llvm-project
@@ -73,6 +74,15 @@ void moduleClearBackend(Operation* moduleOp);
 void moduleSetOpenfhe(Operation* moduleOp);
 void moduleSetLattigo(Operation* moduleOp);
 void moduleSetCheddar(Operation* moduleOp);
+
+constexpr const static ::llvm::StringLiteral kCheddarRuntimeAttrName =
+    "cheddar.runtime";
+constexpr const static ::llvm::StringLiteral kCheddarRuntimeCheddar = "cheddar";
+constexpr const static ::llvm::StringLiteral kCheddarRuntimeCyclops = "cyclops";
+
+// The recorded runtime, or nullopt when no pass has recorded one.
+std::optional<::llvm::StringRef> getCheddarRuntime(Operation* moduleOp);
+void setCheddarRuntime(Operation* moduleOp, ::llvm::StringRef runtime);
 
 // Func attributes for client helpers
 //

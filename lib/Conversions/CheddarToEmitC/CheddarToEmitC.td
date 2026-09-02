@@ -55,8 +55,12 @@ def CheddarEmitCEntryInterface
   let options = [
     Option<"entryFunction", "entry-function", "std::string", "\"\"",
            "Entry function to expose when the module contains more than one">,
-    Option<"runtime", "runtime", "std::string", "\"cheddar\"",
-           "C++ runtime API to target: cheddar or cyclops">
+    // Empty means "take it from the module's `cheddar.runtime` attribute,
+    // which `lwe-to-cheddar` records"; setting it is only for IR that no
+    // lowering produced, and is an error when it contradicts that attribute.
+    Option<"runtime", "runtime", "std::string", "\"\"",
+           "C++ runtime API to target: cheddar or cyclops (default: the "
+           "runtime the module was lowered for, else cheddar)">
   ];
 }
 

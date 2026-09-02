@@ -355,16 +355,23 @@ struct ConvertCKKSRescaleOp : public OpConversionPattern<ckks::RescaleOp> {
 };
 
 // Rotate -> cheddar.hrot; the rotation key is looked up from the function's
-// EvkMap operand by the emitter.
+// key operand by the emitter.
 struct ConvertCKKSRotateOp : public OpConversionPattern<ckks::RotateOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertCKKSRotateOp(const TypeConverter& converter, MLIRContext* context,
+                      bool useCyclopsRuntime)
+      : OpConversionPattern(converter, context),
+        useCyclopsRuntime(useCyclopsRuntime) {}
+
   LogicalResult matchAndRewrite(
       ckks::RotateOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     auto ctx = getContextualContext(op.getOperation());
     if (failed(ctx)) return ctx;
-    auto evk = getContextualArg<cheddar::EvkMapType>(op.getOperation());
-    if (failed(evk)) return evk;
+    FailureOr<Value> keys =
+        useCyclopsRuntime
+            ? getContextualArg<cheddar::EvkMapType>(op.getOperation())
+            : getContextualArg<cheddar::UserInterfaceType>(op.getOperation());
+    if (failed(keys)) return keys;
     Value dynamicShift = adaptor.getDynamicShift();
     IntegerAttr staticShift = op.getStaticShiftAttr();
     if (!staticShift && !dynamicShift)
@@ -396,19 +403,22 @@ struct ConvertCKKSRotateOp : public OpConversionPattern<ckks::RotateOp> {
         makeReusableDest(rewriter, op.getLoc(), resultTy, adaptor.getInput());
     if (dynamicShift) {
       auto result = cheddar::HRotOp::create(
-          rewriter, op.getLoc(), resultTy, ctx.value(), evk.value(),
+          rewriter, op.getLoc(), resultTy, ctx.value(), keys.value(),
           adaptor.getInput(), dest, dynamicShift,
           /*static_distance=*/IntegerAttr(), level);
       rewriter.replaceOp(op, result);
     } else {
       auto result = cheddar::HRotOp::create(
-          rewriter, op.getLoc(), resultTy, ctx.value(), evk.value(),
+          rewriter, op.getLoc(), resultTy, ctx.value(), keys.value(),
           adaptor.getInput(), dest,
           /*dynamic_distance=*/Value(), staticShift, level);
       rewriter.replaceOp(op, result);
     }
     return success();
   }
+
+ private:
+  bool useCyclopsRuntime;
 };
 
 struct ConvertCKKSLevelReduceOp
@@ -1218,6 +1228,11 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
       return signalPassFailure();
     }
 
+    // Record the runtime so that the emitter and the entry-interface generator
+    // read the same choice instead of taking it from a second CLI flag.
+    setCheddarRuntime(module, useCyclopsRuntime ? kCheddarRuntimeCyclops
+                                                : kCheddarRuntimeCheddar);
+
     // Configure bootstrap transforms for the slots actually represented by
     // each ciphertext, not the enclosing RLWE ring's polynomial degree.
     // Preparing twice the CKKS slot capacity wastes FFT transforms and rotation
@@ -1287,6 +1302,12 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     // BootContext and the rotation-key map (EvkMap) must be threaded
     // transitively: a function that calls a function that bootstraps
     // needs the right keys.
+    // The UserInterface holds the secret, so under Cyclops only encryption,
+    // decryption and the debug decryptor may pull it in. Everything else --
+    // rotations included -- reads evaluation keys off the EvkMap, which is what
+    // lets an evaluating process run on received keys alone. Scale-snu CHEDDAR
+    // has no such map getters, so there rotation keeps the UserInterface and
+    // every function that touches ciphertexts carries one.
     DenseMap<func::FuncOp, bool> bootstrapsTransitively;
     DenseMap<func::FuncOp, bool> needsEvkMapTransitively;
     DenseMap<func::FuncOp, bool> needsUserInterfaceTransitively;
@@ -1296,9 +1317,10 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
       bool secret = false;
       f.walk([&](Operation* inner) {
         if (isa<ckks::BootstrapOp>(inner)) boots = true;
-        if (isa<ckks::BootstrapOp, ckks::RotateOp, kernel::LinearTransformOp,
+        if (isa<ckks::BootstrapOp, kernel::LinearTransformOp,
                 kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>(inner))
           evk = true;
+        if (useCyclopsRuntime && isa<ckks::RotateOp>(inner)) evk = true;
         if (isa<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp>(inner)) secret = true;
         if (auto call = dyn_cast<func::CallOp>(inner);
             call && isDebugPort(call.getCallee()))
@@ -1371,7 +1393,9 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
         {cheddar::ContextType::get(context), hasContextOps},
         {cheddar::BootContextType::get(context), funcBootstraps},
         {cheddar::EncoderType::get(context), hasCryptoOrEncode},
-        {cheddar::UserInterfaceType::get(context), needsUserInterface},
+        {cheddar::UserInterfaceType::get(context),
+         useCyclopsRuntime ? OpPredicate(needsUserInterface)
+                           : OpPredicate(hasCryptoOps)},
         {cheddar::EvalKeyType::get(context), hasCryptoOps},
         {cheddar::EvkMapType::get(context), needsEvkMap},
     };
@@ -1386,9 +1410,10 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     patterns.add<ConvertCKKSAddOp, ConvertCKKSSubOp, ConvertCKKSMulOp,
                  ConvertCKKSAddPlainOp, ConvertCKKSSubPlainOp,
                  ConvertCKKSMulPlainOp, ConvertCKKSNegateOp, ConvertCKKSRelinOp,
-                 ConvertCKKSRescaleOp, ConvertCKKSRotateOp,
-                 ConvertCKKSLevelReduceOp, ConvertCKKSBootstrapOp>(
-        typeConverter, context);
+                 ConvertCKKSRescaleOp, ConvertCKKSLevelReduceOp,
+                 ConvertCKKSBootstrapOp>(typeConverter, context);
+    patterns.add<ConvertCKKSRotateOp>(typeConverter, context,
+                                      useCyclopsRuntime);
     patterns.add<ConvertRAddOp, ConvertRSubOp, ConvertRMulOp, ConvertRNegateOp,
                  ConvertRAddPlainOp, ConvertRSubPlainOp, ConvertRMulPlainOp>(
         typeConverter, context);
