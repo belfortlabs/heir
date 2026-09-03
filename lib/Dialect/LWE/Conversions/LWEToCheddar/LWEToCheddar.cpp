@@ -355,8 +355,7 @@ struct ConvertCKKSRescaleOp : public OpConversionPattern<ckks::RescaleOp> {
 };
 
 // Rotate -> cheddar.hrot; the rotation key is looked up from the function's
-// EvkMap operand by the emitter. Rotation needs no secret, so it must not pull
-// a UserInterface into a function that would otherwise evaluate key-only.
+// EvkMap operand by the emitter.
 struct ConvertCKKSRotateOp : public OpConversionPattern<ckks::RotateOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
@@ -1286,16 +1285,8 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
                                                     context);
 
     // BootContext and the rotation-key map (EvkMap) must be threaded
-    // transitively: a function that (directly or indirectly) calls a function
-    // that bootstraps / needs the key map must itself carry those context
-    // arguments so it can forward them. A per-body walk only sees a function's
-    // own ops (the bootstrap may live in a callee, e.g. @main calling
-    // @main__preprocessed), so propagate both properties to all transitive
-    // callers via a fixed point over the call graph.
-    // The UserInterface holds the secret, so only encryption, decryption and
-    // the debug decryptor may pull it in. Everything else -- rotations
-    // included -- reads evaluation keys off the EvkMap, which is what lets an
-    // evaluating process run on received keys alone.
+    // transitively: a function that calls a function that bootstraps
+    // needs the right keys.
     DenseMap<func::FuncOp, bool> bootstrapsTransitively;
     DenseMap<func::FuncOp, bool> needsEvkMapTransitively;
     DenseMap<func::FuncOp, bool> needsUserInterfaceTransitively;

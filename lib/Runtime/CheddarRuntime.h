@@ -47,9 +47,6 @@ const T& deref(const T* value) {
   return *value;
 }
 
-// The boot secret's multiplication key, as `UserInterface::GetMultiplicationKey()`
-// finds it -- but off the map alone, so an evaluating process needs no
-// UserInterface and therefore holds no secret.
 template <typename Keys, typename Context>
 decltype(auto) multiplicationKey(const Keys& keys, Context& context) {
   return keys.GetMultiplicationKey(context.BootSecretId());
