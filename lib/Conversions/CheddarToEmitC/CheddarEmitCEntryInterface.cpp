@@ -162,12 +162,8 @@ bool isSupportArgument(Type type) {
          name.contains("EvaluationKey<word>") || name.contains("EvkMap<word>");
 }
 
-// The public key is the evaluation-key map alone, so a serving process can run
-// on received keys and hold no secret -- unless evaluation still demands a
-// UserInterface. LWEToCheddar threads one into exactly the functions that
-// encrypt, decrypt or call the debug decryptor, so this is true for a `--debug`
-// build (which runs unsplit for that very reason) and false otherwise. Computed
-// once in `buildInterface` and threaded to everything that shapes `PublicKey`.
+// A serving process runs on evkMap instead of UserInterface and holds no secret --
+// unless evaluation still needs a UserInterface (e.g. debug mode).
 bool evaluationNeedsSecret(const EntryFunctions& functions) {
   for (func::FuncOp function : {functions.evaluate, functions.preprocess}) {
     if (!function) continue;
@@ -267,8 +263,6 @@ struct SupportValues {
   Value evaluationKeyMap;
 };
 
-// `keyHoldsSecret`: `key` is a `UserInterface<word>*` (a SecretKey, or a
-// PublicKey that a debug build kept as one).
 SupportValues buildSupportValues(OpBuilder& builder, Location loc,
                                  Value context, Value key,
                                  bool keyHoldsSecret) {

@@ -192,10 +192,11 @@ func.func @dec_chain_slots(%enc: !encoder, %ui: !user_interface, %ct: tensor<!ci
 
 // HRot/HConj keep their verbatim form, looking the key up on the EvkMap operand
 // with the secret handle and parameters taken off the context -- so an
-// evaluating process needs no UserInterface. Static distance bakes the distance
-// into the format string; dynamic distance threads the SSA value twice.
+// evaluating process needs no UserInterface. Rotations pass the op's level so
+// the lookup best-fits the key prepared for it. Static distance bakes the
+// distance into the format string; dynamic distance threads the SSA value twice.
 // CHECK: func.func @hrot_static
-// CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey(5, {}->BootSecretId(), {}->param_, -1, KeyMode::kInherit), 5);"
+// CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey(5, {}->BootSecretId(), {}->param_, 4, KeyMode::kInherit), 5);"
 func.func @hrot_static(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
   %r = cheddar.hrot %ctx, %evk, %ct, %d0 {level = 4 : i64, static_distance = 5 : i64} : (!context, !evk_map, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
@@ -203,7 +204,7 @@ func.func @hrot_static(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>)
 }
 
 // CHECK: func.func @hrot_dyn
-// CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey({}, {}->BootSecretId(), {}->param_, -1, KeyMode::kInherit), {});"
+// CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey({}, {}->BootSecretId(), {}->param_, 4, KeyMode::kInherit), {});"
 // CHECK-SAME: %arg3, %arg0, %arg0, %arg3
 func.func @hrot_dyn(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>, %d: index) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
