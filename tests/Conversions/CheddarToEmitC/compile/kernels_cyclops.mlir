@@ -5,6 +5,7 @@
 !encoder = !cheddar.encoder
 !user_interface = !cheddar.user_interface
 !evk_map = !cheddar.evk_map
+!boot_context = !cheddar.boot_context
 !linear_transform = !cheddar.linear_transform
 
 // Rotation and conjugation read the key off the EvkMap with the secret handle
@@ -124,5 +125,27 @@ func.func @apply_prepared_linear_transform(%ctx: !context,
   %0 = cheddar.apply_prepared_linear_transform %ctx, %ct, %evk, %lt, %d0
       : (!context, tensor<!ciphertext>, !evk_map, tensor<!linear_transform>,
          tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %0 : tensor<!ciphertext>
+}
+
+// Bootstrapping. Cyclops names the homomorphic DFT preparation
+// PrepareHomomorphicDFT, and its key preparation takes the secret the keys must
+// match; scale-snu takes neither.
+func.func @prepare_bootstrap(%ctx: tensor<!boot_context>,
+                             %ui: tensor<!user_interface>)
+    -> (tensor<!boot_context>, tensor<!user_interface>) {
+  %new_ctx, %new_ui = cheddar.prepare_bootstrap %ctx, %ui
+      {numSlots = 8 : i64, useCyclopsRuntime}
+      : (tensor<!boot_context>, tensor<!user_interface>)
+      -> (tensor<!boot_context>, tensor<!user_interface>)
+  return %new_ctx, %new_ui : tensor<!boot_context>, tensor<!user_interface>
+}
+
+func.func @boot(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map)
+    -> tensor<!ciphertext> {
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %0 = cheddar.boot %ctx, %ct, %evk, %d0
+      : (!boot_context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>)
+      -> tensor<!ciphertext>
   return %0 : tensor<!ciphertext>
 }

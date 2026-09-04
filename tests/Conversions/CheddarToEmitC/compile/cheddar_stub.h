@@ -29,6 +29,9 @@
 //   * Cyclops' LinearTransform::Evaluate has no min_ks flag, and its
 //     constructor takes the compact plaintext period where scale-snu takes
 //     pre_rotation.
+//   * Cyclops' EvalPoly states the polynomial's parity in the constructor.
+//   * Cyclops names the homomorphic DFT preparation PrepareHomomorphicDFT,
+//     scale-snu PrepareEvalSpecialFFT.
 //
 // Kept deliberately narrow: setup is covered by conversion and opt-in real
 // CHEDDAR compile tests. Getter ops remain unsupported by this lowering.
@@ -58,19 +61,25 @@ struct SecretId {
   int value = -1;
 };
 
-// A batch of rotation-key requests; the transform fills it and the
-// UserInterface turns it into keys. (core/EvkRequest.h)
-class EvkRequest {
- public:
-  EvkRequest() = default;
-};
-
 enum class KeyMode { kInherit, kDefault, kLevelSpecific };
 // kShapeOnly records the BSGS index structure and skips plaintext encoding.
 // (extension/linalg/Hoist.h)
 enum class PlaintextMode { kCompiled, kShapeOnly };
 struct PlaintextCacheConfig {};
+// The polynomial's declared parity, which Cyclops' EvalPoly takes and trusts.
+// (extension/poly/Approximation.h)
+enum class PolynomialParity { kFull, kEven, kOdd };
 #endif
+
+// A batch of rotation-key requests; bootstrap setup and the transforms fill it
+// and the UserInterface turns it into keys. (core/EvkRequest.h)
+class EvkRequest {
+ public:
+  EvkRequest() = default;
+};
+
+// Which bootstrapping variant the homomorphic DFT is prepared for.
+enum class BootVariant { kNormal, kImaginaryRemoving };
 
 // Number-of-primes info a ciphertext carries; the EvalPoly emitter maps it back
 // to a level via Parameter::NPToLevel.
@@ -305,8 +314,15 @@ class MultKeySelector {
 template <typename word>
 class EvalPoly {
  public:
+#ifdef HEIR_CYCLOPS_STUB
+  // Cyclops takes the declared parity second and has no overload without it.
+  EvalPoly(const std::vector<double>& coefficients, PolynomialParity parity,
+           int input_level, double input_scale, double target_scale,
+           bool chebyshev = false);
+#else
   EvalPoly(const std::vector<double>& coefficients, int input_level,
            double input_scale, double target_scale, bool chebyshev = false);
+#endif
   void Compile(ConstContextPtr<word> context);
 #ifdef HEIR_CYCLOPS_STUB
   void Evaluate(ConstContextPtr<word> context, Ciphertext<word>& res,
@@ -327,6 +343,15 @@ class BootContext : public Context<word> {
  public:
   using Ct = Ciphertext<word>;
   void Boot(Ct& res, const Ct& a, const EvkMap<word>& evk_map) const;
+
+  void PrepareEvalMod();
+#ifdef HEIR_CYCLOPS_STUB
+  void PrepareHomomorphicDFT(int num_slots,
+                             BootVariant variant = BootVariant::kNormal);
+#else
+  void PrepareEvalSpecialFFT(int num_slots, BootVariant variant);
+#endif
+  void AddRequiredRotations(EvkRequest& req, int num_slots) const;
 };
 
 }  // namespace cheddar
