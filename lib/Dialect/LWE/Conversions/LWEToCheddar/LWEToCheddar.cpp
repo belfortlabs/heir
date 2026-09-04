@@ -355,7 +355,7 @@ struct ConvertCKKSRescaleOp : public OpConversionPattern<ckks::RescaleOp> {
 };
 
 // Rotate -> cheddar.hrot; the rotation key is looked up from the function's
-// UserInterface operand by the emitter.
+// EvkMap operand by the emitter.
 struct ConvertCKKSRotateOp : public OpConversionPattern<ckks::RotateOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
@@ -363,8 +363,8 @@ struct ConvertCKKSRotateOp : public OpConversionPattern<ckks::RotateOp> {
       ConversionPatternRewriter& rewriter) const override {
     auto ctx = getContextualContext(op.getOperation());
     if (failed(ctx)) return ctx;
-    auto ui = getContextualArg<cheddar::UserInterfaceType>(op.getOperation());
-    if (failed(ui)) return ui;
+    auto evk = getContextualArg<cheddar::EvkMapType>(op.getOperation());
+    if (failed(evk)) return evk;
     Value dynamicShift = adaptor.getDynamicShift();
     IntegerAttr staticShift = op.getStaticShiftAttr();
     if (!staticShift && !dynamicShift)
@@ -396,13 +396,13 @@ struct ConvertCKKSRotateOp : public OpConversionPattern<ckks::RotateOp> {
         makeReusableDest(rewriter, op.getLoc(), resultTy, adaptor.getInput());
     if (dynamicShift) {
       auto result = cheddar::HRotOp::create(
-          rewriter, op.getLoc(), resultTy, ctx.value(), ui.value(),
+          rewriter, op.getLoc(), resultTy, ctx.value(), evk.value(),
           adaptor.getInput(), dest, dynamicShift,
           /*static_distance=*/IntegerAttr(), level);
       rewriter.replaceOp(op, result);
     } else {
       auto result = cheddar::HRotOp::create(
-          rewriter, op.getLoc(), resultTy, ctx.value(), ui.value(),
+          rewriter, op.getLoc(), resultTy, ctx.value(), evk.value(),
           adaptor.getInput(), dest,
           /*dynamic_distance=*/Value(), staticShift, level);
       rewriter.replaceOp(op, result);
@@ -1285,25 +1285,28 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
                                                     context);
 
     // BootContext and the rotation-key map (EvkMap) must be threaded
-    // transitively: a function that (directly or indirectly) calls a function
-    // that bootstraps / needs the key map must itself carry those context
-    // arguments so it can forward them. A per-body walk only sees a function's
-    // own ops (the bootstrap may live in a callee, e.g. @main calling
-    // @main__preprocessed), so propagate both properties to all transitive
-    // callers via a fixed point over the call graph.
+    // transitively: a function that calls a function that bootstraps
+    // needs the right keys.
     DenseMap<func::FuncOp, bool> bootstrapsTransitively;
     DenseMap<func::FuncOp, bool> needsEvkMapTransitively;
+    DenseMap<func::FuncOp, bool> needsUserInterfaceTransitively;
     module->walk([&](func::FuncOp f) {
       bool boots = false;
       bool evk = false;
+      bool secret = false;
       f.walk([&](Operation* inner) {
         if (isa<ckks::BootstrapOp>(inner)) boots = true;
-        if (isa<ckks::BootstrapOp, kernel::LinearTransformOp,
+        if (isa<ckks::BootstrapOp, ckks::RotateOp, kernel::LinearTransformOp,
                 kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>(inner))
           evk = true;
+        if (isa<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp>(inner)) secret = true;
+        if (auto call = dyn_cast<func::CallOp>(inner);
+            call && isDebugPort(call.getCallee()))
+          secret = true;
       });
       bootstrapsTransitively[f] = boots;
       needsEvkMapTransitively[f] = evk;
+      needsUserInterfaceTransitively[f] = secret;
     });
     bool changed = true;
     while (changed) {
@@ -1320,6 +1323,11 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
         if (needsEvkMapTransitively[callee.value()] &&
             !needsEvkMapTransitively[caller]) {
           needsEvkMapTransitively[caller] = true;
+          changed = true;
+        }
+        if (needsUserInterfaceTransitively[callee.value()] &&
+            !needsUserInterfaceTransitively[caller]) {
+          needsUserInterfaceTransitively[caller] = true;
           changed = true;
         }
       });
@@ -1344,6 +1352,11 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
       auto funcOp = dyn_cast<func::FuncOp>(op);
       return funcOp && needsEvkMapTransitively.lookup(funcOp);
     };
+    auto needsUserInterface =
+        [&needsUserInterfaceTransitively](Operation* op) -> bool {
+      auto funcOp = dyn_cast<func::FuncOp>(op);
+      return funcOp && needsUserInterfaceTransitively.lookup(funcOp);
+    };
     auto funcBootstraps = [&bootstrapsTransitively](Operation* op) -> bool {
       auto funcOp = dyn_cast<func::FuncOp>(op);
       return funcOp && bootstrapsTransitively.lookup(funcOp);
@@ -1358,7 +1371,7 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
         {cheddar::ContextType::get(context), hasContextOps},
         {cheddar::BootContextType::get(context), funcBootstraps},
         {cheddar::EncoderType::get(context), hasCryptoOrEncode},
-        {cheddar::UserInterfaceType::get(context), hasCryptoOps},
+        {cheddar::UserInterfaceType::get(context), needsUserInterface},
         {cheddar::EvalKeyType::get(context), hasCryptoOps},
         {cheddar::EvkMapType::get(context), needsEvkMap},
     };
@@ -1416,7 +1429,7 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
           containsArgumentOfType<cheddar::ContextType, cheddar::BootContextType,
                                  cheddar::EncoderType,
                                  cheddar::UserInterfaceType,
-                                 cheddar::EvalKeyType>(op);
+                                 cheddar::EvalKeyType, cheddar::EvkMapType>(op);
       bool hasCryptoArg =
           containsArgumentOfDialect<lwe::LWEDialect, ckks::CKKSDialect>(op);
       bool hasEncodeOp = false;

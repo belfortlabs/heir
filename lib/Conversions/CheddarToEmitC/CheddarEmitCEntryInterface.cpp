@@ -162,6 +162,17 @@ bool isSupportArgument(Type type) {
          name.contains("EvaluationKey<word>") || name.contains("EvkMap<word>");
 }
 
+// A serving process runs on evkMap instead of UserInterface and holds no secret --
+// unless evaluation still needs a UserInterface (e.g. debug mode).
+bool evaluationNeedsSecret(const EntryFunctions& functions) {
+  for (func::FuncOp function : {functions.evaluate, functions.preprocess}) {
+    if (!function) continue;
+    for (Type type : function.getArgumentTypes())
+      if (isUserInterfacePointer(type)) return true;
+  }
+  return false;
+}
+
 std::string contextTypeName(const EntryFunctions& functions) {
   bool hasContext = false;
   SmallVector<func::FuncOp> candidates;
@@ -253,7 +264,8 @@ struct SupportValues {
 };
 
 SupportValues buildSupportValues(OpBuilder& builder, Location loc,
-                                 Value context, Value key) {
+                                 Value context, Value key,
+                                 bool keyHoldsSecret) {
   auto* ctx = builder.getContext();
   SupportValues values;
   Type contextPointer = PointerType::get(OpaqueType::get(ctx, "Context"));
@@ -266,26 +278,45 @@ SupportValues buildSupportValues(OpBuilder& builder, Location loc,
           builder, loc, TypeRange{OpaqueType::get(ctx, "const Encoder<word>&")},
           "heir::getEncoder", context)
           .getResult(0);
-  Type uiPointer =
+  if (keyHoldsSecret) {
+    // Debug path
+    Type uiPointer =
       PointerType::get(OpaqueType::get(ctx, "UserInterface<word>"));
-  values.userInterface =
+    values.userInterface =
       CallOpaqueOp::create(builder, loc, TypeRange{uiPointer},
                            "static_cast<UserInterface<word>*>", key)
           .getResult(0);
-  values.evaluationKey =
+    values.evaluationKey =
       MemberCallOpaqueOp::create(
           builder, loc,
           TypeRange{OpaqueType::get(ctx, "const EvaluationKey<word>&")},
           values.userInterface, "GetMultiplicationKey", ArrayAttr{},
           ArrayAttr{}, ValueRange{})
           .getResult(0);
-  values.evaluationKeyMap =
+    values.evaluationKeyMap =
       MemberCallOpaqueOp::create(
           builder, loc, TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
           values.userInterface, "GetEvkMap", ArrayAttr{}, ArrayAttr{},
           ValueRange{})
           .getResult(0);
-  return values;
+    return values;
+  } else {
+    // Production path
+    values.evaluationKeyMap =
+        CallOpaqueOp::create(
+            builder, loc, TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
+            "heir::deref", key)
+            .getResult(0);
+    values.evaluationKey =
+        CallOpaqueOp::create(
+            builder, loc,
+            TypeRange{OpaqueType::get(ctx, "const EvaluationKey<word>&")},
+            "heir::multiplicationKey",
+            ValueRange{values.evaluationKeyMap, context})
+            .getResult(0);
+    return values;
+  }
+
 }
 
 Value getSupportValue(Type expectedType, const SupportValues& values) {
@@ -536,7 +567,8 @@ LogicalResult addSetupDefinition(OpBuilder& builder, Location loc,
 
 LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
                                   EntryFunctions& functions,
-                                  Type keyStorageType) {
+                                  Type keyStorageType,
+                                  bool evaluationNeedsSecret) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   auto function = createEmitCFunction(
@@ -559,11 +591,25 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
         OpaqueType::get(ctx, field == "secret_key" ? "SecretKey" : "PublicKey");
     Value member = MemberOp::create(builder, loc, LValueType::get(aliasType),
                                     field, keyPair);
-    Value cast =
-        CallOpaqueOp::create(builder, loc, TypeRange{aliasType},
-                             "static_cast<" + cppTypeName(aliasType) + ">", ui)
-            .getResult(0);
-    emitc::AssignOp::create(builder, loc, member, cast);
+    Value value;
+    if (field == "public_key" && !evaluationNeedsSecret) {
+      // The map lives inside the UserInterface `storage` owns, so the pointer
+      // is good for as long as the KeyPair is.
+      Value map = MemberCallOpaqueOp::create(
+                      builder, loc,
+                      TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")}, ui,
+                      "GetEvkMap", ArrayAttr{}, ArrayAttr{}, ValueRange{})
+                      .getResult(0);
+      value = CallOpaqueOp::create(builder, loc, TypeRange{aliasType},
+                                   "std::addressof", map)
+                  .getResult(0);
+    } else {
+      value = CallOpaqueOp::create(builder, loc, TypeRange{aliasType},
+                                   "static_cast<" + cppTypeName(aliasType) + ">",
+                                   ui)
+                  .getResult(0);
+    }
+    emitc::AssignOp::create(builder, loc, member, value);
   }
   ReturnOp::create(builder, loc, moveValue(builder, loc, keyPair, "KeyPair"));
   return success();
@@ -572,7 +618,8 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
 LogicalResult addPreprocessDefinition(OpBuilder& builder, Location loc,
                                       EntryFunctions& functions,
                                       ArrayRef<Type> preparedFields,
-                                      bool takesResourceDirectory) {
+                                      bool takesResourceDirectory,
+                                      bool evaluationNeedsSecret) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   SmallVector<Type> inputs{OpaqueType::get(ctx, "Context&"),
@@ -582,8 +629,10 @@ LogicalResult addPreprocessDefinition(OpBuilder& builder, Location loc,
       createEmitCFunction(builder, loc, "Preprocess", inputs,
                           {OpaqueType::get(ctx, "PreparedInputs")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
-  SupportValues support = buildSupportValues(
-      builder, loc, function.getArgument(0), function.getArgument(1));
+  SupportValues support =
+      buildSupportValues(builder, loc, function.getArgument(0),
+                         function.getArgument(1),
+                         /*keyHoldsSecret=*/evaluationNeedsSecret);
   Value prepared = createLocal(builder, loc, "PreparedInputs");
   if (!functions.preprocess) {
     ReturnOp::create(builder, loc,
@@ -631,8 +680,9 @@ LogicalResult addEncryptDefinition(OpBuilder& builder, Location loc,
       createEmitCFunction(builder, loc, "Encrypt", inputs,
                           {OpaqueType::get(ctx, "EncryptedInputs")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
-  SupportValues support = buildSupportValues(
-      builder, loc, function.getArgument(0), function.getArgument(1));
+  SupportValues support =
+      buildSupportValues(builder, loc, function.getArgument(0),
+                         function.getArgument(1), /*keyHoldsSecret=*/true);
   Value encrypted = createLocal(builder, loc, "EncryptedInputs");
   for (unsigned input = 0; input < logicalInputs.size(); ++input) {
     Type cleartextType = OpaqueType::get(ctx, "Input" + std::to_string(input));
@@ -697,7 +747,8 @@ LogicalResult addEvaluateDefinition(OpBuilder& builder, Location loc,
                                     EntryFunctions& functions,
                                     ArrayRef<Type> preparedFields,
                                     ArrayRef<Type> encryptedInputFields,
-                                    ArrayRef<Type> encryptedOutputFields) {
+                                    ArrayRef<Type> encryptedOutputFields,
+                                    bool evaluationNeedsSecret) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   auto function = createEmitCFunction(
@@ -707,8 +758,10 @@ LogicalResult addEvaluateDefinition(OpBuilder& builder, Location loc,
        OpaqueType::get(ctx, "const EncryptedInputs&")},
       {OpaqueType::get(ctx, "EncryptedOutputs")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
-  SupportValues support = buildSupportValues(
-      builder, loc, function.getArgument(0), function.getArgument(1));
+  SupportValues support =
+      buildSupportValues(builder, loc, function.getArgument(0),
+                         function.getArgument(1),
+                         /*keyHoldsSecret=*/evaluationNeedsSecret);
   Value outputs = createLocal(builder, loc, "EncryptedOutputs");
   SmallVector<Value> arguments;
   unsigned encryptedInput = 0;
@@ -762,8 +815,9 @@ LogicalResult addDecryptDefinition(OpBuilder& builder, Location loc,
        OpaqueType::get(ctx, "const EncryptedOutputs&")},
       {publicResultType}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
-  SupportValues support = buildSupportValues(
-      builder, loc, function.getArgument(0), function.getArgument(1));
+  SupportValues support =
+      buildSupportValues(builder, loc, function.getArgument(0),
+                         function.getArgument(1), /*keyHoldsSecret=*/true);
   SmallVector<Value> clearOutputs;
   for (unsigned index = 0; index < logicalOutputNames.size(); ++index)
     clearOutputs.push_back(
@@ -955,9 +1009,14 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
   emitVerbatim(builder, loc,
                "using SecretKey = ::" + runtimeNamespaceName +
                    "::UserInterface<word>*;");
+  // See `evaluationNeedsSecret`: key-only unless evaluation must decrypt.
+  const bool needsSecret = evaluationNeedsSecret(functions);
   emitVerbatim(builder, loc,
-               "using PublicKey = ::" + runtimeNamespaceName +
-                   "::UserInterface<word>*;");
+               "using PublicKey = " +
+                   std::string(needsSecret ? "::" + runtimeNamespaceName +
+                                                 "::UserInterface<word>*;"
+                                           : "const ::" + runtimeNamespaceName +
+                                                 "::EvkMap<word>*;"));
   for (auto [index, name] : llvm::enumerate(inputNames))
     emitVerbatim(builder, loc,
                  "using Input" + std::to_string(index) + " = " + name + ";");
@@ -1011,14 +1070,14 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
 
   if (failed(addSetupDefinition(builder, loc, functions)) ||
       failed(addKeygenDefinition(builder, loc, functions,
-                                 keygenDestinations.front())) ||
+                                 keygenDestinations.front(), needsSecret)) ||
       failed(addPreprocessDefinition(builder, loc, functions, preparedFields,
-                                     takesResourceDirectory)) ||
+                                     takesResourceDirectory, needsSecret)) ||
       failed(addEncryptDefinition(builder, loc, functions, logicalInputs,
                                   encryptedInputFields)) ||
       failed(addEvaluateDefinition(builder, loc, functions, preparedFields,
-                                   encryptedInputFields,
-                                   encryptedOutputFields)) ||
+                                   encryptedInputFields, encryptedOutputFields,
+                                   needsSecret)) ||
       failed(addDecryptDefinition(builder, loc, functions,
                                   encryptedOutputFields, outputNames,
                                   publicResultType)))

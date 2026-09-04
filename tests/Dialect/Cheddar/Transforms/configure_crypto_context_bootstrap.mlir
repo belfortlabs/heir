@@ -15,7 +15,7 @@ module attributes {
 } {
   func.func @main(%ctx: !boot_context, %ui: !ui, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
     %rotDest = bufferization.alloc_tensor() : tensor<!ciphertext>
-    %rotated = cheddar.hrot %ctx, %ui, %ct, %rotDest {level = 13 : i64, static_distance = 7 : i64} : (!boot_context, !ui, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+    %rotated = cheddar.hrot %ctx, %evk, %ct, %rotDest {level = 13 : i64, static_distance = 7 : i64} : (!boot_context, !evk_map, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
     %dest = bufferization.alloc_tensor() : tensor<!ciphertext>
     %result = cheddar.boot %ctx, %rotated, %evk, %dest : (!boot_context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
     return %result : tensor<!ciphertext>

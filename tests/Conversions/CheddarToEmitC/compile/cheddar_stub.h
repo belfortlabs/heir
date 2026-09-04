@@ -42,6 +42,14 @@ struct NPInfo {
 
 // Minimal parameter stub: the EvalPoly emitter reads the level/q-product via
 // NPToLevel / GetRescalePrimeProd (mirroring EvalMod).
+// The secret a key was built for, and the key-mode selector: what the emitted
+// rotation/conjugation lookups pass when they read keys off the EvkMap with the
+// secret handle and the parameters taken from the context.
+struct SecretId {
+  int value = 0;
+};
+enum class KeyMode { kInherit };
+
 template <typename word>
 struct Parameter {
   double GetScale(int level) const;
@@ -107,6 +115,13 @@ struct EvkMap {
   const EvaluationKey<word>& GetRotationKey(int) const;
   const EvaluationKey<word>& GetConjugationKey() const;
   const EvaluationKey<word>& GetMultiplicationKey() const;
+  // The real map's lookups, which the emitter calls directly so an evaluating
+  // process needs no UserInterface.
+  const EvaluationKey<word>& GetRotationKey(int rot_idx, SecretId secret,
+                                            const Parameter<word>& param,
+                                            int level, KeyMode key_mode) const;
+  const EvaluationKey<word>& GetConjugationKey(SecretId secret) const;
+  const EvaluationKey<word>& GetMultiplicationKey(SecretId secret) const;
 };
 
 class StripedMatrix {
@@ -186,8 +201,10 @@ class Context {
   // reference. This is the crux of the mad_unsafe finding.
   void MadUnsafe(Ct& res, const Ct& a, const Const& b) const;
 
-  // The EvalPoly emitter reads the canonical scale from here.
+  // The EvalPoly emitter reads the canonical scale from here; the key lookups
+  // read the parameters and the boot secret's handle.
   Parameter<word> param_;
+  SecretId BootSecretId() const;
 };
 
 // ConstContextPtr is a non-owning shared_ptr aliased onto the raw Context*.
