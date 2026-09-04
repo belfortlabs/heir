@@ -766,6 +766,7 @@ CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
     configureOptions.logMessageRatio =
         options.logMessageRatio < 0 && useCyclops ? 4 : options.logMessageRatio;
     configureOptions.prepareRotationKeysAtUseLevels = useCyclops;
+    configureOptions.useCyclopsRuntime = useCyclops;
     pm.addPass(cheddar::createCheddarConfigureCryptoContext(configureOptions));
 
     pm.addPass(createRemoveUnusedPureCall());

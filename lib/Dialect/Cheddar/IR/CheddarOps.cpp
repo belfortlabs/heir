@@ -71,6 +71,10 @@ LinearTransformRotationPlan linearTransformRotationPlan(
 SmallVector<OpFoldResult> requiredLinearTransformRotations(
     Operation* op, DenseI32ArrayAttr diagonals, int64_t width, int64_t bs,
     int64_t gs, bool minKs) {
+  // bs = gs = 0 hands the split to the runtime's own planner, so the baby and
+  // giant steps are not known here. `cheddar.prepare_linear_transform_keys`
+  // asks the runtime for them at key-generation time instead.
+  if (bs == 0 && gs == 0) return {};
   LinearTransformRotationPlan plan =
       linearTransformRotationPlan(diagonals, width, bs);
   llvm::DenseSet<int64_t> required;
@@ -118,7 +122,12 @@ LogicalResult verifyLinearTransformShape(Operation* op, ShapedType diagonals,
     return op->emitOpError("diagonal width must be a positive power of two");
   if (indices.size() < 2)
     return op->emitOpError("requires at least two non-zero diagonals");
-  if (bs <= 0 || gs <= 0) return op->emitOpError("bs and gs must be positive");
+  // (0, 0) is the "runtime plans the split" encoding; any other non-positive
+  // value is a malformed grid.
+  bool runtimePlans = bs == 0 && gs == 0;
+  if (!runtimePlans && (bs <= 0 || gs <= 0))
+    return op->emitOpError("bs and gs must be positive, or both zero to let "
+                           "the runtime plan the split");
 
   int64_t stride = 0;
   int64_t maxRotation = 0;
@@ -132,9 +141,13 @@ LogicalResult verifyLinearTransformShape(Operation* op, ShapedType diagonals,
   }
   if (stride == 0)
     return op->emitOpError("requires at least one non-zero diagonal index");
-  if (maxRotation > (bs * gs - 1) * stride)
+  if (!runtimePlans && maxRotation > (bs * gs - 1) * stride)
     return op->emitOpError("bs/gs cannot represent the maximum diagonal index");
-  if (minKs &&
+  if (runtimePlans && minKs)
+    return op->emitOpError(
+        "min_ks needs a known baby/giant split, so it cannot be combined with "
+        "a runtime-planned grid");
+  if (minKs && !runtimePlans &&
       !linearTransformRotationPlan(indices, width, bs).supportsMinKs(bs, gs))
     return op->emitOpError(
         "min_ks requires complete non-zero baby- and giant-step progressions");
@@ -198,6 +211,23 @@ LogicalResult PrepareLinearTransformOp::verify() {
                                     getDiagonalIndicesAttr(),
                                     getSourceRowIndicesAttr(), getBs().getInt(),
                                     getGs().getInt(), getMinKs());
+}
+
+LogicalResult PrepareLinearTransformKeysOp::verify() {
+  int64_t width = getWidth().getInt();
+  if (width <= 0 || (width & (width - 1)) != 0)
+    return emitOpError("width must be a positive power of two");
+  if (getLevel().getInt() <= 0)
+    return emitOpError("requires an input level above zero");
+  llvm::DenseSet<int64_t> seen;
+  for (int64_t rotation :
+       normalizedRotations(getDiagonalIndicesAttr(), width)) {
+    if (!seen.insert(rotation).second)
+      return emitOpError("duplicate normalized diagonal index ") << rotation;
+  }
+  if (getDiagonalIndices().empty())
+    return emitOpError("requires at least one diagonal index");
+  return success();
 }
 
 LogicalResult EvalPolyOp::verify() {

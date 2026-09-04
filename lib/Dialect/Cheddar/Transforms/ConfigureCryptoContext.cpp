@@ -35,6 +35,37 @@ namespace {
 constexpr int64_t kBootstrapEvalModLevels = 8;
 constexpr int64_t kMinBootstrapSlots = 256;
 
+struct LinearTransformKeyShape {
+  DenseI32ArrayAttr indices;
+  int64_t width;
+  int64_t level;
+};
+
+SmallVector<LinearTransformKeyShape> collectLinearTransformKeyShapes(
+    ModuleOp moduleOp) {
+  SmallVector<LinearTransformKeyShape> shapes;
+  llvm::SmallDenseSet<std::tuple<Attribute, int64_t, int64_t>> seen;
+  auto record = [&](DenseI32ArrayAttr indices, int64_t width, int64_t level,
+                    int64_t bs, int64_t gs) {
+    if (bs != 0 || gs != 0) return;
+    if (!seen.insert({indices, width, level}).second) return;
+    shapes.push_back({indices, width, level});
+  };
+  moduleOp->walk([&](Operation* op) {
+    if (auto transform = dyn_cast<LinearTransformOp>(op)) {
+      auto diagonals = cast<ShapedType>(transform.getDiagonals().getType());
+      record(transform.getDiagonalIndicesAttr(), diagonals.getDimSize(1),
+             transform.getLevel().getInt(), transform.getBs().getInt(),
+             transform.getGs().getInt());
+    } else if (auto prepare = dyn_cast<PrepareLinearTransformOp>(op)) {
+      record(prepare.getDiagonalIndicesAttr(), prepare.getWidth().getInt(),
+             prepare.getLevel().getInt(), prepare.getBs().getInt(),
+             prepare.getGs().getInt());
+    }
+  });
+  return shapes;
+}
+
 // Build setup and key-generation functions in destination-passing tensor form:
 //   %p   = cheddar.make_parameter ...
 //   %ctx = cheddar.create_context %p, %ctx_init
@@ -63,7 +94,9 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                          bool bootstraps, int64_t bootstrapNumSlots,
                          int64_t numCtsLevels, int64_t numStcLevels,
                          int64_t defaultEncLevel, int64_t denseHammingWeight,
-                         int64_t sparseHammingWeight, int64_t logMessageRatio) {
+                         int64_t sparseHammingWeight, int64_t logMessageRatio,
+                         bool useCyclopsRuntime,
+                         ArrayRef<LinearTransformKeyShape> transformShapes) {
   MLIRContext* ctx = moduleOp.getContext();
   // EvalMod message headroom passed to CHEDDAR's BootParameter. This is the
   // reserved bits for the MESSAGE magnitude (~log2(max|m|)+margin), NOT a
@@ -149,14 +182,26 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   Value ui = CreateUserInterfaceOp::create(builder, loc, TypeRange{uiTensor},
                                            ValueRange{context, uiInit})
                  ->getResult(0);
+  // Cyclops indexes evaluation keys by secret, so its PrepareRotationKey needs
+  // the context to name that secret; scale-snu does not take one.
+  Value keygenCtx = useCyclopsRuntime ? context : Value();
   for (auto [distance, level] : rotationKeys)
-    ui = PrepareRotKeyOp::create(builder, loc, TypeRange{uiTensor}, ui,
-                                 i64(distance), i64(level))
+    ui = PrepareRotKeyOp::create(builder, loc, TypeRange{uiTensor}, keygenCtx,
+                                 ui, i64(distance), i64(level))
+             ->getResult(0);
+  // A runtime-planned transform contributes no distances above; ask the
+  // runtime instead, once per distinct transform shape.
+  for (const LinearTransformKeyShape& shape : transformShapes)
+    ui = PrepareLinearTransformKeysOp::create(
+             builder, loc, TypeRange{uiTensor}, context, ui, shape.indices,
+             i64(shape.width), i64(shape.level))
              ->getResult(0);
   if (bootstraps) {
     auto prepare =
-        PrepareBootstrapOp::create(builder, loc, TypeRange{ctxTensor, uiTensor},
-                                   context, ui, i64(bootstrapNumSlots));
+        PrepareBootstrapOp::create(
+            builder, loc, TypeRange{ctxTensor, uiTensor}, context, ui,
+            i64(bootstrapNumSlots),
+            useCyclopsRuntime ? builder.getUnitAttr() : UnitAttr{});
     context = prepare->getResult(0);
     ui = prepare->getResult(1);
   }
@@ -330,7 +375,9 @@ struct CheddarConfigureCryptoContext
     buildConfigureFuncs(moduleOp, entry, logN, logDefaultScale, Q, P,
                         rotationKeys, bootstraps, bootstrapNumSlots, bootNumCts,
                         bootNumStc, defaultEncLevel, denseHammingWeight,
-                        sparseHammingWeight, logMessageRatio);
+                        sparseHammingWeight, logMessageRatio,
+                        useCyclopsRuntime,
+                        collectLinearTransformKeyShapes(moduleOp));
 
     moduleOp->removeAttr(ckks::CKKSDialect::kSchemeParamAttrName);
     moduleOp->removeAttr("scheme.ckks");
