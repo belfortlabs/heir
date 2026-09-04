@@ -595,18 +595,21 @@ struct ConvertPrepareBootstrap
     Value context = adaptor.getCtx();
     VerbatimOp::create(rewriter, op.getLoc(), "{}->PrepareEvalMod();",
                        ValueRange{context});
-    std::string prepareDft = op.getUseCyclopsRuntime()
-                                 ? "{}->PrepareHomomorphicDFT(" + slots +
-                                       ", BootVariant::kImaginaryRemoving);"
-                                 : "{}->PrepareEvalSpecialFFT(" + slots +
-                                       ", BootVariant::kImaginaryRemoving);";
-    VerbatimOp::create(rewriter, op.getLoc(), prepareDft, ValueRange{context});
+    bool cyclops = op.getUseCyclopsRuntime();
+    // The same preparation under two names: scale-snu calls it
+    // PrepareEvalSpecialFFT, Cyclops PrepareHomomorphicDFT.
+    std::string prepareDft =
+        cyclops ? "PrepareHomomorphicDFT" : "PrepareEvalSpecialFFT";
+    VerbatimOp::create(rewriter, op.getLoc(),
+                       "{}->" + prepareDft + "(" + slots +
+                           ", BootVariant::kImaginaryRemoving);",
+                       ValueRange{context});
     VerbatimOp::create(rewriter, op.getLoc(), "EvkRequest boot_evk_req;",
                        ValueRange{});
     VerbatimOp::create(rewriter, op.getLoc(),
                        "{}->AddRequiredRotations(boot_evk_req, " + slots + ");",
                        ValueRange{context});
-    if (op.getUseCyclopsRuntime().value_or(false)) {
+    if (cyclops) {
       VerbatimOp::create(
           rewriter, op.getLoc(),
           "{}->PrepareRotationKey(boot_evk_req, {}->BootSecretId());",
@@ -1094,7 +1097,7 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
          {});
     emit("_ep.Compile(_ep_cp);", {});
     StringRef evaluate =
-        op.getSelectMultKeyAtUseLevel()
+        cyclopsApi
             ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
             : "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
     markDestination(

@@ -195,7 +195,9 @@ def Cheddar_PrepareBootstrapOp : Cheddar_ReadWriteDpsOp<
     uses the context's slot count). Must run after the boot context + user
     interface are created and (for programs that also rotate outside boot) after
     the program's own `prepare_rot_key`s, so all keys land in one EvkMap.
-    With `useCyclopsRuntime` the last call names the secret the keys belong to
+    `useCyclopsRuntime` selects Cyclops' two spellings of that sequence: it
+    names the homomorphic DFT preparation `PrepareHomomorphicDFT`, and the last
+    call names the secret the keys belong to
     (`ui->PrepareRotationKey(req, ctx->BootSecretId())`); see `prepare_rot_key`.
   }];
   let arguments = (ins
