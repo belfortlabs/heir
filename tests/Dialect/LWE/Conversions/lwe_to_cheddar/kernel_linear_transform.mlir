@@ -61,6 +61,8 @@ module attributes {backend.cheddar, ckks.schemeParam = #ckks.scheme_param<logN =
   // CHECK-SAME: source_row_indices = array<i32: 0, 2, 4>
   // CYCLOPS: func.func @prepare_linear_transform(
   // CYCLOPS: cheddar.prepare_linear_transform
+  // CYCLOPS-SAME: bs = 0 : i64
+  // CYCLOPS-SAME: gs = 0 : i64
   // CYCLOPS-SAME: log_pt_size_per_prime = 4 : i64
   func.func @prepare_linear_transform(%diagonals: tensor<5x8xf64>) -> !prepared {
     %0 = kernel.prepare_linear_transform %diagonals {diagonal_indices = array<i64: 0, 1, 3>, source_row_indices = array<i64: 0, 2, 4>} : tensor<5x8xf64> -> !prepared
@@ -75,10 +77,13 @@ module attributes {backend.cheddar, ckks.schemeParam = #ckks.scheme_param<logN =
     return %0 : !ct_out
   }
 
+  // Cyclops plans its own baby/giant split and offers no way to pin one, so the
+  // grid is handed over as (0, 0) and the keys are requested from the runtime
+  // in key generation instead.
   // CYCLOPS: func.func @sparse_linear_transform
   // CYCLOPS: cheddar.linear_transform
-  // CYCLOPS-SAME: bs = 240 : i64
-  // CYCLOPS-SAME: gs = 5 : i64
+  // CYCLOPS-SAME: bs = 0 : i64
+  // CYCLOPS-SAME: gs = 0 : i64
   // CYCLOPS-SAME: log_pt_size_per_prime = 11 : i64
   func.func @sparse_linear_transform(%ct: !ct_in) -> !ct_out {
     %diagonals = arith.constant dense<1.0> : tensor<54x1024xf64>

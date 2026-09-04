@@ -51,6 +51,34 @@ func.func @configure() -> (tensor<!context>, tensor<!user_interface>) {
   return %context, %prepared : tensor<!context>, tensor<!user_interface>
 }
 
+// A transform whose split the runtime plans contributes no distances of its
+// own; `prepare_linear_transform_keys` asks the runtime instead, through a
+// shape-only transform over a zero matrix with the same diagonals and width.
+// CHECK: func.func @configure_cyclops
+// CHECK: emitc.verbatim "{}->PrepareRotationKey(3, {}->BootSecretId(), 2);"
+// CHECK: emitc.verbatim "{"
+// CHECK: emitc.verbatim "ConstContextPtr<word> _ltk_cp(ConstContextPtr<word>(), {});"
+// CHECK: emitc.verbatim "StripedMatrix _ltk_matrix(8, 8);"
+// CHECK: emitc.verbatim "_ltk_matrix[0] = std::vector<Complex>(8, Complex(0.0, 0.0));"
+// CHECK: emitc.verbatim "_ltk_matrix[3] = std::vector<Complex>(8, Complex(0.0, 0.0));"
+// CHECK: emitc.verbatim "LinearTransform<word> _ltk(_ltk_cp, _ltk_matrix, 1, {}->param_.GetScale(1), 0, 0, -1, PlaintextCacheConfig(), KeyMode::kInherit, PlaintextMode::kShapeOnly);"
+// CHECK: emitc.verbatim "EvkRequest _ltk_req;"
+// CHECK: emitc.verbatim "_ltk.AddRequiredRotations(_ltk_req);"
+// CHECK: emitc.verbatim "{}->PrepareRotationKey(_ltk_req, {}->BootSecretId());"
+// CHECK: emitc.verbatim "}"
+func.func @configure_cyclops() -> (tensor<!context>, tensor<!user_interface>) {
+  %p = cheddar.make_parameter {logN = 14 : i64, logScale = 45 : i64, mainPrimes = array<i64: 1, 2, 3>, auxPrimes = array<i64: 4, 5>} : !parameter
+  %context_dest = tensor.empty() : tensor<!context>
+  %context = cheddar.create_context %p, %context_dest : (!parameter, tensor<!context>) -> tensor<!context>
+  %ui_dest = tensor.empty() : tensor<!user_interface>
+  %ui = cheddar.create_user_interface %context, %ui_dest : (tensor<!context>, tensor<!user_interface>) -> tensor<!user_interface>
+  %prepared = cheddar.prepare_rot_key %context, %ui {distance = 3 : i64, maxLevel = 2 : i64} : (tensor<!context>, tensor<!user_interface>) -> tensor<!user_interface>
+  %keys = cheddar.prepare_linear_transform_keys %context, %prepared
+      {diagonal_indices = array<i32: 0, 3>, width = 8 : i64, level = 1 : i64}
+      : (tensor<!context>, tensor<!user_interface>) -> tensor<!user_interface>
+  return %context, %keys : tensor<!context>, tensor<!user_interface>
+}
+
 // A two-op chain: each op is `ctx->Method(out, a, b)`. The first op's result is
 // an intermediate local (`emitc.variable`); the second writes the function
 // out-param. Inputs are `const Ciphertext<word>&`, the out-param is mutable.
@@ -173,6 +201,21 @@ func.func @dec_chain(%enc: !encoder, %ui: !user_interface, %ct: tensor<!cipherte
 func.func @enc_chain_slots(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
   %dp = tensor.empty() : tensor<!plaintext>
   %pt = cheddar.encode %enc, %msg, %dp {level = 5 : i64, logScale = 37 : i64, useSlotsApi} : (!encoder, tensor<4xf64>, tensor<!plaintext>) -> tensor<!plaintext>
+  %dc = tensor.empty() : tensor<!ciphertext>
+  %ct = cheddar.encrypt %ui, %pt, %dc : (!user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %ct : tensor<!ciphertext>
+}
+
+// Cyclops containers start untagged and Encrypt rejects an untagged plaintext,
+// so a `$ctx` operand makes encode tag it first, with the same secret
+// UserInterface::EncryptMessage uses.
+// CHECK: func.func @enc_chain_tagged
+// CHECK: emitc.verbatim "{}.SetSecretId({}->BootSecretId());"
+// CHECK: emitc.verbatim "{}.EncodeSlots({}, 5, {}.GetScale(5), {});"
+// CHECK: emitc.member_call_opaque %arg3 "Encrypt"
+func.func @enc_chain_tagged(%ctx: !context, %enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
+  %dp = tensor.empty() : tensor<!plaintext>
+  %pt = cheddar.encode %ctx, %enc, %msg, %dp {level = 5 : i64, logScale = 37 : i64, useSlotsApi} : (!context, !encoder, tensor<4xf64>, tensor<!plaintext>) -> tensor<!plaintext>
   %dc = tensor.empty() : tensor<!ciphertext>
   %ct = cheddar.encrypt %ui, %pt, %dc : (!user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   return %ct : tensor<!ciphertext>

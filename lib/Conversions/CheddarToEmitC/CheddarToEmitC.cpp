@@ -486,11 +486,71 @@ struct ConvertPrepareRotKey
   LogicalResult matchAndRewrite(
       cheddar::PrepareRotKeyOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
+    // Cyclops takes the secret handle the key must match, in the second
+    // position; scale-snu takes (distance, maxLevel). A `$ctx` operand selects
+    // the Cyclops form.
+    if (Value ctx = adaptor.getCtx()) {
+      VerbatimOp::create(rewriter, op.getLoc(),
+                         "{}->PrepareRotationKey(" +
+                             intLit(op.getDistanceAttr()) +
+                             ", {}->BootSecretId(), " +
+                             intLit(op.getMaxLevelAttr()) + ");",
+                         ValueRange{adaptor.getUi(), ctx});
+      rewriter.eraseOp(op);
+      return success();
+    }
     VerbatimOp::create(rewriter, op.getLoc(),
                        "{}->PrepareRotationKey(" +
                            intLit(op.getDistanceAttr()) + ", " +
                            intLit(op.getMaxLevelAttr()) + ");",
                        ValueRange{adaptor.getUi()});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct ConvertPrepareLinearTransformKeys
+    : public OpConversionPattern<cheddar::PrepareLinearTransformKeysOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      cheddar::PrepareLinearTransformKeysOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    Location loc = op.getLoc();
+    Value ctx = adaptor.getCtx();
+    std::string width = intLit(op.getWidthAttr());
+    std::string lvl = intLit(op.getLevelAttr());
+    VerbatimOp::create(rewriter, loc, "{", ValueRange{});
+    VerbatimOp::create(
+        rewriter, loc,
+        "ConstContextPtr<word> _ltk_cp(ConstContextPtr<word>(), {});",
+        ValueRange{ctx});
+    VerbatimOp::create(
+        rewriter, loc,
+        "StripedMatrix _ltk_matrix(" + width + ", " + width + ");",
+        ValueRange{});
+    // Only the set of diagonal keys and the width steer the planner, so the
+    // diagonals themselves stay zero.
+    for (int32_t index : op.getDiagonalIndices())
+      VerbatimOp::create(rewriter, loc,
+                         "_ltk_matrix[" + std::to_string(index) +
+                             "] = std::vector<Complex>(" + width +
+                             ", Complex(0.0, 0.0));",
+                         ValueRange{});
+    VerbatimOp::create(
+        rewriter, loc,
+        "LinearTransform<word> _ltk(_ltk_cp, _ltk_matrix, " + lvl +
+            ", {}->param_.GetScale(" + lvl +
+            "), 0, 0, -1, PlaintextCacheConfig(), KeyMode::kInherit, "
+            "PlaintextMode::kShapeOnly);",
+        ValueRange{ctx});
+    VerbatimOp::create(rewriter, loc, "EvkRequest _ltk_req;", ValueRange{});
+    VerbatimOp::create(rewriter, loc, "_ltk.AddRequiredRotations(_ltk_req);",
+                       ValueRange{});
+    VerbatimOp::create(
+        rewriter, loc,
+        "{}->PrepareRotationKey(_ltk_req, {}->BootSecretId());",
+        ValueRange{adaptor.getUi(), ctx});
+    VerbatimOp::create(rewriter, loc, "}", ValueRange{});
     rewriter.eraseOp(op);
     return success();
   }
@@ -526,8 +586,13 @@ struct ConvertPrepareBootstrap
     Value context = adaptor.getCtx();
     VerbatimOp::create(rewriter, op.getLoc(), "{}->PrepareEvalMod();",
                        ValueRange{context});
+    bool cyclops = op.getUseCyclopsRuntime().value_or(false);
+    // The same preparation under two names: scale-snu calls it
+    // PrepareEvalSpecialFFT, Cyclops PrepareHomomorphicDFT.
+    std::string prepareDft =
+        cyclops ? "PrepareHomomorphicDFT" : "PrepareEvalSpecialFFT";
     VerbatimOp::create(rewriter, op.getLoc(),
-                       "{}->PrepareEvalSpecialFFT(" + slots +
+                       "{}->" + prepareDft + "(" + slots +
                            ", BootVariant::kImaginaryRemoving);",
                        ValueRange{context});
     VerbatimOp::create(rewriter, op.getLoc(), "EvkRequest boot_evk_req;",
@@ -535,9 +600,16 @@ struct ConvertPrepareBootstrap
     VerbatimOp::create(rewriter, op.getLoc(),
                        "{}->AddRequiredRotations(boot_evk_req, " + slots + ");",
                        ValueRange{context});
-    VerbatimOp::create(rewriter, op.getLoc(),
-                       "{}->PrepareRotationKey(boot_evk_req);",
-                       ValueRange{adaptor.getUi()});
+    if (cyclops) {
+      VerbatimOp::create(
+          rewriter, op.getLoc(),
+          "{}->PrepareRotationKey(boot_evk_req, {}->BootSecretId());",
+          ValueRange{adaptor.getUi(), context});
+    } else {
+      VerbatimOp::create(rewriter, op.getLoc(),
+                         "{}->PrepareRotationKey(boot_evk_req);",
+                         ValueRange{adaptor.getUi()});
+    }
     rewriter.eraseOp(op);
     return success();
   }
@@ -575,6 +647,10 @@ struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
         rewriter, op.getLoc(),
         "{} = " + vecType + "({}, {} + " + std::to_string(n) + ");",
         ValueRange{vec, begin, begin});
+    if (Value ctx = adaptor.getCtx())
+      VerbatimOp::create(rewriter, op.getLoc(),
+                         "{}.SetSecretId({}->BootSecretId());",
+                         ValueRange{out, ctx});
     // TODO(#2364): Use scale from op once HEIR can do precise scale tracking.
     std::string scale = "{}.GetScale(" + lvl + ")";
     SmallVector<Value> operands{adaptor.getEncoder(), out,
@@ -991,13 +1067,17 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
               Twine(i) + ");",
           {ctxV});
     // Construct (no operands -> the coefficient brace-list is emitted
-    // verbatim).
+    // verbatim). Cyclops takes the polynomial's parity as its second
+    // argument and takes the caller at their word, so HEIR declares
+    // kFull: every term is kept, which is always correct.
+    bool cyclopsApi = op.getSelectMultKeyAtUseLevel().value_or(false);
+    std::string parity = cyclopsApi ? ", PolynomialParity::kFull" : "";
     emit("EvalPoly<word> _ep(" + floatArrayLit(op.getCoefficientsAttr()) +
-             ", _ep_lvl, _ep_is, _ep_ts, true);",
+             parity + ", _ep_lvl, _ep_is, _ep_ts, true);",
          {});
     emit("_ep.Compile(_ep_cp);", {});
     StringRef evaluate =
-        op.getSelectMultKeyAtUseLevel()
+        cyclopsApi
             ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
             : "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
     markDestination(
@@ -1758,8 +1838,8 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
                  ConvertEncode, ConvertEncodeConstant, ConvertDecode,
                  ConvertHRot, ConvertHRotAdd, ConvertHConj, ConvertHConjAdd,
                  ConvertLinearTransform, ConvertPrepareLinearTransform,
-                 ConvertApplyPreparedLinearTransform, ConvertEvalPoly>(
-        typeConverter, ctx);
+                 ConvertApplyPreparedLinearTransform, ConvertEvalPoly,
+                 ConvertPrepareLinearTransformKeys>(typeConverter, ctx);
     patterns.add<ConvertSetupAssign<cheddar::CreateContextOp>>(
         typeConverter, ctx, "Context<word>::Create");
     patterns.add<ConvertSetupAssign<cheddar::CreateUserInterfaceOp>>(

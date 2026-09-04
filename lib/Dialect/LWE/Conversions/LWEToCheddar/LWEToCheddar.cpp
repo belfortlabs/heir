@@ -6,7 +6,6 @@
 #include <limits>
 #include <numeric>
 #include <optional>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -30,7 +29,6 @@
 #include "lib/Utils/RotationUtils.h"
 #include "lib/Utils/TargetUtils.h"
 #include "lib/Utils/Utils.h"
-#include "llvm/include/llvm/ADT/DenseSet.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"           // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"           // from @llvm-project
 #include "llvm/include/llvm/Support/MathExtras.h"      // from @llvm-project
@@ -479,9 +477,19 @@ struct ConvertLWEEncodeOp : public OpConversionPattern<lwe::RLWEEncodeOp> {
     int64_t level = op.getLevel().value();
     Type resultTy = typeConverter->convertType(op.getOutput().getType());
     Value dest = makeEmptyDest(rewriter, op.getLoc(), resultTy);
+    // Cyclops needs the context to tag the plaintext with its secret; the
+    // evaluator injection puts a Context in every function that encodes when
+    // the Cyclops runtime is selected.
+    Value ctx;
+    if (useCyclopsRuntime) {
+      auto contextualCtx = getContextualContext(op.getOperation());
+      if (failed(contextualCtx)) return contextualCtx;
+      ctx = contextualCtx.value();
+    }
     auto result = cheddar::EncodeOp::create(
-        rewriter, op.getLoc(), resultTy, encoder.value(), adaptor.getInput(),
-        dest, rewriter.getI64IntegerAttr(level), op.getScaleAttr(),
+        rewriter, op.getLoc(), resultTy, ctx, encoder.value(),
+        adaptor.getInput(), dest, rewriter.getI64IntegerAttr(level),
+        op.getScaleAttr(),
         useCyclopsRuntime ? rewriter.getUnitAttr() : UnitAttr{});
     rewriter.replaceOp(op, result);
     return success();
@@ -560,65 +568,6 @@ struct LinearTransformPlan {
   std::optional<int64_t> logPtSizePerPrime;
 };
 
-struct BsgsCandidate {
-  int64_t bs;
-  int64_t gs;
-  int64_t babySteps;
-  int64_t giantSteps;
-  int64_t cost;
-};
-
-BsgsCandidate getBsgsCandidate(ArrayRef<int32_t> rotations, int64_t stride,
-                               int64_t steps, int64_t bs) {
-  llvm::DenseSet<int64_t> babySteps;
-  llvm::DenseSet<int64_t> giantSteps;
-  int64_t bucketWidth = stride * bs;
-  for (int32_t rotation : rotations) {
-    int64_t baby = rotation % bucketWidth;
-    babySteps.insert(baby);
-    giantSteps.insert(rotation - baby);
-  }
-  int64_t nonZeroBabySteps =
-      babySteps.size() - static_cast<int64_t>(babySteps.contains(0));
-  int64_t nonZeroGiantSteps =
-      giantSteps.size() - static_cast<int64_t>(giantSteps.contains(0));
-  return BsgsCandidate{bs, (steps + bs - 1) / bs,
-                       static_cast<int64_t>(babySteps.size()),
-                       static_cast<int64_t>(giantSteps.size()),
-                       nonZeroBabySteps + 4 * nonZeroGiantSteps};
-}
-
-FailureOr<std::pair<int64_t, int64_t>> getCyclopsBsgsPlan(
-    Operation* op, ArrayRef<int32_t> rotations, int64_t stride, int64_t steps,
-    double ratio) {
-  constexpr int64_t kMaxBabySteps = 128;
-  constexpr int64_t kMaxGiantSteps = 16;
-
-  std::optional<BsgsCandidate> best;
-  auto score = [ratio](const BsgsCandidate& candidate) {
-    double ratioDistance =
-        std::abs(static_cast<double>(candidate.babySteps) /
-                     static_cast<double>(candidate.giantSteps) -
-                 ratio);
-    return std::tuple(candidate.cost, ratioDistance, candidate.giantSteps,
-                      candidate.babySteps, candidate.bs);
-  };
-  for (int64_t bs = 1; bs <= steps; ++bs) {
-    BsgsCandidate candidate = getBsgsCandidate(rotations, stride, steps, bs);
-    if (candidate.babySteps > kMaxBabySteps ||
-        candidate.giantSteps > kMaxGiantSteps ||
-        candidate.babySteps < 2 * candidate.giantSteps ||
-        candidate.babySteps > 8 * candidate.giantSteps)
-      continue;
-
-    if (!best || score(candidate) < score(*best)) best = candidate;
-  }
-  if (!best)
-    return op->emitOpError(
-        "cannot find a Cyclops-compatible BSGS decomposition");
-  return std::pair(best->bs, best->gs);
-}
-
 DenseI32ArrayAttr convertI64ArrayAttr(PatternRewriter& rewriter,
                                       DenseI64ArrayAttr attr) {
   if (!attr) return nullptr;
@@ -682,9 +631,8 @@ FailureOr<LinearTransformPlan> getLinearTransformPlan(
       1, static_cast<int64_t>(std::ceil(std::sqrt(steps / ratio))));
   int64_t bs = (steps + gs - 1) / gs;
   if (useCyclopsRuntime) {
-    auto plan = getCyclopsBsgsPlan(op, indices, stride, steps, ratio);
-    if (failed(plan)) return failure();
-    std::tie(bs, gs) = *plan;
+    bs = 0;
+    gs = 0;
   }
   auto indicesAttr = rewriter.getDenseI32ArrayAttr(indices);
   return LinearTransformPlan{
@@ -692,7 +640,8 @@ FailureOr<LinearTransformPlan> getLinearTransformPlan(
       width,
       bs,
       gs,
-      enableMinKs && cheddar::supportsMinKs(indicesAttr, width, bs, gs),
+      enableMinKs && !useCyclopsRuntime &&
+          cheddar::supportsMinKs(indicesAttr, width, bs, gs),
       getCompactPlaintextPeriod(width, ringDegree, useCyclopsRuntime)};
 }
 
@@ -1364,8 +1313,11 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     auto hasCryptoOrEncode = [&](Operation* op) {
       return hasCryptoOps(op) || hasEncodeOps(op);
     };
+    // Cyclops encode tags the plaintext with the context's secret, so a
+    // function that only encodes still needs a Context.
     auto hasContextOps = [&](Operation* op) {
-      return hasCryptoOps(op) || hasPrepareLinearTransform(op);
+      return hasCryptoOps(op) || hasPrepareLinearTransform(op) ||
+             (useCyclopsRuntime && hasEncodeOps(op));
     };
     std::vector<std::pair<Type, OpPredicate>> evaluators = {
         {cheddar::ContextType::get(context), hasContextOps},

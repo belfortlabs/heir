@@ -58,6 +58,25 @@ func.func @test_prepare_rot_key(%ui: tensor<!cheddar.user_interface>) -> tensor<
   return %ui2 : tensor<!cheddar.user_interface>
 }
 
+// The Cyclops form: the context operand names the secret the key belongs to.
+// CHECK: @test_prepare_rot_key_with_context
+func.func @test_prepare_rot_key_with_context(%ctx: tensor<!cheddar.context>, %ui: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
+  // CHECK: cheddar.prepare_rot_key
+  // CHECK-SAME: distance = 3
+  %ui2 = cheddar.prepare_rot_key %ctx, %ui {distance = 3 : i64, maxLevel = 10 : i64} : (tensor<!cheddar.context>, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+  return %ui2 : tensor<!cheddar.user_interface>
+}
+
+// CHECK: @test_prepare_linear_transform_keys
+func.func @test_prepare_linear_transform_keys(%ctx: tensor<!cheddar.context>, %ui: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
+  // CHECK: cheddar.prepare_linear_transform_keys
+  // CHECK-SAME: diagonal_indices = array<i32: 0, 3>
+  // CHECK-SAME: level = 1
+  // CHECK-SAME: width = 8
+  %ui2 = cheddar.prepare_linear_transform_keys %ctx, %ui {diagonal_indices = array<i32: 0, 3>, width = 8 : i64, level = 1 : i64} : (tensor<!cheddar.context>, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+  return %ui2 : tensor<!cheddar.user_interface>
+}
+
 // --- Encode / Encrypt / Decrypt ---
 
 // CHECK: @test_encode
