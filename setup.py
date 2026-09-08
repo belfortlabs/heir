@@ -214,7 +214,7 @@ class BuildBazelExtension(build_ext.build_ext):
       else:
         target_arch = platform.machine()
       bazel_argv.append(
-          f"--platforms=@build_bazel_apple_support//platforms:darwin_{target_arch}"
+          f"--platforms=@apple_support//platforms:darwin_{target_arch}"
       )
 
     # Fetch external deps in a separate phase first
