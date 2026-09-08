@@ -71,9 +71,7 @@ bool detectPublicKeyFromClientHelpers(ModuleOp module) {
   return result.wasInterrupted();
 }
 
-// Creates a function that returns a single ciphertext encrypting zero. A new
-// Shared by a zero-encryption helper and the entry argument it feeds, so the
-// two can be paired without re-deriving the order they were appended in.
+// Link each zero-encryption helper to the entry argument it supplies.
 DictionaryAttr encZeroRoleAttr(OpBuilder& builder, func::FuncOp parentFunc,
                                int index) {
   return builder.getDictionaryAttr(
@@ -83,7 +81,7 @@ DictionaryAttr encZeroRoleAttr(OpBuilder& builder, func::FuncOp parentFunc,
                             builder.getI64IntegerAttr(index))});
 }
 
-// function is created for each ciphertext type returned by originalOp and each
+// Creates a zero-encryption helper for each ciphertext type and each
 // mgmt attribute attached to the originalOp, and otherwise duplicate functions
 // are looked up by symbol name. Created functions are tagged with
 // client.enc_zero_func.

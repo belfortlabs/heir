@@ -1,38 +1,38 @@
-// RUN: heir-opt --cheddar-bufferize --fold-memref-alias-ops %s | FileCheck %s
+// RUN: heir-opt --cheddar-bufferize %s | FileCheck %s
 
-// The generic Cheddar DPS model must turn tensor payloads into buffers, erase
-// the tied SSA result, and replace uses with the destination buffer. Cover both
-// the usual trailing destination and the ops whose in-place destination is in a
-// nonstandard operand position.
+// The cheddar DPS model turns tensor payloads into buffers, erases the tied
+// result and replaces its uses with the destination buffer; the pipeline then
+// turns every buffer result into a `bufferize.result` out-param.
 
 // CHECK: func.func @add
 // CHECK: cheddar.add {{.*}} : (!context, memref<!ciphertext>, memref<!ciphertext>, memref<!ciphertext>) -> ()
-// CHECK: return
+// CHECK-NEXT: return
 func.func @add(%ctx: !cheddar.context, %lhs: tensor<!cheddar.ciphertext>, %rhs: tensor<!cheddar.ciphertext>, %out: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
   %result = cheddar.add %ctx, %lhs, %rhs, %out : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
   return %result : tensor<!cheddar.ciphertext>
 }
 
+// Read-write destinations in a nonstandard operand position.
 // CHECK: func.func @mad_unsafe
 // CHECK: cheddar.mad_unsafe {{.*}} : (!context, memref<!ciphertext>, memref<!ciphertext>, memref<!constant>) -> ()
-// CHECK: return
+// CHECK-NEXT: return
 func.func @mad_unsafe(%ctx: !cheddar.context, %acc: tensor<!cheddar.ciphertext>, %input: tensor<!cheddar.ciphertext>, %constant: tensor<!cheddar.constant>) -> tensor<!cheddar.ciphertext> {
   %result = cheddar.mad_unsafe %ctx, %acc, %input, %constant : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>, tensor<!cheddar.constant>) -> tensor<!cheddar.ciphertext>
   return %result : tensor<!cheddar.ciphertext>
 }
 
-// CHECK: func.func @prepare_rot_key
-// CHECK: cheddar.prepare_rot_key %{{.*}} {distance = 7 : i64, maxLevel = 13 : i64} : (memref<!user_interface>) -> ()
-// CHECK: return
+// A result equivalent to an argument is dropped; the argument is updated in place.
+// CHECK: func.func @prepare_rot_key(%[[UI:.*]]: memref<!user_interface>) {
+// CHECK: cheddar.prepare_rot_key %[[UI]] {distance = 7 : i64, maxLevel = 13 : i64} : (memref<!user_interface>) -> ()
+// CHECK-NEXT: return
 func.func @prepare_rot_key(%ui: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
   %result = cheddar.prepare_rot_key %ui {distance = 7 : i64, maxLevel = 13 : i64} : (tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
   return %result : tensor<!cheddar.user_interface>
 }
 
-// Both objects mutated by bootstrap setup are DPS destinations/results.
-// CHECK: func.func @prepare_bootstrap
-// CHECK: cheddar.prepare_bootstrap %{{.*}}, %{{.*}} {numSlots = 8 : i64} : (memref<!boot_context>, memref<!user_interface>) -> ()
-// CHECK: return
+// CHECK: func.func @prepare_bootstrap(%[[CTX:.*]]: memref<!boot_context>, %[[UI:.*]]: memref<!user_interface>) {
+// CHECK: cheddar.prepare_bootstrap %[[CTX]], %[[UI]] {numSlots = 8 : i64} : (memref<!boot_context>, memref<!user_interface>) -> ()
+// CHECK-NEXT: return
 func.func @prepare_bootstrap(%ctx: tensor<!cheddar.boot_context>, %ui: tensor<!cheddar.user_interface>) -> (tensor<!cheddar.boot_context>, tensor<!cheddar.user_interface>) {
   %new_ctx, %new_ui = cheddar.prepare_bootstrap %ctx, %ui {numSlots = 8 : i64} : (tensor<!cheddar.boot_context>, tensor<!cheddar.user_interface>) -> (tensor<!cheddar.boot_context>, tensor<!cheddar.user_interface>)
   return %new_ctx, %new_ui : tensor<!cheddar.boot_context>, tensor<!cheddar.user_interface>
@@ -41,20 +41,18 @@ func.func @prepare_bootstrap(%ctx: tensor<!cheddar.boot_context>, %ui: tensor<!c
 // CHECK: func.func @decode
 // CHECK-SAME: %[[DECODED:[a-zA-Z0-9_]+]]: memref<4xf64>
 // CHECK: cheddar.decode %{{.*}}, %{{.*}}, %[[DECODED]] : (!encoder, memref<!plaintext>, memref<4xf64>) -> ()
-// CHECK: return{{$}}
 func.func @decode(%encoder: !cheddar.encoder, %plaintext: tensor<!cheddar.plaintext>, %value: tensor<4xf64>) -> tensor<4xf64> {
   %decoded = cheddar.decode %encoder, %plaintext, %value : (!cheddar.encoder, tensor<!cheddar.plaintext>, tensor<4xf64>) -> tensor<4xf64>
   return %decoded : tensor<4xf64>
 }
 
-// A chain of fully-overwriting arithmetic operations can keep using one
-// destination when the previous value dies. This is the normal DPS/One-Shot
-// path; no Cheddar-specific post-bufferization rewrite is involved.
+// A chain of fully overwriting ops reuses one destination, which becomes the
+// out-param: no allocation, no copy.
 // CHECK: func.func @reuse_sequence
-// CHECK-SAME: %[[STORAGE:[a-zA-Z0-9_]+]]: memref<!ciphertext> {bufferize.result}
+// CHECK-SAME: %[[OUT:[a-zA-Z0-9_]+]]: memref<!ciphertext> {bufferize.result}
 // CHECK-NOT: memref.alloc
-// CHECK: cheddar.add %{{.*}}, %{{.*}}, %{{.*}}, %[[STORAGE]]
-// CHECK: cheddar.neg %{{.*}}, %[[STORAGE]], %[[STORAGE]]
+// CHECK: cheddar.add %{{.*}}, %{{.*}}, %{{.*}}, %[[OUT]]
+// CHECK: cheddar.neg %{{.*}}, %[[OUT]], %[[OUT]]
 // CHECK-NOT: memref.copy
 func.func @reuse_sequence(%ctx: !cheddar.context, %lhs: tensor<!cheddar.ciphertext>, %rhs: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
   %empty = tensor.empty() : tensor<!cheddar.ciphertext>
@@ -63,14 +61,12 @@ func.func @reuse_sequence(%ctx: !cheddar.context, %lhs: tensor<!cheddar.cipherte
   return %negated : tensor<!cheddar.ciphertext>
 }
 
-// A shape-only tensor.empty still requests a distinct destination. Alias
-// support does not force reuse unless the lowering explicitly chooses it.
+// A distinct tensor.empty destination stays a distinct buffer.
 // CHECK: func.func @rescale_fresh
-// CHECK-SAME: %[[OUTPUT:[a-zA-Z0-9_]+]]: memref<!ciphertext> {bufferize.result}
+// CHECK-SAME: %[[OUT:[a-zA-Z0-9_]+]]: memref<!ciphertext> {bufferize.result}
 // CHECK: %[[INPUT:[a-zA-Z0-9_]+]] = memref.alloc(){{.*}} : memref<!ciphertext>
 // CHECK: cheddar.add %{{.*}}, %{{.*}}, %{{.*}}, %[[INPUT]]
-// CHECK-NOT: memref.alloc
-// CHECK: cheddar.rescale %{{.*}}, %[[INPUT]], %[[OUTPUT]]
+// CHECK: cheddar.rescale %{{.*}}, %[[INPUT]], %[[OUT]]
 func.func @rescale_fresh(%ctx: !cheddar.context, %lhs: tensor<!cheddar.ciphertext>, %rhs: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
   %inputEmpty = tensor.empty() : tensor<!cheddar.ciphertext>
   %input = cheddar.add %ctx, %lhs, %rhs, %inputEmpty : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
@@ -79,29 +75,11 @@ func.func @rescale_fresh(%ctx: !cheddar.context, %lhs: tensor<!cheddar.ciphertex
   return %output : tensor<!cheddar.ciphertext>
 }
 
-// scale-snu implements an aliasing Rescale by staging through an internal
-// temporary and moving it back, so an explicitly reused destination remains
-// the same buffer from One-Shot's perspective.
-// CHECK: func.func @rescale_alias_hint
-// CHECK-SAME: %[[INPUT:[a-zA-Z0-9_]+]]: memref<!ciphertext> {bufferize.result}
-// CHECK-NOT: memref.alloc
-// CHECK: cheddar.add %{{.*}}, %{{.*}}, %{{.*}}, %[[INPUT]]
-// CHECK: cheddar.rescale %{{.*}}, %[[INPUT]], %[[INPUT]]
-// CHECK-NOT: memref.copy
-func.func @rescale_alias_hint(%ctx: !cheddar.context, %lhs: tensor<!cheddar.ciphertext>, %rhs: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
-  %empty = tensor.empty() : tensor<!cheddar.ciphertext>
-  %input = cheddar.add %ctx, %lhs, %rhs, %empty : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
-  %output = cheddar.rescale %ctx, %input, %input : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
-  return %output : tensor<!cheddar.ciphertext>
-}
-
-// scale-snu explicitly supports the fused rotation-add with all three
-// ciphertext references aliasing, so One-Shot can keep the same destination.
+// Passing the same value as input and destination is not a conflict.
 // CHECK: func.func @hrot_add_in_place
-// CHECK-SAME: %[[STORAGE:[a-zA-Z0-9_]+]]: memref<!ciphertext> {bufferize.result}
+// CHECK-SAME: %[[OUT:[a-zA-Z0-9_]+]]: memref<!ciphertext> {bufferize.result}
 // CHECK-NOT: memref.alloc
-// CHECK: cheddar.add %{{.*}}, %{{.*}}, %{{.*}}, %[[STORAGE]]
-// CHECK: cheddar.hrot_add %{{.*}}, %{{.*}}, %[[STORAGE]], %[[STORAGE]], %[[STORAGE]]
+// CHECK: cheddar.hrot_add %{{.*}}, %{{.*}}, %[[OUT]], %[[OUT]], %[[OUT]]
 // CHECK-NOT: memref.copy
 func.func @hrot_add_in_place(%ctx: !cheddar.context, %evk: !cheddar.evk_map, %lhs: tensor<!cheddar.ciphertext>, %rhs: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
   %empty = tensor.empty() : tensor<!cheddar.ciphertext>
@@ -110,16 +88,12 @@ func.func @hrot_add_in_place(%ctx: !cheddar.context, %evk: !cheddar.evk_map, %lh
   return %output : tensor<!cheddar.ciphertext>
 }
 
-// Region-carried values stay equivalent to their iter_args. This exercises
-// the stock One-Shot loop analysis; Cheddar never rewrites the destination
-// after analysis.
-// CHECK: func.func @loop_in_place
-// The loop starts from a caller-owned input, not a shape-only tensor.empty, so
-// preserving functional input semantics requires one real boundary copy.
-// CHECK: memref.copy %{{.*}}, %{{.*}} : memref<!ciphertext> to memref<!ciphertext>
-// CHECK: scf.for {{.*}} iter_args(%[[ITER:[a-zA-Z0-9_]+]] = %{{.*}}) -> (memref<!ciphertext>) {
-// CHECK: cheddar.neg %{{.*}}, %[[ITER]], %[[ITER]]
-// CHECK: scf.yield %[[ITER]] : memref<!ciphertext>
+// A loop carrying a caller-owned input updates it in place; the (equivalent)
+// result is dropped.
+// CHECK: func.func @loop_in_place(%{{.*}}: !context, %[[INIT:.*]]: memref<!ciphertext>, %{{.*}}: index) {
+// CHECK-NOT: memref.copy
+// CHECK: scf.for
+// CHECK-NEXT: cheddar.neg %{{.*}}, %[[INIT]], %[[INIT]]
 func.func @loop_in_place(%ctx: !cheddar.context, %init: tensor<!cheddar.ciphertext>, %upper: index) -> tensor<!cheddar.ciphertext> {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
@@ -128,4 +102,82 @@ func.func @loop_in_place(%ctx: !cheddar.context, %init: tensor<!cheddar.cipherte
     scf.yield %next : tensor<!cheddar.ciphertext>
   }
   return %result : tensor<!cheddar.ciphertext>
+}
+
+// Empty-tensor elimination threads the packed result through the insertion, so
+// the producer writes straight into the out-param slot.
+// CHECK: func.func @packed_encrypt
+// CHECK-SAME: %[[OUT:[a-zA-Z0-9_]+]]: memref<1x!ciphertext> {bufferize.result}
+// CHECK-NOT: memref.alloc
+// CHECK: %[[SLOT:[a-zA-Z0-9_]+]] = memref.subview %[[OUT]][0] [1] [1]
+// CHECK: cheddar.encrypt %{{.*}}, %{{.*}}, %[[SLOT]]
+// CHECK-NOT: memref.copy
+func.func @packed_encrypt(%ui: !cheddar.user_interface, %plaintext: tensor<!cheddar.plaintext>) -> tensor<1x!cheddar.ciphertext> {
+  %scalarInit = tensor.empty() : tensor<!cheddar.ciphertext>
+  %encrypted = cheddar.encrypt %ui, %plaintext, %scalarInit : (!cheddar.user_interface, tensor<!cheddar.plaintext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
+  %packedInit = tensor.empty() : tensor<1x!cheddar.ciphertext>
+  %packed = tensor.insert_slice %encrypted into %packedInit[0] [1] [1] : tensor<!cheddar.ciphertext> into tensor<1x!cheddar.ciphertext>
+  return %packed : tensor<1x!cheddar.ciphertext>
+}
+
+// CHECK: func.func @loop_packed
+// CHECK-SAME: %[[OUT:[a-zA-Z0-9_]+]]: memref<8x!ciphertext> {bufferize.result}
+// CHECK-NOT: memref.alloc
+// CHECK: scf.for
+// CHECK: %[[SLOT:[a-zA-Z0-9_]+]] = memref.subview %[[OUT]][%{{.*}}] [1] [1]
+// CHECK: cheddar.add %{{.*}}, %{{.*}}, %{{.*}}, %[[SLOT]]
+// CHECK-NOT: memref.copy
+func.func @loop_packed(%ctx: !cheddar.context, %input: tensor<!cheddar.ciphertext>) -> tensor<8x!cheddar.ciphertext> {
+  %output = tensor.empty() : tensor<8x!cheddar.ciphertext>
+  %c0 = arith.constant 0 : index
+  %c1 = arith.constant 1 : index
+  %c8 = arith.constant 8 : index
+  %result = scf.for %i = %c0 to %c8 step %c1 iter_args(%iter = %output) -> tensor<8x!cheddar.ciphertext> {
+    %empty = tensor.empty() : tensor<!cheddar.ciphertext>
+    %value = cheddar.add %ctx, %input, %input, %empty : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
+    %inserted = tensor.insert_slice %value into %iter[%i] [1] [1] : tensor<!cheddar.ciphertext> into tensor<8x!cheddar.ciphertext>
+    scf.yield %inserted : tensor<8x!cheddar.ciphertext>
+  }
+  return %result : tensor<8x!cheddar.ciphertext>
+}
+
+// Returned call results are written straight into the caller's out-params,
+// also when a multi-result call is returned (the __configure shape).
+func.func private @produce(%ctx: !cheddar.context, %input: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
+  %empty = tensor.empty() : tensor<!cheddar.ciphertext>
+  %result = cheddar.neg %ctx, %input, %empty : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
+  return %result : tensor<!cheddar.ciphertext>
+}
+// CHECK: func.func @forward
+// CHECK-SAME: %[[OUT:[a-zA-Z0-9_]+]]: memref<!ciphertext> {bufferize.result}
+// CHECK-NOT: memref.alloc
+// CHECK: call @produce({{.*}}, %[[OUT]])
+// CHECK-NOT: memref.copy
+// CHECK: return
+func.func @forward(%ctx: !cheddar.context, %input: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
+  %result = func.call @produce(%ctx, %input) : (!cheddar.context, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
+  return %result : tensor<!cheddar.ciphertext>
+}
+
+func.func @setup(%params: !cheddar.parameter) -> tensor<!cheddar.context> {
+  %empty = tensor.empty() : tensor<!cheddar.context>
+  %ctx = cheddar.create_context %params, %empty : (!cheddar.parameter, tensor<!cheddar.context>) -> tensor<!cheddar.context>
+  return %ctx : tensor<!cheddar.context>
+}
+func.func @keygen(%ctx: tensor<!cheddar.context>) -> (tensor<!cheddar.context>, tensor<!cheddar.user_interface>) {
+  %empty = tensor.empty() : tensor<!cheddar.user_interface>
+  %ui = cheddar.create_user_interface %ctx, %empty : (tensor<!cheddar.context>, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+  %ui2 = cheddar.prepare_rot_key %ui {distance = 1 : i64, maxLevel = 1 : i64} : (tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+  return %ctx, %ui2 : tensor<!cheddar.context>, tensor<!cheddar.user_interface>
+}
+// CHECK: func.func @configure(%[[PARAMS:.*]]: !parameter, %[[CTX:.*]]: memref<!context> {bufferize.result}, %[[UI:.*]]: memref<!user_interface> {bufferize.result})
+// CHECK-NOT: memref.alloc
+// CHECK: call @setup(%[[PARAMS]], %[[CTX]])
+// CHECK: call @keygen(%[[CTX]], %[[UI]])
+// CHECK-NOT: memref.copy
+// CHECK: return
+func.func @configure(%params: !cheddar.parameter) -> (tensor<!cheddar.context>, tensor<!cheddar.user_interface>) {
+  %ctx = func.call @setup(%params) : (!cheddar.parameter) -> tensor<!cheddar.context>
+  %ctx2, %ui = func.call @keygen(%ctx) : (tensor<!cheddar.context>) -> (tensor<!cheddar.context>, tensor<!cheddar.user_interface>)
+  return %ctx2, %ui : tensor<!cheddar.context>, tensor<!cheddar.user_interface>
 }

@@ -49,6 +49,8 @@ using emitc::ReturnOp;
 using emitc::VariableOp;
 using emitc::VerbatimOp;
 
+enum class InterfaceSide { Combined, Client, Server };
+
 std::string sanitizeIdentifier(StringRef value) {
   std::string result;
   result.reserve(value.size());
@@ -147,7 +149,8 @@ bool isContextPointer(Type type) {
   auto pointer = dyn_cast<PointerType>(type);
   if (!pointer) return false;
   StringRef pointee = opaqueName(pointer.getPointee());
-  return pointee == "Context<word>" || pointee == "BootContext<word>";
+  return pointee == "Context<word>" || pointee == "BootContext<word>" ||
+         pointee == "ClientContext<word>";
 }
 
 bool isUserInterfacePointer(Type type) {
@@ -157,13 +160,14 @@ bool isUserInterfacePointer(Type type) {
 
 bool isSupportArgument(Type type) {
   if (isContextPointer(type) || isUserInterfacePointer(type)) return true;
+  if (auto pointer = dyn_cast<PointerType>(type)) type = pointer.getPointee();
   StringRef name = opaqueName(type);
-  return name.contains("Encoder<word>") ||
+  return name.contains("DebugSink") || name.contains("Encoder<word>") ||
          name.contains("EvaluationKey<word>") || name.contains("EvkMap<word>");
 }
 
-// A serving process runs on evkMap instead of UserInterface and holds no secret --
-// unless evaluation still needs a UserInterface (e.g. debug mode).
+// A serving process runs on evkMap instead of UserInterface and holds no secret
+// -- unless evaluation still needs a UserInterface (e.g. debug mode).
 bool evaluationNeedsSecret(const EntryFunctions& functions) {
   for (func::FuncOp function : {functions.evaluate, functions.preprocess}) {
     if (!function) continue;
@@ -174,24 +178,13 @@ bool evaluationNeedsSecret(const EntryFunctions& functions) {
 }
 
 std::string contextTypeName(const EntryFunctions& functions) {
-  bool hasContext = false;
-  SmallVector<func::FuncOp> candidates;
-  for (const auto& helper : functions.inputHelpers)
-    candidates.push_back(helper.second);
-  candidates.push_back(functions.preprocess);
-  candidates.push_back(functions.evaluate);
-  for (const auto& helper : functions.outputHelpers)
-    candidates.push_back(helper.second);
-  for (func::FuncOp function : candidates) {
-    if (!function) continue;
-    for (Type type : function.getArgumentTypes()) {
-      if (!isContextPointer(type)) continue;
-      StringRef name = opaqueName(cast<PointerType>(type).getPointee());
-      if (name == "BootContext<word>") return name.str();
-      hasContext = true;
-    }
+  for (Type type : getDestinationTypes(functions.setup)) {
+    StringRef name = opaqueName(type);
+    for (StringRef context : {"Context<word>", "BootContext<word>"})
+      if (name == "std::shared_ptr<" + context.str() + ">")
+        return context.str();
   }
-  return hasContext ? "Context<word>" : "";
+  return {};
 }
 
 void emitVerbatim(OpBuilder& builder, Location loc, StringRef text) {
@@ -238,6 +231,21 @@ Value getTupleElement(OpBuilder& builder, Location loc, Value tuple,
       .getResult(0);
 }
 
+// std::get returns an opaque C++ reference. Give AssignOp a typed MLIR
+// lvalue by taking and dereferencing its address; the C++ types may use
+// aliases.
+void assignReference(OpBuilder& builder, Location loc, Value reference,
+                     Value value) {
+  Type type = value.getType();
+  Value pointer =
+      CallOpaqueOp::create(builder, loc, TypeRange{PointerType::get(type)},
+                           "std::addressof", reference)
+          .getResult(0);
+  Value lvalue = emitc::DereferenceOp::create(builder, loc,
+                                              LValueType::get(type), pointer);
+  emitc::AssignOp::create(builder, loc, lvalue, value);
+}
+
 Value getInputData(OpBuilder& builder, Location loc, Value input,
                    Type expectedType) {
   Type pointerType = expectedType;
@@ -261,6 +269,7 @@ struct SupportValues {
   Value userInterface;
   Value evaluationKey;
   Value evaluationKeyMap;
+  Value debugHandler;
 };
 
 SupportValues buildSupportValues(OpBuilder& builder, Location loc,
@@ -278,33 +287,36 @@ SupportValues buildSupportValues(OpBuilder& builder, Location loc,
           builder, loc, TypeRange{OpaqueType::get(ctx, "const Encoder<word>&")},
           "heir::getEncoder", context)
           .getResult(0);
+  if (!key) return values;
   if (keyHoldsSecret) {
-    // Debug path
+    // Client path
     Type uiPointer =
-      PointerType::get(OpaqueType::get(ctx, "UserInterface<word>"));
+        PointerType::get(OpaqueType::get(ctx, "UserInterface<word>"));
     values.userInterface =
-      CallOpaqueOp::create(builder, loc, TypeRange{uiPointer},
-                           "static_cast<UserInterface<word>*>", key)
-          .getResult(0);
+        CallOpaqueOp::create(builder, loc, TypeRange{uiPointer},
+                             "static_cast<UserInterface<word>*>", key)
+            .getResult(0);
     values.evaluationKey =
-      MemberCallOpaqueOp::create(
-          builder, loc,
-          TypeRange{OpaqueType::get(ctx, "const EvaluationKey<word>&")},
-          values.userInterface, "GetMultiplicationKey", ArrayAttr{},
-          ArrayAttr{}, ValueRange{})
-          .getResult(0);
+        MemberCallOpaqueOp::create(
+            builder, loc,
+            TypeRange{OpaqueType::get(ctx, "const EvaluationKey<word>&")},
+            values.userInterface, "GetMultiplicationKey", ArrayAttr{},
+            ArrayAttr{}, ValueRange{})
+            .getResult(0);
     values.evaluationKeyMap =
-      MemberCallOpaqueOp::create(
-          builder, loc, TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
-          values.userInterface, "GetEvkMap", ArrayAttr{}, ArrayAttr{},
-          ValueRange{})
-          .getResult(0);
+        MemberCallOpaqueOp::create(
+            builder, loc,
+            TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
+            values.userInterface, "GetEvkMap", ArrayAttr{}, ArrayAttr{},
+            ValueRange{})
+            .getResult(0);
     return values;
   } else {
     // Production path
     values.evaluationKeyMap =
         CallOpaqueOp::create(
-            builder, loc, TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
+            builder, loc,
+            TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
             "heir::deref", key)
             .getResult(0);
     values.evaluationKey =
@@ -316,13 +328,15 @@ SupportValues buildSupportValues(OpBuilder& builder, Location loc,
             .getResult(0);
     return values;
   }
-
 }
 
 Value getSupportValue(Type expectedType, const SupportValues& values) {
   if (isContextPointer(expectedType)) return values.contextPointer;
   if (isUserInterfacePointer(expectedType)) return values.userInterface;
+  if (auto pointer = dyn_cast<PointerType>(expectedType))
+    expectedType = pointer.getPointee();
   StringRef name = opaqueName(expectedType);
+  if (name.contains("DebugSink")) return values.debugHandler;
   if (name.contains("Encoder<word>")) return values.encoder;
   if (name.contains("EvaluationKey<word>")) return values.evaluationKey;
   if (name.contains("EvkMap<word>")) return values.evaluationKeyMap;
@@ -331,9 +345,12 @@ Value getSupportValue(Type expectedType, const SupportValues& values) {
 
 CallOpaqueOp callInternal(OpBuilder& builder, Location loc,
                           func::FuncOp function, ValueRange arguments) {
+  auto ns = function->getAttrOfType<StringAttr>("heir.cpp_namespace");
   return CallOpaqueOp::create(
       builder, loc, function.getResultTypes(),
-      "::heir::generated::detail::" + function.getSymName().str(), arguments);
+      "::" + (ns ? ns.getValue().str() : "heir::generated::detail") +
+          "::" + function.getSymName().str(),
+      arguments);
 }
 
 SmallVector<Type> getDataArgumentTypes(func::FuncOp function) {
@@ -500,7 +517,8 @@ void addTupleAlias(OpBuilder& builder, Location loc, StringRef name,
                "using " + name.str() + " = " + tupleTypeName(fields) + ";");
 }
 
-void addKeyPairClass(OpBuilder& builder, Location loc, Type storageType) {
+void addKeyPairClass(OpBuilder& builder, Location loc, Type storageType,
+                     bool split = false) {
   auto keyPair = ClassOp::create(builder, loc, "KeyPair");
   keyPair.getBody().emplaceBlock();
   OpBuilder::InsertionGuard guard(builder);
@@ -509,9 +527,10 @@ void addKeyPairClass(OpBuilder& builder, Location loc, Type storageType) {
   FieldOp::create(builder, loc, "secret_key",
                   OpaqueType::get(builder.getContext(), "SecretKey"),
                   Attribute{});
-  FieldOp::create(builder, loc, "public_key",
-                  OpaqueType::get(builder.getContext(), "PublicKey"),
-                  Attribute{});
+  if (!split)
+    FieldOp::create(builder, loc, "public_key",
+                    OpaqueType::get(builder.getContext(), "PublicKey"),
+                    Attribute{});
 }
 
 void addPublicDeclarations(OpBuilder& builder, Location loc,
@@ -568,13 +587,16 @@ LogicalResult addSetupDefinition(OpBuilder& builder, Location loc,
 LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
                                   EntryFunctions& functions,
                                   Type keyStorageType,
-                                  bool evaluationNeedsSecret) {
+                                  bool evaluationNeedsSecret,
+                                  bool split = false) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
-  auto function = createEmitCFunction(
-      builder, loc, "KeyGen",
-      {OpaqueType::get(ctx, "const std::shared_ptr<Context>&")},
-      {OpaqueType::get(ctx, "KeyPair")}, false);
+  SmallVector<Type> inputs{
+      OpaqueType::get(ctx, "const std::shared_ptr<Context>&")};
+  if (split)
+    inputs.push_back(OpaqueType::get(ctx, "const EvaluationKeyRequest&"));
+  auto function = createEmitCFunction(builder, loc, "KeyGen", inputs,
+                                      {OpaqueType::get(ctx, "KeyPair")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   Value keyPair = createLocal(builder, loc, "KeyPair");
   Value storage = MemberOp::create(
@@ -586,7 +608,11 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
   Value ui = CallOpaqueOp::create(builder, loc, TypeRange{uiPointer},
                                   "heir::getPointer", storage)
                  .getResult(0);
+  if (split)
+    VerbatimOp::create(builder, loc, "{}.storage->PrepareRotationKey({});",
+                       ValueRange{keyPair, function.getArgument(1)});
   for (StringRef field : {"secret_key", "public_key"}) {
+    if (split && field == "public_key") continue;
     Type aliasType =
         OpaqueType::get(ctx, field == "secret_key" ? "SecretKey" : "PublicKey");
     Value member = MemberOp::create(builder, loc, LValueType::get(aliasType),
@@ -597,16 +623,16 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
       // is good for as long as the KeyPair is.
       Value map = MemberCallOpaqueOp::create(
                       builder, loc,
-                      TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")}, ui,
-                      "GetEvkMap", ArrayAttr{}, ArrayAttr{}, ValueRange{})
+                      TypeRange{OpaqueType::get(ctx, "const EvkMap<word>&")},
+                      ui, "GetEvkMap", ArrayAttr{}, ArrayAttr{}, ValueRange{})
                       .getResult(0);
       value = CallOpaqueOp::create(builder, loc, TypeRange{aliasType},
                                    "std::addressof", map)
                   .getResult(0);
     } else {
-      value = CallOpaqueOp::create(builder, loc, TypeRange{aliasType},
-                                   "static_cast<" + cppTypeName(aliasType) + ">",
-                                   ui)
+      value = CallOpaqueOp::create(
+                  builder, loc, TypeRange{aliasType},
+                  "static_cast<" + cppTypeName(aliasType) + ">", ui)
                   .getResult(0);
     }
     emitc::AssignOp::create(builder, loc, member, value);
@@ -619,19 +645,20 @@ LogicalResult addPreprocessDefinition(OpBuilder& builder, Location loc,
                                       EntryFunctions& functions,
                                       ArrayRef<Type> preparedFields,
                                       bool takesResourceDirectory,
-                                      bool evaluationNeedsSecret) {
+                                      bool evaluationNeedsSecret,
+                                      bool split = false) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
-  SmallVector<Type> inputs{OpaqueType::get(ctx, "Context&"),
-                           OpaqueType::get(ctx, "PublicKey"),
-                           OpaqueType::get(ctx, "std::string_view")};
+  SmallVector<Type> inputs{OpaqueType::get(ctx, "Context&")};
+  if (!split) inputs.push_back(OpaqueType::get(ctx, "PublicKey"));
+  inputs.push_back(OpaqueType::get(ctx, "std::string_view"));
   auto function =
       createEmitCFunction(builder, loc, "Preprocess", inputs,
                           {OpaqueType::get(ctx, "PreparedInputs")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   SupportValues support =
       buildSupportValues(builder, loc, function.getArgument(0),
-                         function.getArgument(1),
+                         split ? Value{} : function.getArgument(1),
                          /*keyHoldsSecret=*/evaluationNeedsSecret);
   Value prepared = createLocal(builder, loc, "PreparedInputs");
   if (!functions.preprocess) {
@@ -655,7 +682,7 @@ LogicalResult addPreprocessDefinition(OpBuilder& builder, Location loc,
     }
     if (takesResourceDirectory &&
         index + 1 == functions.preprocess.getNumArguments()) {
-      arguments.push_back(function.getArgument(2));
+      arguments.push_back(function.getArgument(split ? 1 : 2));
       continue;
     }
     return functions.preprocess.emitOpError(
@@ -667,10 +694,10 @@ LogicalResult addPreprocessDefinition(OpBuilder& builder, Location loc,
   return success();
 }
 
-LogicalResult addEncryptDefinition(OpBuilder& builder, Location loc,
-                                   EntryFunctions& functions,
-                                   ArrayRef<Type> logicalInputs,
-                                   ArrayRef<Type> encryptedFields) {
+LogicalResult addEncryptDefinition(
+    OpBuilder& builder, Location loc, EntryFunctions& functions,
+    ArrayRef<Type> encryptedFields,
+    ArrayRef<std::pair<unsigned, unsigned>> zeroArgs) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   SmallVector<Type> inputs{OpaqueType::get(ctx, "Context&"),
@@ -684,13 +711,26 @@ LogicalResult addEncryptDefinition(OpBuilder& builder, Location loc,
       buildSupportValues(builder, loc, function.getArgument(0),
                          function.getArgument(1), /*keyHoldsSecret=*/true);
   Value encrypted = createLocal(builder, loc, "EncryptedInputs");
-  for (unsigned input = 0; input < logicalInputs.size(); ++input) {
-    Type cleartextType = OpaqueType::get(ctx, "Input" + std::to_string(input));
-    Value cleartext = getTupleElement(builder, loc, function.getArgument(2),
-                                      input, cleartextType);
+  unsigned logicalIndex = 0;
+  for (unsigned input = 0; input < encryptedFields.size(); ++input) {
+    auto zero = llvm::find_if(zeroArgs,
+                              [input](auto arg) { return arg.first == input; });
+    bool isZero = zero != zeroArgs.end();
+    Value cleartext;
+    func::FuncOp helper;
+    if (isZero) {
+      helper = findIndexedHelper(functions.zeroHelpers, zero->second);
+      if (!helper)
+        return functions.contract.emitOpError("missing encrypted-zero helper");
+    } else {
+      Type cleartextType =
+          OpaqueType::get(ctx, "Input" + std::to_string(logicalIndex));
+      cleartext = getTupleElement(builder, loc, function.getArgument(2),
+                                  logicalIndex, cleartextType);
+      helper = findIndexedHelper(functions.inputHelpers, logicalIndex++);
+    }
     Value field =
         getTupleElement(builder, loc, encrypted, input, encryptedFields[input]);
-    func::FuncOp helper = findIndexedHelper(functions.inputHelpers, input);
     if (!helper) {
       if (isa<PointerType>(encryptedFields[input]))
         return functions.contract.emitOpError()
@@ -702,7 +742,7 @@ LogicalResult addEncryptDefinition(OpBuilder& builder, Location loc,
               "static_cast<" + cppTypeName(encryptedFields[input]) + ">",
               cleartext)
               .getResult(0);
-      emitc::AssignOp::create(builder, loc, field, copied);
+      assignReference(builder, loc, field, copied);
       continue;
     }
 
@@ -720,10 +760,12 @@ LogicalResult addEncryptDefinition(OpBuilder& builder, Location loc,
         arguments.push_back(value);
         continue;
       }
+      if (isZero)
+        return helper.emitOpError("encrypted-zero helper has a data argument");
       arguments.push_back(getInputData(builder, loc, cleartext, type));
       ++dataArguments;
     }
-    if (dataArguments != 1 || destinations > 1)
+    if (dataArguments != (isZero ? 0u : 1u) || destinations > 1)
       return helper.emitOpError(
           "entry input helper must have one data argument and at most one "
           "destination");
@@ -736,7 +778,7 @@ LogicalResult addEncryptDefinition(OpBuilder& builder, Location loc,
     }
     if (call.getNumResults() != 1)
       return helper.emitOpError("entry input helper must produce one value");
-    emitc::AssignOp::create(builder, loc, field, call.getResult(0));
+    assignReference(builder, loc, field, call.getResult(0));
   }
   ReturnOp::create(builder, loc,
                    moveValue(builder, loc, encrypted, "EncryptedInputs"));
@@ -748,20 +790,27 @@ LogicalResult addEvaluateDefinition(OpBuilder& builder, Location loc,
                                     ArrayRef<Type> preparedFields,
                                     ArrayRef<Type> encryptedInputFields,
                                     ArrayRef<Type> encryptedOutputFields,
-                                    bool evaluationNeedsSecret) {
+                                    bool evaluationNeedsSecret,
+                                    bool split = false) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
-  auto function = createEmitCFunction(
-      builder, loc, "Evaluate",
-      {OpaqueType::get(ctx, "Context&"), OpaqueType::get(ctx, "PublicKey"),
-       OpaqueType::get(ctx, "const PreparedInputs&"),
-       OpaqueType::get(ctx, "const EncryptedInputs&")},
-      {OpaqueType::get(ctx, "EncryptedOutputs")}, false);
+  SmallVector<Type> inputs{
+      OpaqueType::get(ctx, "Context&"),
+      split
+          ? Type(PointerType::get(OpaqueType::get(ctx, "const EvaluationKeys")))
+          : Type(OpaqueType::get(ctx, "PublicKey")),
+      OpaqueType::get(ctx, "const PreparedInputs&"),
+      OpaqueType::get(ctx, "const EncryptedInputs&")};
+  if (split)
+    inputs.push_back(PointerType::get(OpaqueType::get(ctx, "const DebugSink")));
+  auto function =
+      createEmitCFunction(builder, loc, "Evaluate", inputs,
+                          {OpaqueType::get(ctx, "EncryptedOutputs")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
-  SupportValues support =
-      buildSupportValues(builder, loc, function.getArgument(0),
-                         function.getArgument(1),
-                         /*keyHoldsSecret=*/evaluationNeedsSecret);
+  SupportValues support = buildSupportValues(
+      builder, loc, function.getArgument(0), function.getArgument(1),
+      /*keyHoldsSecret=*/evaluationNeedsSecret);
+  if (split) support.debugHandler = function.getArgument(4);
   Value outputs = createLocal(builder, loc, "EncryptedOutputs");
   SmallVector<Value> arguments;
   unsigned encryptedInput = 0;
@@ -890,7 +939,7 @@ LogicalResult addDecryptDefinition(OpBuilder& builder, Location loc,
     Value element =
         getTupleElement(builder, loc, returnedOutputs, i,
                         OpaqueType::get(ctx, logicalOutputNames[i]));
-    emitc::AssignOp::create(
+    assignReference(
         builder, loc, element,
         moveValue(builder, loc, clearOutputs[i], "Output" + std::to_string(i)));
   }
@@ -899,12 +948,40 @@ LogicalResult addDecryptDefinition(OpBuilder& builder, Location loc,
   return success();
 }
 
-LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
+void addKeyRequestDefinition(OpBuilder& builder, Location loc,
+                             const EntryFunctions& functions) {
+  std::string code =
+      "EvaluationKeyRequest GetKeyRequest(Context& context, "
+      "const PreparedInputs& prepared) {\n  EvaluationKeyRequest request;\n";
+  if (auto rotations = functions.serverSetup->getAttrOfType<DenseI64ArrayAttr>(
+          "cheddar.rotation_keys")) {
+    auto values = rotations.asArrayRef();
+    for (size_t i = 0; i + 1 < values.size(); i += 2)
+      code += "  request.AddRequest(" + std::to_string(values[i]) + ", " +
+              std::to_string(values[i + 1]) + ");\n";
+  }
+  if (auto slots = functions.serverSetup->getAttrOfType<IntegerAttr>(
+          "cheddar.bootstrap_slots"))
+    code += "  context.AddRequiredRotations(request, " +
+            std::to_string(slots.getInt()) + ");\n";
+  code +=
+      "  heir::cyclops::addPreparedRequests(prepared, request);\n"
+      "  return request;\n}\n";
+  emitVerbatim(builder, loc, code);
+}
+
+LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
                              StringRef runtimeNamespace,
-                             ArrayRef<StringRef> extensionIncludes) {
+                             ArrayRef<StringRef> extensionIncludes,
+                             bool takesResourceDirectory,
+                             InterfaceSide side = InterfaceSide::Combined) {
   Location loc = functions.setup.getLoc();
   MLIRContext* ctx = module.getContext();
   std::string runtimeNamespaceName = runtimeNamespace.str();
+  bool split = side != InterfaceSide::Combined;
+  bool client = side != InterfaceSide::Server;
+  bool server = side != InterfaceSide::Client;
+  if (side == InterfaceSide::Server) functions.setup = functions.serverSetup;
 
   ArrayAttr inputTypeAttrs =
       getLogicalTypes(functions.contract, kEntryInputTypesAttrName);
@@ -934,7 +1011,9 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
   if (outputNames.empty())
     return module.emitError("void entry results are not yet supported");
 
-  std::string contextName = contextTypeName(functions);
+  std::string contextName = side == InterfaceSide::Client
+                                ? "ClientContext<word>"
+                                : contextTypeName(functions);
   if (contextName.empty())
     return module.emitError("entry interface could not identify its context");
 
@@ -946,17 +1025,35 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
   SmallVector<Type> preparedFields;
   if (functions.preprocess)
     preparedFields = getDestinationTypes(functions.preprocess);
+  SmallVector<std::pair<unsigned, unsigned>> zeroArgs;
+  unsigned dataIndex = 0;
+  for (auto [index, type] :
+       llvm::enumerate(functions.contract.getArgumentTypes())) {
+    if (isSupportArgument(type) ||
+        functions.contract.getArgAttr(index, "bufferize.result"))
+      continue;
+    if (auto role = functions.contract.getArgAttrOfType<DictionaryAttr>(
+            index, kClientEncZeroArgAttrName)) {
+      auto zeroIndex =
+          dyn_cast_or_null<IntegerAttr>(role.get(kClientHelperIndex));
+      if (!zeroIndex || zeroIndex.getInt() < 0)
+        return functions.contract.emitOpError("invalid encrypted-zero index");
+      zeroArgs.emplace_back(dataIndex, zeroIndex.getInt());
+    }
+    ++dataIndex;
+  }
+  unsigned encryptedInputCount = logicalInputs.size() + zeroArgs.size();
   SmallVector<Type> evaluationDataFields =
       getDataArgumentTypes(functions.evaluate);
   if (evaluationDataFields.size() !=
-      logicalInputs.size() + preparedFields.size())
+      encryptedInputCount + preparedFields.size())
     return functions.evaluate.emitOpError()
            << "expected " << logicalInputs.size() << " entry inputs and "
            << preparedFields.size() << " prepared inputs, but found "
            << evaluationDataFields.size() << " data arguments";
   SmallVector<Type> encryptedInputFields(
       evaluationDataFields.begin(),
-      evaluationDataFields.begin() + logicalInputs.size());
+      evaluationDataFields.begin() + encryptedInputCount);
   SmallVector<Type> encryptedOutputFields =
       getDestinationTypes(functions.evaluate);
   if (encryptedOutputFields.size() != logicalOutputs.size())
@@ -972,33 +1069,37 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
                                     functions.contract)))
     return failure();
 
-  bool takesResourceDirectory = false;
-  if (functions.preprocess) {
-    unsigned oldPreprocessArguments = functions.preprocess.getNumArguments();
-    if (failed(addResourceDirectoryArguments(functions.preprocess)))
-      return failure();
-    takesResourceDirectory =
-        functions.preprocess.getNumArguments() != oldPreprocessArguments;
-  }
-
   OpBuilder builder(ctx);
   builder.setInsertionPointToEnd(module.getBody());
-  FileOp header = FileOp::create(builder, loc, "header");
-  FileOp source = FileOp::create(builder, loc, "source");
+  std::string prefix = !split ? "" : client ? "client_" : "server_";
+  FileOp header = FileOp::create(builder, loc, prefix + "header");
+  FileOp source = FileOp::create(builder, loc, prefix + "source");
 
   builder.setInsertionPointToEnd(&header.getBodyRegion().front());
   emitVerbatim(builder, loc, "#pragma once");
   for (StringRef include : {"array", "complex", "cstddef", "cstdint", "memory",
                             "string_view", "tuple", "utility", "vector"})
     emitInclude(builder, loc, include);
-  for (StringRef include : {"UserInterface.h", "core/Context.h",
-                            "core/Encode.h", "core/Parameter.h"})
-    emitInclude(builder, loc, include, false);
-  for (StringRef include : extensionIncludes)
-    emitInclude(builder, loc, include, false);
+  if (client) emitInclude(builder, loc, "UserInterface.h", false);
+  emitInclude(
+      builder, loc,
+      side == InterfaceSide::Client ? "core/ClientContext.h" : "core/Context.h",
+      false);
+  emitInclude(builder, loc, "core/Encode.h", false);
+  emitInclude(builder, loc, "core/Parameter.h", false);
+  if (split) emitInclude(builder, loc, "lib/Runtime/CyclopsRuntime.h", false);
+  if (server)
+    for (StringRef include : extensionIncludes)
+      emitInclude(builder, loc, include, false);
 
   std::string namespaceName =
       "heir::generated::" + sanitizeIdentifier(functions.entryName);
+  if (split) namespaceName += client ? "::client" : "::server";
+  std::string detailNamespace =
+      split ? "heir::generated::detail_" +
+                  sanitizeIdentifier(functions.entryName) +
+                  (client ? "_client" : "_server")
+            : "heir::generated::detail";
   emitVerbatim(builder, loc, "namespace " + namespaceName + " {");
   emitVerbatim(builder, loc, "using word = std::uint64_t;");
   emitVerbatim(builder, loc, "using Complex = std::complex<double>;");
@@ -1006,17 +1107,20 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
   emitVerbatim(
       builder, loc,
       "using Context = ::" + runtimeNamespaceName + "::" + contextName + ";");
-  emitVerbatim(builder, loc,
-               "using SecretKey = ::" + runtimeNamespaceName +
-                   "::UserInterface<word>*;");
+  if (client)
+    emitVerbatim(builder, loc,
+                 "using SecretKey = ::" + runtimeNamespaceName +
+                     "::UserInterface<word>*;");
   // See `evaluationNeedsSecret`: key-only unless evaluation must decrypt.
-  const bool needsSecret = evaluationNeedsSecret(functions);
-  emitVerbatim(builder, loc,
-               "using PublicKey = " +
-                   std::string(needsSecret ? "::" + runtimeNamespaceName +
-                                                 "::UserInterface<word>*;"
-                                           : "const ::" + runtimeNamespaceName +
-                                                 "::EvkMap<word>*;"));
+  const bool needsSecret = !split && evaluationNeedsSecret(functions);
+  if (!split)
+    emitVerbatim(
+        builder, loc,
+        "using PublicKey = " +
+            std::string(
+                needsSecret
+                    ? "::" + runtimeNamespaceName + "::UserInterface<word>*;"
+                    : "const ::" + runtimeNamespaceName + "::EvkMap<word>*;"));
   for (auto [index, name] : llvm::enumerate(inputNames))
     emitVerbatim(builder, loc,
                  "using Input" + std::to_string(index) + " = " + name + ";");
@@ -1037,58 +1141,133 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions& functions,
     addTupleAlias(builder, loc, "Outputs", outputAliasTypes);
     publicResultType = OpaqueType::get(ctx, "Outputs");
   }
-  addKeyPairClass(builder, loc, keygenDestinations.front());
-  addTupleAlias(builder, loc, "PreparedInputs", preparedFields);
+  if (client) addKeyPairClass(builder, loc, keygenDestinations.front(), split);
+  if (server) addTupleAlias(builder, loc, "PreparedInputs", preparedFields);
   addTupleAlias(builder, loc, "EncryptedInputs", encryptedInputFields);
   addTupleAlias(builder, loc, "EncryptedOutputs", encryptedOutputFields);
-  addPublicDeclarations(builder, loc, publicResultType);
+  if (!split) {
+    addPublicDeclarations(builder, loc, publicResultType);
+  } else {
+    emitVerbatim(builder, loc,
+                 "using EvaluationKeyRequest = ::cyclops::EvkRequest;");
+    emitVerbatim(builder, loc,
+                 "using EvaluationKeys = ::cyclops::EvkMap<word>;");
+    emitVerbatim(builder, loc, "using DebugSink = ::heir::cyclops::DebugSink;");
+    emitVerbatim(builder, loc, "std::shared_ptr<Context> Setup();");
+    if (client) {
+      emitVerbatim(
+          builder, loc,
+          "KeyPair KeyGen(const std::shared_ptr<Context>&, const "
+          "EvaluationKeyRequest&);\n"
+          "EncryptedInputs Encrypt(Context&, SecretKey, CleartextInputs&);\n" +
+              cppTypeName(publicResultType) +
+              " Decrypt(Context&, SecretKey, const EncryptedOutputs&);");
+    } else {
+      emitVerbatim(builder, loc,
+                   "PreparedInputs Preprocess(Context&, std::string_view);\n"
+                   "EvaluationKeyRequest GetKeyRequest(Context&, const "
+                   "PreparedInputs&);\n"
+                   "EncryptedOutputs Evaluate(Context&, const EvaluationKeys*, "
+                   "const PreparedInputs&, const EncryptedInputs&, const "
+                   "DebugSink* = nullptr);");
+    }
+  }
   emitVerbatim(builder, loc, "}  // namespace " + namespaceName);
 
   builder.setInsertionPointToEnd(&source.getBodyRegion().front());
-  emitInclude(builder, loc, functions.entryName + ".h", false);
+  emitInclude(builder, loc,
+              functions.entryName + (!split   ? ".h"
+                                     : client ? "_client.h"
+                                              : "_server.h"),
+              false);
   emitInclude(builder, loc, "lib/Runtime/CheddarRuntime.h", false);
-  emitVerbatim(builder, loc, "namespace heir::generated::detail {");
+  emitVerbatim(builder, loc, "namespace " + detailNamespace + " {");
   emitVerbatim(builder, loc, "using namespace ::" + runtimeNamespaceName + ";");
   emitVerbatim(builder, loc, "using word = std::uint64_t;");
   emitVerbatim(builder, loc, "using Complex = std::complex<double>;");
 
+  llvm::DenseSet<Operation*> reachable;
+  std::function<void(func::FuncOp)> visit = [&](func::FuncOp function) {
+    if (!function || !reachable.insert(function).second) return;
+    function.walk([&](func::CallOp call) {
+      visit(module.lookupSymbol<func::FuncOp>(call.getCallee()));
+    });
+    function.walk([&](CallOpaqueOp call) {
+      visit(module.lookupSymbol<func::FuncOp>(call.getCallee()));
+    });
+    function.walk([&](emitc::GetGlobalOp access) {
+      if (auto global = module.lookupSymbol<emitc::GlobalOp>(access.getName()))
+        reachable.insert(global);
+    });
+  };
+  if (split) {
+    visit(functions.setup);
+    if (client) {
+      visit(functions.keygen);
+      for (auto [index, helper] : functions.inputHelpers) visit(helper);
+      for (auto [index, helper] : functions.outputHelpers) visit(helper);
+      for (auto [index, helper] : functions.zeroHelpers) visit(helper);
+    } else {
+      visit(functions.preprocess);
+      visit(functions.evaluate);
+    }
+    for (Operation* operation : reachable)
+      operation->setAttr("heir.cpp_namespace",
+                         builder.getStringAttr(detailNamespace));
+  }
+
   SmallVector<Operation*> originalOperations;
   for (Operation& operation : module.getBody()->getOperations())
-    if (&operation != header.getOperation() &&
-        &operation != source.getOperation())
-      originalOperations.push_back(&operation);
+    if (!isa<FileOp>(operation)) originalOperations.push_back(&operation);
+  // Emit only each side's reachable functions and globals. A shared helper is
+  // cloned into both files, without cloning two complete intermediate modules.
   for (Operation* operation : originalOperations) {
     if (isa<IncludeOp>(operation)) continue;
-    if (auto function = dyn_cast<func::FuncOp>(operation))
-      function.setPrivate();
-    operation->moveBefore(&source.getBodyRegion().front(),
-                          source.getBodyRegion().front().end());
+    if (split && isa<func::FuncOp, emitc::GlobalOp>(operation) &&
+        !reachable.contains(operation))
+      continue;
+    Operation* emitted = split ? builder.clone(*operation) : operation;
+    if (auto function = dyn_cast<func::FuncOp>(emitted)) function.setPrivate();
+    emitted->moveBefore(&source.getBodyRegion().front(),
+                        source.getBodyRegion().front().end());
   }
   builder.setInsertionPointToEnd(&source.getBodyRegion().front());
-  emitVerbatim(builder, loc, "}  // namespace heir::generated::detail");
+  emitVerbatim(builder, loc, "}  // namespace " + detailNamespace);
   emitVerbatim(builder, loc, "namespace " + namespaceName + " {");
 
-  if (failed(addSetupDefinition(builder, loc, functions)) ||
-      failed(addKeygenDefinition(builder, loc, functions,
-                                 keygenDestinations.front(), needsSecret)) ||
-      failed(addPreprocessDefinition(builder, loc, functions, preparedFields,
-                                     takesResourceDirectory, needsSecret)) ||
-      failed(addEncryptDefinition(builder, loc, functions, logicalInputs,
-                                  encryptedInputFields)) ||
-      failed(addEvaluateDefinition(builder, loc, functions, preparedFields,
-                                   encryptedInputFields, encryptedOutputFields,
-                                   needsSecret)) ||
-      failed(addDecryptDefinition(builder, loc, functions,
-                                  encryptedOutputFields, outputNames,
-                                  publicResultType)))
+  if (failed(addSetupDefinition(builder, loc, functions))) return failure();
+  if (client && (failed(addKeygenDefinition(builder, loc, functions,
+                                            keygenDestinations.front(),
+                                            needsSecret, split)) ||
+                 failed(addEncryptDefinition(builder, loc, functions,
+                                             encryptedInputFields, zeroArgs))))
     return failure();
+  if (server &&
+      (failed(addPreprocessDefinition(builder, loc, functions, preparedFields,
+                                      takesResourceDirectory, needsSecret,
+                                      split)) ||
+       failed(addEvaluateDefinition(builder, loc, functions, preparedFields,
+                                    encryptedInputFields, encryptedOutputFields,
+                                    needsSecret, split))))
+    return failure();
+  if (client && failed(addDecryptDefinition(builder, loc, functions,
+                                            encryptedOutputFields, outputNames,
+                                            publicResultType)))
+    return failure();
+  if (split) {
+    if (server) addKeyRequestDefinition(builder, loc, functions);
+  }
   emitVerbatim(builder, loc, "}  // namespace " + namespaceName);
 
   builder.setInsertionPointToStart(&source.getBodyRegion().front());
-  for (Operation* operation : originalOperations)
-    if (isa<IncludeOp>(operation))
+  for (Operation* operation : originalOperations) {
+    if (!isa<IncludeOp>(operation)) continue;
+    if (split)
+      builder.clone(*operation);
+    else
       operation->moveBefore(&source.getBodyRegion().front(),
                             source.getBodyRegion().front().begin());
+  }
   return success();
 }
 
@@ -1111,17 +1290,42 @@ struct CheddarEmitCEntryInterfacePass
                          << " is missing a setup or keygen function";
       return signalPassFailure();
     }
-    SmallVector<StringRef> extensionIncludes;
-    if (runtime == "cyclops") {
-      extensionIncludes = {"extension/boot/BootContext.h",
-                           "extension/poly/EvalPoly.h",
-                           "extension/linalg/LinearTransform.h"};
-    } else {
-      extensionIncludes = {"extension/BootContext.h", "extension/EvalPoly.h",
-                           "extension/LinearTransform.h"};
+    if (failed(functions)) return signalPassFailure();
+    bool takesResourceDirectory = false;
+    if (functions->preprocess) {
+      unsigned arguments = functions->preprocess.getNumArguments();
+      if (failed(addResourceDirectoryArguments(functions->preprocess)))
+        return signalPassFailure();
+      takesResourceDirectory =
+          functions->preprocess.getNumArguments() != arguments;
     }
+    if (runtime == "cyclops") {
+      if (failed(functions) || !functions->serverSetup) {
+        module.emitError(
+            "Cyclops split output requires separate server setup; "
+            "run scheme-to-cheddar with runtime=cyclops first");
+        return signalPassFailure();
+      }
+      for (InterfaceSide side :
+           {InterfaceSide::Client, InterfaceSide::Server}) {
+        if (failed(buildInterface(
+                module, *functions, runtime,
+                {"extension/boot/BootContext.h", "extension/poly/EvalPoly.h",
+                 "extension/linalg/LinearTransform.h"},
+                takesResourceDirectory, side)))
+          return signalPassFailure();
+      }
+      for (Operation& op :
+           llvm::make_early_inc_range(module.getBody()->getOperations()))
+        if (!isa<FileOp>(op)) op.erase();
+      return;
+    }
+    SmallVector<StringRef> extensionIncludes{"extension/BootContext.h",
+                                             "extension/EvalPoly.h",
+                                             "extension/LinearTransform.h"};
     if (failed(functions) ||
-        failed(buildInterface(module, *functions, runtime, extensionIncludes)))
+        failed(buildInterface(module, *functions, runtime, extensionIncludes,
+                              takesResourceDirectory)))
       signalPassFailure();
   }
 };

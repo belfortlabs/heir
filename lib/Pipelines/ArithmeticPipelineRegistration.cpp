@@ -782,20 +782,11 @@ void cheddarToEmitCPipelineBuilder(OpPassManager& pm) {
   pm.addPass(createLinalgFoldUnitExtentDimsPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
-  pm.addPass(cheddar::createCheddarBufferize());
+  cheddar::buildCheddarBufferizationPipeline(pm);
   pm.addNestedPass<func::FuncOp>(createConvertLinalgToLoopsPass());
   pm.addPass(createInlinerPass());
   pm.addPass(memref::createFoldMemRefAliasOpsPass());
   pm.addPass(createCSEPass());
-  pm.addPass(createCanonicalizerPass());
-
-  pm.addPass(bufferization::createDropEquivalentBufferResultsPass());
-  bufferization::BufferResultsToOutParamsPassOptions outParamsOptions;
-  outParamsOptions.hoistStaticAllocs = true;
-  outParamsOptions.modifyPublicFunctions = true;
-  outParamsOptions.addResultAttribute = true;
-  pm.addPass(
-      bufferization::createBufferResultsToOutParamsPass(outParamsOptions));
   pm.addPass(createCanonicalizerPass());
 
   pm.addPass(bufferization::createOwnershipBasedBufferDeallocationPass());

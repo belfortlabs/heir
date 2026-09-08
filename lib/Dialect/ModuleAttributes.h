@@ -94,6 +94,10 @@ constexpr const static ::llvm::StringLiteral kClientEncZeroFuncAttrName =
     "client.enc_zero_func";
 constexpr const static ::llvm::StringLiteral kClientEncZeroArgAttrName =
     "client.enc_zero_arg";
+constexpr const static ::llvm::StringLiteral kClientSetupFuncAttrName =
+    "client.setup_func";
+constexpr const static ::llvm::StringLiteral kClientKeygenFuncAttrName =
+    "client.keygen_func";
 
 // Func attributes for the logical entry-point interface. Each attribute
 // contains the original entry function name in `func_name`.
@@ -111,10 +115,8 @@ constexpr const static ::llvm::StringLiteral kServerPreprocessingEntryArgs =
     "entry_arg_indices";
 constexpr const static ::llvm::StringLiteral kServerEvaluateFuncAttrName =
     "server.evaluate_func";
-constexpr const static ::llvm::StringLiteral kClientSetupFuncAttrName =
-    "client.setup_func";
-constexpr const static ::llvm::StringLiteral kClientKeygenFuncAttrName =
-    "client.keygen_func";
+constexpr const static ::llvm::StringLiteral kServerSetupFuncAttrName =
+    "server.setup_func";
 
 // Corresponds to a named attribute client.preprocessed_func whose value is a
 // dictionary {func_name = "foo"} that references the name of the function that
@@ -128,9 +130,9 @@ inline bool isClientHelper(Operation* op) {
   return op->hasAttr(kClientEncFuncAttrName) ||
          op->hasAttr(kClientDecFuncAttrName) ||
          op->hasAttr(kClientPackFuncAttrName) ||
-         op->hasAttr(kServerPreprocessingFuncAttrName) ||
          op->hasAttr(kClientSetupFuncAttrName) ||
          op->hasAttr(kClientKeygenFuncAttrName) ||
+         op->hasAttr(kServerPreprocessingFuncAttrName) ||
          op->hasAttr(kClientPreprocessedFuncAttrName) ||
          op->hasAttr(kClientEncZeroFuncAttrName);
 }

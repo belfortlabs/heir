@@ -1,14 +1,19 @@
 #ifndef LIB_DIALECT_CHEDDAR_TRANSFORMS_CHEDDARBUFFERIZE_H_
 #define LIB_DIALECT_CHEDDAR_TRANSFORMS_CHEDDARBUFFERIZE_H_
 
-#include "mlir/include/mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/include/mlir/Pass/Pass.h"         // from @llvm-project
+#include "mlir/include/mlir/Pass/PassManager.h"  // from @llvm-project
 
 namespace mlir {
 namespace heir {
 namespace cheddar {
 
-#define GEN_PASS_DECL_CHEDDARBUFFERIZE
+#define GEN_PASS_DECL_CHEDDARELIDEOUTPARAMCOPIES
 #include "lib/Dialect/Cheddar/Transforms/Passes.h.inc"
+
+// Bufferizes a cheddar module with the upstream One-Shot pipeline and turns
+// every buffer result into a caller-provided out-param (`bufferize.result`).
+void buildCheddarBufferizationPipeline(OpPassManager& pm);
 
 }  // namespace cheddar
 }  // namespace heir

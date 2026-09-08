@@ -1097,6 +1097,10 @@ struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
       if (!llvm::is_contained(funcOp.value().getArgumentTypes(),
                               evaluator.first))
         continue;
+      if (llvm::any_of(adaptor.getOperands(), [&](Value operand) {
+            return operand.getType() == evaluator.first;
+          }))
+        continue;
       newOperands.push_back(result.value());
     }
     llvm::append_range(newOperands, adaptor.getOperands());
@@ -1143,7 +1147,10 @@ struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
 // `tensor<!cheddar.ciphertext>`, or a packed `tensor<Nx!lwe.ciphertext>` ->
 // `tensor<Nx!cheddar.ciphertext>`), converted via the type converter.
 struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertDebugFuncDecl(const TypeConverter& converter, MLIRContext* context,
+                       bool split)
+      : OpConversionPattern(converter, context, /*benefit=*/3), split(split) {}
+  bool split;
   LogicalResult matchAndRewrite(
       func::FuncOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
@@ -1155,6 +1162,7 @@ struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
     auto* ctx = getContext();
     SmallVector<Type> argTypes{cheddar::EncoderType::get(ctx),
                                cheddar::UserInterfaceType::get(ctx), ctType};
+    if (split) argTypes = {cheddar::DebugHandlerType::get(ctx), ctType};
     rewriter.modifyOpInPlace(op, [&] {
       op.setType(FunctionType::get(ctx, argTypes, {}));
       // __heir_debug only READS the ciphertext (decrypt+decode for printing).
@@ -1163,7 +1171,8 @@ struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
       // a move-only cheddar Ciphertext becomes a destructive std::move, leaving
       // the observed value (and its later uses) empty -> "num primes mismatch".
       // Mark the ciphertext arg read-only so bufferization borrows it.
-      op.setArgAttr(2, "bufferization.access", rewriter.getStringAttr("read"));
+      op.setArgAttr(split ? 1 : 2, "bufferization.access",
+                    rewriter.getStringAttr("read"));
     });
     return success();
   }
@@ -1173,12 +1182,26 @@ struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
 // UserInterface contextual args, followed by the (converted) ciphertext operand
 // (the last original operand; the original secret-key operand is dropped).
 struct ConvertDebugCall : public OpConversionPattern<func::CallOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertDebugCall(const TypeConverter& converter, MLIRContext* context,
+                   bool split)
+      : OpConversionPattern(converter, context, /*benefit=*/3), split(split) {}
+  bool split;
   LogicalResult matchAndRewrite(
       func::CallOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     if (!isDebugPort(op.getCallee())) return failure();
     auto* ctx = getContext();
+    if (split) {
+      auto handler = getContextualArgFromFunc(
+          op.getOperation(), cheddar::DebugHandlerType::get(ctx));
+      if (failed(handler)) return failure();
+      auto call = func::CallOp::create(
+          rewriter, op.getLoc(), op.getCallee(), TypeRange{},
+          ValueRange{*handler, adaptor.getOperands().back()});
+      call->setDialectAttrs(op->getDialectAttrs());
+      rewriter.replaceOp(op, call);
+      return success();
+    }
     auto encoder = getContextualArgFromFunc(op.getOperation(),
                                             cheddar::EncoderType::get(ctx));
     if (failed(encoder)) return failure();
@@ -1290,104 +1313,79 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     preprocessing::populatePreprocessingConversions(patterns, typeConverter,
                                                     context);
 
-    // BootContext and the rotation-key map (EvkMap) must be threaded
-    // transitively: a function that calls a function that bootstraps
-    // needs the right keys.
-    DenseMap<func::FuncOp, bool> bootstrapsTransitively;
-    DenseMap<func::FuncOp, bool> needsEvkMapTransitively;
-    DenseMap<func::FuncOp, bool> needsUserInterfaceTransitively;
-    module->walk([&](func::FuncOp f) {
-      bool boots = false;
-      bool evk = false;
-      bool secret = false;
-      f.walk([&](Operation* inner) {
-        if (isa<ckks::BootstrapOp>(inner)) boots = true;
-        if (isa<ckks::BootstrapOp, ckks::RotateOp, kernel::LinearTransformOp,
-                kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>(inner))
-          evk = true;
-        if (isa<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp>(inner)) secret = true;
-        if (auto call = dyn_cast<func::CallOp>(inner);
-            call && isDebugPort(call.getCallee()))
-          secret = true;
+    // Thread only support values consumed by the function or its callees.
+    // In particular, encode/decode helpers need no GPU context.
+    Type ctxType = cheddar::ContextType::get(context);
+    Type bootType = cheddar::BootContextType::get(context);
+    Type encoderType = cheddar::EncoderType::get(context);
+    Type uiType = cheddar::UserInterfaceType::get(context);
+    Type debugType = cheddar::DebugHandlerType::get(context);
+    Type keyType = cheddar::EvalKeyType::get(context);
+    Type mapType = cheddar::EvkMapType::get(context);
+    DenseMap<func::FuncOp, SmallVector<Type>> required;
+    module->walk([&](func::FuncOp function) {
+      required.try_emplace(function);
+      auto add = [&](Type type) {
+        if (!llvm::is_contained(required[function], type))
+          required[function].push_back(type);
+      };
+      function.walk([&](Operation* op) {
+        if (isa<ckks::AddOp, ckks::SubOp, ckks::MulOp, ckks::AddPlainOp,
+                ckks::SubPlainOp, ckks::MulPlainOp, ckks::NegateOp,
+                ckks::RelinearizeOp, ckks::RescaleOp, ckks::RotateOp,
+                ckks::LevelReduceOp, ckks::BootstrapOp, lwe::RAddOp,
+                lwe::RSubOp, lwe::RMulOp, lwe::RNegateOp, lwe::RAddPlainOp,
+                lwe::RSubPlainOp, lwe::RMulPlainOp, kernel::LinearTransformOp,
+                kernel::PrepareLinearTransformOp,
+                kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>(op))
+          add(ctxType);
+        if (isa<ckks::BootstrapOp>(op)) add(bootType);
+        if (isa<lwe::RLWEEncodeOp, lwe::RLWEDecodeOp>(op)) add(encoderType);
+        if (isa<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp>(op)) add(uiType);
+        if (isa<ckks::RelinearizeOp>(op)) add(keyType);
+        if (isa<ckks::RotateOp, ckks::BootstrapOp, kernel::LinearTransformOp,
+                kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>(op))
+          add(mapType);
+        if (auto call = dyn_cast<func::CallOp>(op);
+            call && isDebugPort(call.getCallee())) {
+          if (useCyclopsRuntime) {
+            add(debugType);
+          } else {
+            add(encoderType);
+            add(uiType);
+          }
+        }
       });
-      bootstrapsTransitively[f] = boots;
-      needsEvkMapTransitively[f] = evk;
-      needsUserInterfaceTransitively[f] = secret;
     });
     bool changed = true;
     while (changed) {
       changed = false;
       module->walk([&](func::CallOp call) {
         auto caller = call->getParentOfType<func::FuncOp>();
-        FailureOr<func::FuncOp> callee = getCalledFunction(call);
-        if (!caller || failed(callee)) return;
-        if (bootstrapsTransitively[callee.value()] &&
-            !bootstrapsTransitively[caller]) {
-          bootstrapsTransitively[caller] = true;
-          changed = true;
-        }
-        if (needsEvkMapTransitively[callee.value()] &&
-            !needsEvkMapTransitively[caller]) {
-          needsEvkMapTransitively[caller] = true;
-          changed = true;
-        }
-        if (needsUserInterfaceTransitively[callee.value()] &&
-            !needsUserInterfaceTransitively[caller]) {
-          needsUserInterfaceTransitively[caller] = true;
+        auto callee = getCalledFunction(call);
+        if (!caller || failed(callee) || caller == *callee) return;
+        for (Type type : required[*callee]) {
+          if (llvm::is_contained(required[caller], type)) continue;
+          required[caller].push_back(type);
           changed = true;
         }
       });
     }
-
-    auto hasCryptoOps = [&](Operation* op) -> bool {
-      return containsArgumentOfDialect<lwe::LWEDialect, ckks::CKKSDialect>(op);
-    };
-    auto hasPrepareLinearTransform = [&](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      if (!funcOp) return false;
-      return !funcOp.getOps<kernel::PrepareLinearTransformOp>().empty();
-    };
-    auto hasEncodeOps = [&](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      if (!funcOp) return false;
-      bool found = false;
-      funcOp->walk([&](lwe::RLWEEncodeOp) { found = true; });
-      return found;
-    };
-    auto needsEvkMap = [&needsEvkMapTransitively](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      return funcOp && needsEvkMapTransitively.lookup(funcOp);
-    };
-    auto needsUserInterface =
-        [&needsUserInterfaceTransitively](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      return funcOp && needsUserInterfaceTransitively.lookup(funcOp);
-    };
-    auto funcBootstraps = [&bootstrapsTransitively](Operation* op) -> bool {
-      auto funcOp = dyn_cast<func::FuncOp>(op);
-      return funcOp && bootstrapsTransitively.lookup(funcOp);
-    };
-    auto hasCryptoOrEncode = [&](Operation* op) {
-      return hasCryptoOps(op) || hasEncodeOps(op);
-    };
-    auto hasContextOps = [&](Operation* op) {
-      return hasCryptoOps(op) || hasPrepareLinearTransform(op);
-    };
-    std::vector<std::pair<Type, OpPredicate>> evaluators = {
-        {cheddar::ContextType::get(context), hasContextOps},
-        {cheddar::BootContextType::get(context), funcBootstraps},
-        {cheddar::EncoderType::get(context), hasCryptoOrEncode},
-        {cheddar::UserInterfaceType::get(context), needsUserInterface},
-        {cheddar::EvalKeyType::get(context), hasCryptoOps},
-        {cheddar::EvkMapType::get(context), needsEvkMap},
-    };
+    std::vector<std::pair<Type, OpPredicate>> evaluators;
+    for (Type type : {ctxType, bootType, encoderType, uiType, debugType,
+                      keyType, mapType}) {
+      evaluators.emplace_back(type, [&, type](Operation* op) {
+        auto function = dyn_cast<func::FuncOp>(op);
+        return function && llvm::is_contained(required[function], type);
+      });
+    }
 
     patterns.add<AddCheddarContextArg>(typeConverter, context, evaluators);
     patterns.add<ConvertCheddarFuncCallOp>(typeConverter, context, evaluators);
     // Debug ports get dedicated, higher-benefit handling (the generic call /
     // structural func patterns would mis-thread their context args).
     patterns.add<ConvertDebugFuncDecl, ConvertDebugCall>(typeConverter, context,
-                                                         /*benefit=*/3);
+                                                         useCyclopsRuntime);
 
     patterns.add<ConvertCKKSAddOp, ConvertCKKSSubOp, ConvertCKKSMulOp,
                  ConvertCKKSAddPlainOp, ConvertCKKSSubPlainOp,
@@ -1417,7 +1415,13 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     // A reshaped `__heir_debug_*` declaration / call has exactly
     // (Encoder, UserInterface, tensor<...x!cheddar.ciphertext>) inputs and no
     // results.
-    auto isReshapedDebugSig = [](TypeRange ins) {
+    auto isReshapedDebugSig = [&](TypeRange ins) {
+      if (useCyclopsRuntime) {
+        if (ins.size() != 2 || !isa<cheddar::DebugHandlerType>(ins[0]))
+          return false;
+        auto type = dyn_cast<RankedTensorType>(ins[1]);
+        return type && isa<cheddar::CiphertextType>(type.getElementType());
+      }
       if (ins.size() != 3 || !isa<cheddar::EncoderType>(ins[0]) ||
           !isa<cheddar::UserInterfaceType>(ins[1]))
         return false;
@@ -1430,42 +1434,19 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     };
     target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp op) {
       if (isDebugPort(op.getName())) return isReshapedDebugDecl(op);
-      bool hasCheddarCtxArg =
-          op.getFunctionType().getNumInputs() > 0 &&
-          containsArgumentOfType<cheddar::ContextType, cheddar::BootContextType,
-                                 cheddar::EncoderType,
-                                 cheddar::UserInterfaceType,
-                                 cheddar::EvalKeyType, cheddar::EvkMapType>(op);
-      bool hasCryptoArg =
-          containsArgumentOfDialect<lwe::LWEDialect, ckks::CKKSDialect>(op);
-      bool hasEncodeOp = false;
-      op.walk([&](lwe::RLWEEncodeOp) { hasEncodeOp = true; });
-      bool hasPrepareOp =
-          !op.getOps<kernel::PrepareLinearTransformOp>().empty();
       return typeConverter.isSignatureLegal(op.getFunctionType()) &&
              typeConverter.isLegal(&op.getBody()) &&
-             (!(hasCryptoArg || hasEncodeOp || hasPrepareOp) ||
-              hasCheddarCtxArg);
+             llvm::all_of(required[op], [&](Type type) {
+               return llvm::is_contained(op.getArgumentTypes(), type);
+             });
     });
 
     target.addDynamicallyLegalOp<func::CallOp>([&](func::CallOp op) {
       if (isDebugPort(op.getCallee()))
         return isReshapedDebugSig(op.getCalleeType().getInputs());
-      auto operandTypes = op.getCalleeType().getInputs();
-      auto containsCryptoArg = llvm::any_of(operandTypes, [&](Type argType) {
-        return DialectEqual<lwe::LWEDialect, ckks::CKKSDialect>()(
-            &argType.getDialect());
-      });
-      auto hasCheddarCtxArg =
-          !operandTypes.empty() &&
-          mlir::isa<cheddar::ContextType, cheddar::BootContextType>(
-              *operandTypes.begin());
-      bool signatureConsistent = false;
-      FailureOr<func::FuncOp> callee = getCalledFunction(op);
-      if (succeeded(callee))
-        signatureConsistent =
-            callee.value().getFunctionType() == op.getCalleeType();
-      return (!containsCryptoArg || hasCheddarCtxArg) && signatureConsistent;
+      auto callee = getCalledFunction(op);
+      return succeeded(callee) && typeConverter.isLegal(op) &&
+             callee->getFunctionType() == op.getCalleeType();
     });
 
     target.markUnknownOpDynamicallyLegal(

@@ -127,6 +127,7 @@ FailureOr<EntryFunctions> findEntryFunctions(ModuleOp module,
         };
 
     if (matches(kClientSetupFuncAttrName)) functions.setup = function;
+    if (matches(kServerSetupFuncAttrName)) functions.serverSetup = function;
     if (matches(kClientKeygenFuncAttrName)) functions.keygen = function;
     if (matches(kServerPreprocessingFuncAttrName))
       functions.preprocess = function;

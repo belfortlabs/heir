@@ -403,6 +403,10 @@ int main(int argc, char** argv) {
   ckks::registerCKKSPasses();
   kernel::registerKernelPasses();
   cheddar::registerCheddarPasses();
+  PassPipelineRegistration<>(
+      "cheddar-bufferize",
+      "Bufferize cheddar programs into out-params with One-Shot Bufferize",
+      cheddar::buildCheddarBufferizationPipeline);
   lattigo::registerLattigoPasses();
   lwe::registerLWEPasses();
   mgmt::registerMgmtPasses();

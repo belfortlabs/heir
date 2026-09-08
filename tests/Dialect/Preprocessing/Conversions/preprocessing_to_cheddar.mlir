@@ -8,8 +8,8 @@
 
 // CONVERT: func @store_cheddar
 // CONVERT: %[[STORAGE:.*]] = memref.alloc() : memref<4x!plaintext>
-// BUFFERIZE: func @store_cheddar
-// BUFFERIZE: %[[STORAGE:.*]] = memref.alloc() : memref<4x!plaintext>
+// BUFFERIZE: func @store_cheddar({{.*}}%[[STORAGE:.*]]: memref<4x!plaintext> {bufferize.result})
+// BUFFERIZE-NOT: memref.alloc
 func.func @store_cheddar(%encoder: !cheddar.encoder, %input0: tensor<4xf64>, %input1: tensor<4xf64>) -> !preprocessing.storage<tensor<!cheddar.plaintext>, tensor<!cheddar.plaintext>> {
   %storage = preprocessing.empty : !preprocessing.storage<tensor<!cheddar.plaintext>, tensor<!cheddar.plaintext>>
 

@@ -3,17 +3,16 @@
 
 include "mlir/Pass/PassBase.td"
 
-def CheddarBufferize : Pass<"cheddar-bufferize", "ModuleOp"> {
-  let summary = "Run One-Shot Bufferize for Cheddar programs";
+def CheddarElideOutParamCopies : Pass<"cheddar-elide-out-param-copies", "::mlir::func::FuncOp"> {
+  let summary = "Write temporaries that are copied into an out-param directly into it";
   let description = [{
-    Converts Cheddar tensor function results to caller-provided destinations
-    before bufferization, runs the standard empty-tensor elimination, then runs
-    stock One-Shot Module Bufferization with function-boundary bufferization
-    and identity layout maps. This exposes the final destination early enough
-    for DPS producers to write into it directly. The bufferization memcpy hook
-    rejects every remaining copy of a move-only Cheddar value, regardless of
-    which participating dialect requested it.
+    After `buffer-results-to-out-params`, a function that returns e.g. the
+    result of a call still allocates a temporary and copies it into the
+    `bufferize.result` out-param. Cheddar payloads are move-only and copies
+    are expensive GPU deep copies, so replace the temporary with the out-param
+    whenever the copy is its last use.
   }];
+  let dependentDialects = ["mlir::func::FuncDialect", "mlir::memref::MemRefDialect"];
 }
 
 #endif  // LIB_DIALECT_CHEDDAR_TRANSFORMS_PASSES_TD_

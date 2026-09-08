@@ -21,17 +21,15 @@ cc_library(
     hdrs = ["CheddarBufferize.h"],
     deps = [
         ":pass_inc_gen",
-        "@heir//lib/Dialect/Cheddar/IR:Dialect",
-        "@llvm-project//llvm:Support",
-        "@llvm-project//mlir:BufferizationDialect",
         "@llvm-project//mlir:BufferizationTransforms",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:MemRefDialect",
+        "@llvm-project//mlir:MemRefTransforms",
         "@llvm-project//mlir:Pass",
-        "@llvm-project//mlir:SCFDialect",
         "@llvm-project//mlir:Support",
-        "@llvm-project//mlir:TensorDialect",
+        "@llvm-project//mlir:TransformUtils",
+        "@llvm-project//mlir:Transforms",
     ],
 )
 

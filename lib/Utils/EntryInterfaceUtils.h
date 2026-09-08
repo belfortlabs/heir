@@ -22,11 +22,12 @@ namespace heir {
 // builds a public API without inspecting lowered signatures or symbol names.
 struct EntryFunctions {
   std::string entryName;
-  func::FuncOp contract;    // heir.entry_func; null below the secret level
-  func::FuncOp setup;       // client.setup_func
-  func::FuncOp keygen;      // client.keygen_func; null when setup does keygen
-  func::FuncOp preprocess;  // server.preprocessing_func
-  func::FuncOp evaluate;    // server.evaluate_func
+  func::FuncOp contract;     // heir.entry_func; null below the secret level
+  func::FuncOp setup;        // client.setup_func
+  func::FuncOp serverSetup;  // server.setup_func (Cyclops GPU setup)
+  func::FuncOp keygen;       // client.keygen_func; null when setup does keygen
+  func::FuncOp preprocess;   // server.preprocessing_func
+  func::FuncOp evaluate;     // server.evaluate_func
   // client.enc_func / indexed client.pack_func, by entry-argument index.
   SmallVector<std::pair<unsigned, func::FuncOp>> inputHelpers;
   // client.dec_func, by entry-result index.

@@ -163,7 +163,11 @@ class BuildBazelExtension(build_ext.build_ext):
     )
 
   def copy_runtime_headers(self):
-    for header in ("CheddarRuntime.h", "CleartextResource.h"):
+    for header in (
+        "CheddarRuntime.h",
+        "CleartextResource.h",
+        "CyclopsRuntime.h",
+    ):
       src = Path("lib") / "Runtime" / header
       dst = Path(self.build_lib) / "heir" / "include" / src
       dst.parent.mkdir(parents=True, exist_ok=True)
