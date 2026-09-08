@@ -4,9 +4,9 @@
 // mutating the copy would violate its unique ownership contract. The precise
 // bufferization model therefore requires these destinations to be writable and
 // in-place.
-func.func @borrowed_ui(%ui: tensor<!cheddar.user_interface> {bufferization.writable = false}) -> tensor<!cheddar.user_interface> {
+func.func @borrowed_ui(%ctx: tensor<!cheddar.context>, %ui: tensor<!cheddar.user_interface> {bufferization.writable = false}) -> tensor<!cheddar.user_interface> {
   // expected-error@+1 {{move-only read-write destination must bufferize in-place}}
-  %updated = cheddar.prepare_rot_key %ui {distance = 7 : i64, maxLevel = 13 : i64} : (tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+  %updated = cheddar.prepare_rot_key %ctx, %ui {distance = 7 : i64, maxLevel = 13 : i64} : (tensor<!cheddar.context>, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
   return %updated : tensor<!cheddar.user_interface>
 }
 

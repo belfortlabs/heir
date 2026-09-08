@@ -495,11 +495,16 @@ struct ConvertPrepareRotKey
   LogicalResult matchAndRewrite(
       cheddar::PrepareRotKeyOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    VerbatimOp::create(rewriter, op.getLoc(),
-                       "{}->PrepareRotationKey(" +
-                           intLit(op.getDistanceAttr()) + ", " +
-                           intLit(op.getMaxLevelAttr()) + ");",
-                       ValueRange{adaptor.getUi()});
+    // Cyclops takes the SecretId of the secret the key is generated under
+    // between the distance and the level; scale-snu has no such parameter.
+    std::string code = "{}->PrepareRotationKey(" + intLit(op.getDistanceAttr());
+    SmallVector<Value> operands{adaptor.getUi()};
+    if (useCyclopsRuntime(op)) {
+      code += ", {}->BootSecretId()";
+      operands.push_back(adaptor.getCtx());
+    }
+    code += ", " + intLit(op.getMaxLevelAttr()) + ");";
+    VerbatimOp::create(rewriter, op.getLoc(), code, operands);
     rewriter.eraseOp(op);
     return success();
   }
@@ -546,9 +551,16 @@ struct ConvertPrepareBootstrap
     VerbatimOp::create(rewriter, op.getLoc(),
                        "{}->AddRequiredRotations(boot_evk_req, " + slots + ");",
                        ValueRange{context});
-    VerbatimOp::create(rewriter, op.getLoc(),
-                       "{}->PrepareRotationKey(boot_evk_req);",
-                       ValueRange{adaptor.getUi()});
+    // Same SecretId argument as the per-distance call above, on the
+    // EvkRequest overload.
+    std::string prepareKeys = "{}->PrepareRotationKey(boot_evk_req";
+    SmallVector<Value> keyOperands{adaptor.getUi()};
+    if (op.getUseCyclopsRuntime()) {
+      prepareKeys += ", {}->BootSecretId()";
+      keyOperands.push_back(context);
+    }
+    prepareKeys += ");";
+    VerbatimOp::create(rewriter, op.getLoc(), prepareKeys, keyOperands);
     rewriter.eraseOp(op);
     return success();
   }
@@ -616,6 +628,33 @@ struct ConvertEncodeConstant
                         ValueRange{adaptor.getEncoder(), adaptor.getOutput(),
                                    adaptor.getEncoder(), adaptor.getValue()}),
                     1);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+// cheddar.encrypt: tag the plaintext, then encrypt into the destination.
+//
+// Cyclops gives every container a `SecretId` naming the secret it belongs to.
+// It starts unset, `Encrypt` calls `CheckSecret` on the plaintext and rejects
+// an untagged one, and the ciphertext adopts the plaintext's tag (from which
+// ordinary operations propagate it via `MatchRing`). So the tag has to be set
+// before the call, and the context is the only thing that can name a secret.
+struct ConvertEncrypt : public OpConversionPattern<cheddar::EncryptOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      cheddar::EncryptOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    Value plaintext = adaptor.getPlaintext();
+    if (useCyclopsRuntime(op)) {
+      markDestination(
+          VerbatimOp::create(rewriter, op.getLoc(),
+                             "{}.SetSecretId({}->BootSecretId());",
+                             ValueRange{plaintext, adaptor.getCtx()}),
+          0);
+    }
+    emitOutParamCall(rewriter, op.getLoc(), adaptor.getUi(), "Encrypt",
+                     adaptor.getOutput(), {plaintext});
     rewriter.eraseOp(op);
     return success();
   }
@@ -1779,13 +1818,14 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
                                                           /*benefit=*/3);
     patterns.add<ConvertCiphertextCopy>(typeConverter, ctx, /*benefit=*/3);
 
-    patterns.add<ConvertMakeParameter, ConvertPrepareRotKey,
-                 ConvertCreateBootContext, ConvertPrepareBootstrap,
-                 ConvertEncode, ConvertEncodeConstant, ConvertDecode,
-                 ConvertHRot, ConvertHRotAdd, ConvertHConj, ConvertHConjAdd,
-                 ConvertLinearTransform, ConvertPrepareLinearTransform,
-                 ConvertApplyPreparedLinearTransform, ConvertEvalPoly>(
-        typeConverter, ctx);
+    patterns
+        .add<ConvertMakeParameter, ConvertPrepareRotKey,
+             ConvertCreateBootContext, ConvertPrepareBootstrap, ConvertEncode,
+             ConvertEncodeConstant, ConvertEncrypt, ConvertDecode, ConvertHRot,
+             ConvertHRotAdd, ConvertHConj, ConvertHConjAdd,
+             ConvertLinearTransform, ConvertPrepareLinearTransform,
+             ConvertApplyPreparedLinearTransform, ConvertEvalPoly>(
+            typeConverter, ctx);
     patterns.add<ConvertSetupAssign<cheddar::CreateContextOp>>(
         typeConverter, ctx, "Context<word>::Create");
     patterns.add<ConvertSetupAssign<cheddar::CreateUserInterfaceOp>>(
@@ -1810,7 +1850,6 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
     addDps("Rescale", cheddar::RescaleOp{});
     addDps("Relinearize", cheddar::RelinearizeOp{});
     addDps("RelinearizeRescale", cheddar::RelinearizeRescaleOp{});
-    addDps("Encrypt", cheddar::EncryptOp{});
     addDps("Decrypt", cheddar::DecryptOp{});
     addDps("MadUnsafe", cheddar::MadUnsafeOp{});
     addDps("Boot", cheddar::BootOp{});

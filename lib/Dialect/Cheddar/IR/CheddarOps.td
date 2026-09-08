@@ -186,7 +186,8 @@ def Cheddar_PrepareBootstrapOp : Cheddar_ReadWriteDpsOp<
       ctx->PrepareEvalMod();
       ctx->PrepareEvalSpecialFFT(numSlots);
       EvkRequest req; ctx->AddRequiredRotations(req, numSlots);
-      ui->PrepareRotationKey(req);
+      ui->PrepareRotationKey(req);        // scale-snu
+      ui->PrepareRotationKey(req, ctx->BootSecretId());   // cyclops
     `numSlots` is the number of slots the bootstrap refreshes (full-slot boot
     uses the context's slot count). Must run after the boot context + user
     interface are created and (for programs that also rotate outside boot) after
@@ -244,6 +245,7 @@ def Cheddar_PrepareRotKeyOp : Cheddar_ReadWriteDpsOp<
     key will be used.
   }];
   let arguments = (ins
+    Cheddar_AnyOwningContextLike:$ctx,
     Cheddar_UserInterfaceLike:$ui,
     Builtin_IntegerAttr:$distance,
     Builtin_IntegerAttr:$maxLevel
@@ -346,10 +348,11 @@ def Cheddar_DecodeOp : Cheddar_DpsOp<"decode", [], "Value"> {
 def Cheddar_EncryptOp : Cheddar_DpsOp<"encrypt"> {
   let summary = "Encrypt a plaintext into a ciphertext";
   let description = [{
-    Calls ui.Encrypt(ct, pt). Test-only operation. `$output` is the destination
+    Calls ui.Encrypt(ct, pt). `$output` is the destination
     ciphertext.
   }];
   let arguments = (ins
+    Cheddar_AnyContext:$ctx,
     Cheddar_UserInterface:$ui,
     Cheddar_PtLike:$plaintext,
     Cheddar_CtLike:$output

@@ -75,7 +75,7 @@ module attributes {backend.cheddar, cheddar.P = array<i64: 1152921504606994433>,
     %d_pt = tensor.empty() : tensor<!plaintext>
     %pt = cheddar.encode %encoder, %extracted_slice, %d_pt {level = 1 : i64} : (!encoder, tensor<1024xf32>, tensor<!plaintext>) -> tensor<!plaintext>
     %d_ct = tensor.empty() : tensor<!ciphertext>
-    %ct = cheddar.encrypt %ui, %pt, %d_ct : (!user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+    %ct = cheddar.encrypt %ctx, %ui, %pt, %d_ct : (!context, !user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
     %e = tensor.empty() : tensor<1x!ciphertext>
     %from_elements = tensor.insert_slice %ct into %e[0] [1] [1] : tensor<!ciphertext> into tensor<1x!ciphertext>
     return %from_elements : tensor<1x!ciphertext>
@@ -96,7 +96,7 @@ module attributes {backend.cheddar, cheddar.P = array<i64: 1152921504606994433>,
     %d_pt = tensor.empty() : tensor<!plaintext>
     %pt = cheddar.encode %encoder, %extracted_slice, %d_pt {level = 1 : i64} : (!encoder, tensor<1024xf32>, tensor<!plaintext>) -> tensor<!plaintext>
     %d_ct = tensor.empty() : tensor<!ciphertext>
-    %ct = cheddar.encrypt %ui, %pt, %d_ct : (!user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+    %ct = cheddar.encrypt %ctx, %ui, %pt, %d_ct : (!context, !user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
     %e = tensor.empty() : tensor<1x!ciphertext>
     %from_elements = tensor.insert_slice %ct into %e[0] [1] [1] : tensor<!ciphertext> into tensor<1x!ciphertext>
     return %from_elements : tensor<1x!ciphertext>

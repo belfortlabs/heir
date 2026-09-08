@@ -516,10 +516,13 @@ struct ConvertLWEEncryptOp : public OpConversionPattern<lwe::RLWEEncryptOp> {
       ConversionPatternRewriter& rewriter) const override {
     auto ui = getContextualArg<cheddar::UserInterfaceType>(op.getOperation());
     if (failed(ui)) return ui;
+    auto context = getContextualContext(op.getOperation());
+    if (failed(context)) return context;
     Type resultTy = typeConverter->convertType(op.getOutput().getType());
     Value dest = makeEmptyDest(rewriter, op.getLoc(), resultTy);
-    auto result = cheddar::EncryptOp::create(
-        rewriter, op.getLoc(), resultTy, ui.value(), adaptor.getInput(), dest);
+    auto result = cheddar::EncryptOp::create(rewriter, op.getLoc(), resultTy,
+                                             context.value(), ui.value(),
+                                             adaptor.getInput(), dest);
     rewriter.replaceOp(op, result);
     return success();
   }

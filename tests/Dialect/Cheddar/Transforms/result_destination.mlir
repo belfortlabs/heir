@@ -12,12 +12,13 @@
 // CHECK-NOT: memref.copy
 // CHECK: return
 func.func @packed_encrypt(
+    %ctx: !cheddar.context,
     %ui: !cheddar.user_interface,
     %plaintext: tensor<!cheddar.plaintext>)
     -> tensor<1x!cheddar.ciphertext> {
   %scalarInit = tensor.empty() : tensor<!cheddar.ciphertext>
-  %encrypted = cheddar.encrypt %ui, %plaintext, %scalarInit
-      : (!cheddar.user_interface, tensor<!cheddar.plaintext>,
+  %encrypted = cheddar.encrypt %ctx, %ui, %plaintext, %scalarInit
+      : (!cheddar.context, !cheddar.user_interface, tensor<!cheddar.plaintext>,
          tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
   %packedInit = tensor.empty() : tensor<1x!cheddar.ciphertext>
   %packed = tensor.insert_slice %encrypted into %packedInit[0] [1] [1]

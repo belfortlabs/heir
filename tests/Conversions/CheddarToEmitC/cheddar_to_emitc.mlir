@@ -47,7 +47,7 @@ func.func @configure() -> (tensor<!context>, tensor<!user_interface>) {
   %context = cheddar.create_context %p, %context_dest : (!parameter, tensor<!context>) -> tensor<!context>
   %ui_dest = tensor.empty() : tensor<!user_interface>
   %ui = cheddar.create_user_interface %context, %ui_dest : (tensor<!context>, tensor<!user_interface>) -> tensor<!user_interface>
-  %prepared = cheddar.prepare_rot_key %ui {distance = 3 : i64, maxLevel = 2 : i64} : (tensor<!user_interface>) -> tensor<!user_interface>
+  %prepared = cheddar.prepare_rot_key %context, %ui {distance = 3 : i64, maxLevel = 2 : i64} : (tensor<!context>, tensor<!user_interface>) -> tensor<!user_interface>
   return %context, %prepared : tensor<!context>, tensor<!user_interface>
 }
 
@@ -142,12 +142,12 @@ func.func @hmult(%ctx: !context, %a: tensor<!ciphertext>, %b: tensor<!ciphertext
 // CHECK: func.func @enc_chain
 // CHECK-SAME: !emitc.ptr<f64>
 // CHECK: emitc.verbatim "{}.Encode({}, 5, {}.GetScale(5), {});"
-// CHECK: emitc.member_call_opaque %arg2 "Encrypt"
-func.func @enc_chain(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
+// CHECK: emitc.member_call_opaque %arg3 "Encrypt"
+func.func @enc_chain(%ctx: !context, %enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
   %dp = tensor.empty() : tensor<!plaintext>
   %pt = cheddar.encode %enc, %msg, %dp {level = 5 : i64, logScale = 37 : i64} : (!encoder, tensor<4xf64>, tensor<!plaintext>) -> tensor<!plaintext>
   %dc = tensor.empty() : tensor<!ciphertext>
-  %ct = cheddar.encrypt %ui, %pt, %dc : (!user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  %ct = cheddar.encrypt %ctx, %ui, %pt, %dc : (!context, !user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   return %ct : tensor<!ciphertext>
 }
 
@@ -170,11 +170,11 @@ func.func @dec_chain(%enc: !encoder, %ui: !user_interface, %ct: tensor<!cipherte
 // CHECK: func.func @enc_chain_slots
 // CHECK: emitc.verbatim "{} = std::vector<double>({}, {} + 4);"
 // CHECK: emitc.verbatim "{}.EncodeSlots({}, 5, {}.GetScale(5), {});"
-func.func @enc_chain_slots(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
+func.func @enc_chain_slots(%ctx: !context, %enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
   %dp = tensor.empty() : tensor<!plaintext>
   %pt = cheddar.encode %enc, %msg, %dp {level = 5 : i64, logScale = 37 : i64, useSlotsApi} : (!encoder, tensor<4xf64>, tensor<!plaintext>) -> tensor<!plaintext>
   %dc = tensor.empty() : tensor<!ciphertext>
-  %ct = cheddar.encrypt %ui, %pt, %dc : (!user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  %ct = cheddar.encrypt %ctx, %ui, %pt, %dc : (!context, !user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   return %ct : tensor<!ciphertext>
 }
 

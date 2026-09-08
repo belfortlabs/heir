@@ -50,11 +50,11 @@ func.func @test_get_mult_key(%ui: !cheddar.user_interface) -> !cheddar.eval_key 
 }
 
 // CHECK: @test_prepare_rot_key
-func.func @test_prepare_rot_key(%ui: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
+func.func @test_prepare_rot_key(%ctx: tensor<!cheddar.context>, %ui: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
   // CHECK: cheddar.prepare_rot_key
   // CHECK-SAME: distance = 3
   // CHECK-SAME: maxLevel = 10
-  %ui2 = cheddar.prepare_rot_key %ui {distance = 3 : i64, maxLevel = 10 : i64} : (tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+  %ui2 = cheddar.prepare_rot_key %ctx, %ui {distance = 3 : i64, maxLevel = 10 : i64} : (tensor<!cheddar.context>, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
   return %ui2 : tensor<!cheddar.user_interface>
 }
 
@@ -94,11 +94,12 @@ func.func @test_decode(
 
 // CHECK: @test_encrypt
 func.func @test_encrypt(
+    %ctx: !cheddar.context,
     %ui: !cheddar.user_interface,
     %pt: tensor<!cheddar.plaintext>,
     %out: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
   // CHECK: cheddar.encrypt
-  %ct = cheddar.encrypt %ui, %pt, %out : (!cheddar.user_interface, tensor<!cheddar.plaintext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
+  %ct = cheddar.encrypt %ctx, %ui, %pt, %out : (!cheddar.context, !cheddar.user_interface, tensor<!cheddar.plaintext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
   return %ct : tensor<!cheddar.ciphertext>
 }
 

@@ -173,12 +173,12 @@ func.func @linear_transform(%ctx: !context, %ct: tensor<!ciphertext>,
 }
 
 // Encrypt / Decrypt out-param calls on the UserInterface.
-func.func @encrypt_decrypt(%ui: !cheddar.user_interface, %pt: tensor<!plaintext>,
-                           %ct: tensor<!ciphertext>)
+func.func @encrypt_decrypt(%ctx: !context, %ui: !cheddar.user_interface,
+                           %pt: tensor<!plaintext>, %ct: tensor<!ciphertext>)
     -> (tensor<!ciphertext>, tensor<!plaintext>) {
   %d0 = tensor.empty() : tensor<!ciphertext>
-  %0 = cheddar.encrypt %ui, %pt, %d0
-      : (!cheddar.user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  %0 = cheddar.encrypt %ctx, %ui, %pt, %d0
+      : (!context, !cheddar.user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   %d1 = tensor.empty() : tensor<!plaintext>
   %1 = cheddar.decrypt %ui, %ct, %d1
       : (!cheddar.user_interface, tensor<!ciphertext>, tensor<!plaintext>) -> tensor<!plaintext>

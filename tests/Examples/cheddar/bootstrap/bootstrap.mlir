@@ -58,7 +58,7 @@ module attributes {
     %dps_2 = tensor.empty() : tensor<!plaintext>
     %pt = cheddar.encode %encoder, %extracted_slice, %dps_2 {level = 0 : i64} : (!encoder, tensor<8xf32>, tensor<!plaintext>) -> tensor<!plaintext>
     %dps_3 = tensor.empty() : tensor<!ciphertext>
-    %ct = cheddar.encrypt %ui, %pt, %dps_3 : (!user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+    %ct = cheddar.encrypt %ctx, %ui, %pt, %dps_3 : (!context, !user_interface, tensor<!plaintext>, tensor<!ciphertext>) -> tensor<!ciphertext>
     %fe_4 = tensor.empty() : tensor<1x!ciphertext>
     %from_elements = tensor.insert_slice %ct into %fe_4[0] [1] [1] : tensor<!ciphertext> into tensor<1x!ciphertext>
     return %from_elements : tensor<1x!ciphertext>
