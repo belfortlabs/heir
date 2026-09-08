@@ -61,4 +61,8 @@ module attributes {
 // EMITC: emitc.call_opaque "main__setup"
 // EMITC: emitc.call_opaque "main__keygen"
 
+// CYCLOPS: emitc.verbatim "{}->PrepareRotationKey(7, {}->BootSecretId(), 13);"
+// CYCLOPS: emitc.verbatim "{}->PrepareEvalMod();"
 // CYCLOPS: emitc.verbatim "{}->PrepareHomomorphicDFT(256, BootVariant::kImaginaryRemoving);"
+// CYCLOPS: emitc.verbatim "EvkRequest boot_evk_req;"
+// CYCLOPS: emitc.verbatim "{}->PrepareRotationKey(boot_evk_req, {}->BootSecretId());"

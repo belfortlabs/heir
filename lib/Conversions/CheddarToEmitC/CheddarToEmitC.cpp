@@ -8,6 +8,7 @@
 
 #include "lib/Dialect/Cheddar/IR/CheddarDialect.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
+#include "lib/Dialect/Cheddar/IR/CheddarRuntime.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/Preprocessing/IR/PreprocessingOps.h"
 #include "lib/Utils/TargetUtils.h"
@@ -58,15 +59,9 @@ using ::mlir::emitc::VerbatimOp;
 //===----------------------------------------------------------------------===//
 
 constexpr StringLiteral kDestinationOperandAttr = "cheddar.destination_operand";
-constexpr StringLiteral kCheddarRuntimeAttrName = "cheddar.runtime";
 
-bool useCyclopsRuntime(Operation* op) {
-  auto module = op->getParentOfType<ModuleOp>();
-  auto runtime =
-      module ? module->getAttrOfType<StringAttr>(kCheddarRuntimeAttrName)
-             : StringAttr{};
-  return runtime && runtime.getValue() == "cyclops";
-}
+using ::mlir::heir::cheddar::kCheddarRuntimeAttrName;
+using ::mlir::heir::cheddar::useCyclopsRuntime;
 
 template <typename OpTy>
 OpTy markDestination(OpTy op, unsigned operandNumber) {
@@ -540,7 +535,7 @@ struct ConvertPrepareBootstrap
     Value context = adaptor.getCtx();
     VerbatimOp::create(rewriter, op.getLoc(), "{}->PrepareEvalMod();",
                        ValueRange{context});
-    std::string prepareDft = op.getUseCyclopsRuntime()
+    std::string prepareDft = useCyclopsRuntime(op)
                                  ? "{}->PrepareHomomorphicDFT(" + slots +
                                        ", BootVariant::kImaginaryRemoving);"
                                  : "{}->PrepareEvalSpecialFFT(" + slots +
@@ -555,7 +550,7 @@ struct ConvertPrepareBootstrap
     // EvkRequest overload.
     std::string prepareKeys = "{}->PrepareRotationKey(boot_evk_req";
     SmallVector<Value> keyOperands{adaptor.getUi()};
-    if (op.getUseCyclopsRuntime()) {
+    if (useCyclopsRuntime(op)) {
       prepareKeys += ", {}->BootSecretId()";
       keyOperands.push_back(context);
     }

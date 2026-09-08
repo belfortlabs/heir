@@ -59,6 +59,7 @@ cc_library(
         "@heir//lib/Analysis/RotationAnalysis",
         "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/CKKS/IR:Dialect",
+        "@heir//lib/Dialect/Cheddar/IR:CheddarRuntime",
         "@heir//lib/Dialect/Cheddar/IR:Dialect",
         "@heir//lib/Utils:TransformUtils",
         "@llvm-project//llvm:Support",

@@ -16,6 +16,7 @@ cc_library(
         ":pass_inc_gen",
         "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/CKKS/IR:Dialect",
+        "@heir//lib/Dialect/Cheddar/IR:CheddarRuntime",
         "@heir//lib/Dialect/Cheddar/IR:Dialect",
         "@heir//lib/Dialect/Kernel/IR:Dialect",
         "@heir//lib/Dialect/LWE/IR:Dialect",

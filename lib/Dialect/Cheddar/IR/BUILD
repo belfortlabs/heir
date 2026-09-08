@@ -35,6 +35,17 @@ cc_library(
 )
 
 cc_library(
+    name = "CheddarRuntime",
+    hdrs = [
+        "CheddarRuntime.h",
+    ],
+    deps = [
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
     name = "CheddarTypes",
     srcs = [
         "CheddarTypes.cpp",

@@ -196,8 +196,7 @@ def Cheddar_PrepareBootstrapOp : Cheddar_ReadWriteDpsOp<
   let arguments = (ins
     Cheddar_BootContextLike:$ctx,
     Cheddar_UserInterfaceLike:$ui,
-    Builtin_IntegerAttr:$numSlots,
-    OptionalAttr<UnitAttr>:$useCyclopsRuntime
+    Builtin_IntegerAttr:$numSlots
   );
   let results = (outs
     Cheddar_BootContextResult:$ctxResult,

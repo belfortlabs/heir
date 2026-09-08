@@ -8,6 +8,7 @@
 #include "lib/Dialect/CKKS/IR/CKKSAttributes.h"
 #include "lib/Dialect/CKKS/IR/CKKSDialect.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
+#include "lib/Dialect/Cheddar/IR/CheddarRuntime.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Utils/TransformUtils.h"
@@ -63,8 +64,8 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                          bool bootstraps, int64_t bootstrapNumSlots,
                          int64_t numCtsLevels, int64_t numStcLevels,
                          int64_t defaultEncLevel, int64_t denseHammingWeight,
-                         int64_t sparseHammingWeight, int64_t logMessageRatio,
-                         bool useCyclopsRuntime) {
+                         int64_t sparseHammingWeight,
+                         int64_t logMessageRatio) {
   MLIRContext* ctx = moduleOp.getContext();
   // EvalMod message headroom passed to CHEDDAR's BootParameter. This is the
   // reserved bits for the MESSAGE magnitude (~log2(max|m|)+margin), NOT a
@@ -157,8 +158,7 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   if (bootstraps) {
     auto prepare = PrepareBootstrapOp::create(
         builder, loc, TypeRange{ctxTensor, uiTensor}, context, ui,
-        i64(bootstrapNumSlots),
-        useCyclopsRuntime ? builder.getUnitAttr() : UnitAttr{});
+        i64(bootstrapNumSlots));
     context = prepare->getResult(0);
     ui = prepare->getResult(1);
   }
@@ -329,11 +329,27 @@ struct CheddarConfigureCryptoContext
         IntegerAttr::get(IntegerType::get(ctx, 64), logDefaultScale));
     moduleOp->setAttr("cheddar.Q", Q);
     moduleOp->setAttr("cheddar.P", P);
+
+    StringRef runtimeName =
+        useCyclopsRuntime ? kCyclopsRuntimeName : kScaleSnuRuntimeName;
+    if (auto existing =
+            moduleOp->getAttrOfType<StringAttr>(kCheddarRuntimeAttrName);
+        existing && existing.getValue() != runtimeName) {
+      moduleOp->emitOpError()
+          << "module is already tagged " << kCheddarRuntimeAttrName << " = \""
+          << existing.getValue() << "\", but use-cyclops-runtime="
+          << (useCyclopsRuntime ? "true" : "false") << " asks for \""
+          << runtimeName << "\"; pass the same value to --lwe-to-cheddar";
+      signalPassFailure();
+      return;
+    }
+    moduleOp->setAttr(kCheddarRuntimeAttrName,
+                      StringAttr::get(ctx, runtimeName));
+
     buildConfigureFuncs(moduleOp, entry, logN, logDefaultScale, Q, P,
                         rotationKeys, bootstraps, bootstrapNumSlots, bootNumCts,
                         bootNumStc, defaultEncLevel, denseHammingWeight,
-                        sparseHammingWeight, logMessageRatio,
-                        useCyclopsRuntime);
+                        sparseHammingWeight, logMessageRatio);
 
     moduleOp->removeAttr(ckks::CKKSDialect::kSchemeParamAttrName);
     moduleOp->removeAttr("scheme.ckks");

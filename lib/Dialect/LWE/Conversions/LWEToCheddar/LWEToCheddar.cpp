@@ -15,6 +15,7 @@
 #include "lib/Dialect/CKKS/IR/CKKSOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarDialect.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
+#include "lib/Dialect/Cheddar/IR/CheddarRuntime.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/Kernel/IR/KernelOps.h"
 #include "lib/Dialect/Kernel/IR/KernelTypes.h"
@@ -53,7 +54,9 @@
 
 namespace mlir::heir::lwe {
 
-constexpr StringLiteral kCheddarRuntimeAttrName = "cheddar.runtime";
+using ::mlir::heir::cheddar::kCheddarRuntimeAttrName;
+using ::mlir::heir::cheddar::kCyclopsRuntimeName;
+using ::mlir::heir::cheddar::kScaleSnuRuntimeName;
 
 //===----------------------------------------------------------------------===//
 // Type converter
@@ -1218,9 +1221,10 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     auto* module = getOperation();
     ToCheddarTypeConverter typeConverter(context);
 
-    module->setAttr(
-        kCheddarRuntimeAttrName,
-        StringAttr::get(context, useCyclopsRuntime ? "cyclops" : "cheddar"));
+    module->setAttr(kCheddarRuntimeAttrName,
+                    StringAttr::get(context, useCyclopsRuntime
+                                                 ? kCyclopsRuntimeName
+                                                 : kScaleSnuRuntimeName));
 
     if (!moduleIsCKKS(module)) {
       module->emitOpError("CHEDDAR backend only supports CKKS scheme");
