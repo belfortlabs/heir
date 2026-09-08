@@ -499,12 +499,11 @@ struct ConvertPrepareRotKey
     // position; scale-snu takes (distance, maxLevel). A `$ctx` operand selects
     // the Cyclops form.
     if (Value ctx = adaptor.getCtx()) {
-      VerbatimOp::create(rewriter, op.getLoc(),
-                         "{}->PrepareRotationKey(" +
-                             intLit(op.getDistanceAttr()) +
-                             ", {}->BootSecretId(), " +
-                             intLit(op.getMaxLevelAttr()) + ");",
-                         ValueRange{adaptor.getUi(), ctx});
+      VerbatimOp::create(
+          rewriter, op.getLoc(),
+          "{}->PrepareRotationKey(" + intLit(op.getDistanceAttr()) +
+              ", {}->BootSecretId(), " + intLit(op.getMaxLevelAttr()) + ");",
+          ValueRange{adaptor.getUi(), ctx});
       rewriter.eraseOp(op);
       return success();
     }
@@ -553,10 +552,9 @@ struct ConvertPrepareLinearTransformKeys
     VerbatimOp::create(rewriter, loc, "EvkRequest _ltk_req;", ValueRange{});
     VerbatimOp::create(rewriter, loc, "_ltk.AddRequiredRotations(_ltk_req);",
                        ValueRange{});
-    VerbatimOp::create(
-        rewriter, loc,
-        "{}->PrepareRotationKey(_ltk_req, {}->BootSecretId());",
-        ValueRange{adaptor.getUi(), ctx});
+    VerbatimOp::create(rewriter, loc,
+                       "{}->PrepareRotationKey(_ltk_req, {}->BootSecretId());",
+                       ValueRange{adaptor.getUi(), ctx});
     VerbatimOp::create(rewriter, loc, "}", ValueRange{});
     rewriter.eraseOp(op);
     return success();
@@ -593,7 +591,7 @@ struct ConvertPrepareBootstrap
     Value context = adaptor.getCtx();
     VerbatimOp::create(rewriter, op.getLoc(), "{}->PrepareEvalMod();",
                        ValueRange{context});
-    bool cyclops = op.getUseCyclopsRuntime();
+    bool cyclops = op.getUseCyclopsRuntime().value_or(false);
     // The same preparation under two names: scale-snu calls it
     // PrepareEvalSpecialFFT, Cyclops PrepareHomomorphicDFT.
     std::string prepareDft =
@@ -1095,7 +1093,7 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
          {});
     emit("_ep.Compile(_ep_cp);", {});
     StringRef evaluate =
-        cyclopsApi
+        op.getSelectMultKeyAtUseLevel()
             ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
             : "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
     markDestination(
@@ -1851,13 +1849,14 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
                                                           /*benefit=*/3);
     patterns.add<ConvertCiphertextCopy>(typeConverter, ctx, /*benefit=*/3);
 
-    patterns.add<ConvertMakeParameter, ConvertPrepareRotKey,
-                 ConvertCreateBootContext, ConvertPrepareBootstrap,
-                 ConvertEncode, ConvertEncodeConstant, ConvertDecode,
-                 ConvertHRot, ConvertHRotAdd, ConvertHConj, ConvertHConjAdd,
-                 ConvertLinearTransform, ConvertPrepareLinearTransform,
-                 ConvertApplyPreparedLinearTransform, ConvertEvalPoly,
-                 ConvertPrepareLinearTransformKeys>(typeConverter, ctx);
+    patterns
+        .add<ConvertMakeParameter, ConvertPrepareRotKey,
+             ConvertCreateBootContext, ConvertPrepareBootstrap, ConvertEncode,
+             ConvertEncodeConstant, ConvertDecode, ConvertHRot, ConvertHRotAdd,
+             ConvertHConj, ConvertHConjAdd, ConvertLinearTransform,
+             ConvertPrepareLinearTransform, ConvertApplyPreparedLinearTransform,
+             ConvertEvalPoly, ConvertPrepareLinearTransformKeys>(typeConverter,
+                                                                 ctx);
     patterns.add<ConvertSetupAssign<cheddar::CreateContextOp>>(
         typeConverter, ctx, "Context<word>::Create");
     patterns.add<ConvertSetupAssign<cheddar::CreateUserInterfaceOp>>(
