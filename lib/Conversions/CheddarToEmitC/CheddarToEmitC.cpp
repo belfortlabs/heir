@@ -529,10 +529,8 @@ struct ConvertPrepareLinearTransformKeys
     std::string width = intLit(op.getWidthAttr());
     std::string lvl = intLit(op.getLevelAttr());
     VerbatimOp::create(rewriter, loc, "{", ValueRange{});
-    VerbatimOp::create(
-        rewriter, loc,
-        "ConstContextPtr<word> _ltk_cp(ConstContextPtr<word>(), {});",
-        ValueRange{ctx});
+    VerbatimOp::create(rewriter, loc, "ConstContextPtr<word> _ltk_cp = {};",
+                       ValueRange{ctx});
     VerbatimOp::create(
         rewriter, loc,
         "StripedMatrix _ltk_matrix(" + width + ", " + width + ");",

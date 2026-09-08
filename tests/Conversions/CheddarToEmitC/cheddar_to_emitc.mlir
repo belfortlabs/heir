@@ -57,7 +57,7 @@ func.func @configure() -> (tensor<!context>, tensor<!user_interface>) {
 // CHECK: func.func @configure_cyclops
 // CHECK: emitc.verbatim "{}->PrepareRotationKey(3, {}->BootSecretId(), 2);"
 // CHECK: emitc.verbatim "{"
-// CHECK: emitc.verbatim "ConstContextPtr<word> _ltk_cp(ConstContextPtr<word>(), {});"
+// CHECK: emitc.verbatim "ConstContextPtr<word> _ltk_cp = {};"
 // CHECK: emitc.verbatim "StripedMatrix _ltk_matrix(8, 8);"
 // CHECK: emitc.verbatim "_ltk_matrix[0] = std::vector<Complex>(8, Complex(0.0, 0.0));"
 // CHECK: emitc.verbatim "_ltk_matrix[3] = std::vector<Complex>(8, Complex(0.0, 0.0));"
