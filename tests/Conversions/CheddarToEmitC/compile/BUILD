@@ -72,9 +72,34 @@ cc_library(
     deps = [":cheddar_stub"],
 )
 
+heir_opt(
+    name = "kernels_cyclops_emitc",
+    src = "kernels_cyclops.mlir",
+    generated_filename = "kernels_cyclops_emitc.mlir",
+    pass_flags = [
+        "--cheddar-bufferize",
+        "--fold-memref-alias-ops",
+        "--cse",
+        "--canonicalize",
+        "--drop-equivalent-buffer-results",
+        "--buffer-results-to-out-params=hoist-static-allocs=true modify-public-functions=true add-result-attr=true",
+        "--canonicalize",
+        "--convert-to-emitc=filter-dialects=cheddar,arith,scf",
+        "--cheddar-emitc-boundary",
+        "--reconcile-unrealized-casts",
+    ],
+)
+
+heir_translate(
+    name = "kernels_cyclops_cpp_raw",
+    src = ":kernels_cyclops_emitc.mlir",
+    generated_filename = "kernels_cyclops_raw.cc",
+    pass_flags = ["--mlir-to-cpp"],
+)
+
 genrule(
     name = "kernels_cyclops_lib_src",
-    srcs = [":kernels_raw.cc"],
+    srcs = [":kernels_cyclops_raw.cc"],
     outs = ["kernels_cyclops_lib.cc"],
     cmd = """cat > $@ <<'PRELUDE_EOF'
 // AUTO-GENERATED: do not edit. See tests/Conversions/CheddarToEmitC/compile/BUILD.
@@ -88,7 +113,7 @@ genrule(
 using namespace cheddar;
 using word = uint64_t;
 PRELUDE_EOF
-cat $(location :kernels_raw.cc) >> $@
+cat $(location :kernels_cyclops_raw.cc) >> $@
 """,
 )
 
