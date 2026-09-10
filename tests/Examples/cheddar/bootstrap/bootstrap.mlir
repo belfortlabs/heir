@@ -42,7 +42,7 @@ module attributes {
     %inserted = tensor.insert_slice %ct into %0[0] [1] [1] : tensor<!ciphertext> into tensor<1x!ciphertext>
     return %inserted : tensor<1x!ciphertext>
   }
-  func.func @boot__encrypt__arg0(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<8xf32>, %ui_0: !user_interface) -> tensor<1x!ciphertext> attributes {client.enc_func = {func_name = "boot", index = 0 : i64}} {
+  func.func @boot__encrypt__arg0(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<8xf32>, %ui_0: !user_interface) -> tensor<1x!ciphertext> attributes {heir.interface = {func_name = "boot", index = 0 : i64, roles = ["client.encrypt"]}} {
     %c0 = arith.constant 0 : index
     %cst = arith.constant dense<0.000000e+00> : tensor<1x8xf32>
     %c0_i32 = arith.constant 0 : i32
@@ -63,7 +63,7 @@ module attributes {
     %from_elements = tensor.insert_slice %ct into %fe_4[0] [1] [1] : tensor<!ciphertext> into tensor<1x!ciphertext>
     return %from_elements : tensor<1x!ciphertext>
   }
-  func.func @boot__decrypt__result0(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1x!ciphertext>, %ui_0: !user_interface) -> tensor<8xf32> attributes {client.dec_func = {func_name = "boot", index = 0 : i64}} {
+  func.func @boot__decrypt__result0(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1x!ciphertext>, %ui_0: !user_interface) -> tensor<8xf32> attributes {heir.interface = {func_name = "boot", index = 0 : i64, roles = ["client.decrypt"]}} {
     %c0 = arith.constant 0 : index
     %c8_i32 = arith.constant 8 : i32
     %c1_i32 = arith.constant 1 : i32

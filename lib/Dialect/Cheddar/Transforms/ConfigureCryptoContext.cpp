@@ -125,9 +125,9 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   auto setupType = FunctionType::get(ctx, {}, {ctxTensor});
   auto setupFunc = func::FuncOp::create(builder, loc, setupName, setupType);
   setupFunc.setPublic();
-  setupFunc->setAttr(
-      useCyclopsRuntime ? kServerSetupFuncAttrName : kClientSetupFuncAttrName,
-      roleAttr);
+  setInterfaceRole(setupFunc,
+                   useCyclopsRuntime ? kServerSetupRole : kClientSetupRole,
+                   roleAttr);
 
   Block* bodyBlock = setupFunc.addEntryBlock();
   builder.setInsertionPointToStart(bodyBlock);
@@ -184,7 +184,7 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
     ctxTensor = RankedTensorType::get({}, ClientContextType::get(ctx));
     auto clientSetup = func::FuncOp::create(
         builder, loc, setupName, FunctionType::get(ctx, {}, {ctxTensor}));
-    clientSetup->setAttr(kClientSetupFuncAttrName, roleAttr);
+    setInterfaceRole(clientSetup, kClientSetupRole, roleAttr);
     builder.setInsertionPointToStart(clientSetup.addEntryBlock());
     Value clientParams = builder.clone(*params.getDefiningOp())->getResult(0);
     Value init = tensor::EmptyOp::create(builder, loc, ctxTensor.getShape(),
@@ -201,7 +201,7 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   auto keygenType = FunctionType::get(ctx, {ctxTensor}, {ctxTensor, uiTensor});
   auto keygenFunc = func::FuncOp::create(builder, loc, keygenName, keygenType);
   keygenFunc.setPublic();
-  keygenFunc->setAttr(kClientKeygenFuncAttrName, roleAttr);
+  setInterfaceRole(keygenFunc, kClientKeygenRole, roleAttr);
   bodyBlock = keygenFunc.addEntryBlock();
   builder.setInsertionPointToStart(bodyBlock);
   context = keygenFunc.getArgument(0);

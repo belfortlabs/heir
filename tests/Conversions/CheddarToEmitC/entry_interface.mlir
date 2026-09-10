@@ -18,49 +18,41 @@
 
 func.func @entry__setup(
     %out: !ctx_owner {bufferize.result})
-    attributes {client.setup_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["client.setup"]}} {
   return
 }
 
 func.func @entry__keygen(
     %ctx: !ctx_owner_const,
     %out: !ui_owner {bufferize.result})
-    attributes {client.keygen_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["client.keygen"]}} {
   return
 }
 
 func.func @entry(
     %input0: !ct_const, %input1: !ct_const, %prepared: !pt_const,
     %out: !ct {bufferize.result})
-    attributes {
-      heir.entry_func = {func_name = "entry"},
-      heir.entry_input_types = [tensor<4xf32>, tensor<2xf32>],
-      heir.entry_result_types = [tensor<2xf32>]
-    } {
+    attributes {heir.interface = {func_name = "entry", input_types = [tensor<4xf32>, tensor<2xf32>], result_types = [tensor<2xf32>], roles = ["entry"]}} {
   return
 }
 
 func.func @entry__encrypt__arg0(
     %ctx: !ctx, %encoder: !encoder, %ui: !ui, %input: !emitc.ptr<f32>,
     %out: !ct {bufferize.result})
-    attributes {
-      client.enc_func = {func_name = "entry", index = 0 : i64}
-    } {
+    attributes {heir.interface = {func_name = "entry", index = 0 : i64, roles = ["client.encrypt"]}} {
   return
 }
 
 func.func @entry__encrypt__arg1(
     %ctx: !ctx, %encoder: !encoder, %ui: !ui, %input: !emitc.ptr<f32>,
     %out: !ct {bufferize.result})
-    attributes {
-      client.enc_func = {func_name = "entry", index = 1 : i64}
-    } {
+    attributes {heir.interface = {func_name = "entry", index = 1 : i64, roles = ["client.encrypt"]}} {
   return
 }
 
 func.func @entry__preprocessing(
     %ctx: !boot_ctx, %encoder: !encoder, %out: !pt {bufferize.result})
-    attributes {server.preprocessing_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["server.preprocessing"]}} {
   %data = emitc.literal "nullptr" : !emitc.ptr<f32>
   call @outlined_layout(%data) : (!emitc.ptr<f32>) -> ()
   return
@@ -71,21 +63,19 @@ func.func @entry__preprocessed(
     %evk_map: !evk_map, %input0: !ct_const, %input1: !ct_const,
     %prepared: !pt_const,
     %out: !ct {bufferize.result})
-    attributes {server.evaluate_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["server.evaluate"]}} {
   return
 }
 
 func.func @entry__decrypt__result0(
     %ctx: !ctx, %encoder: !encoder, %ui: !ui, %evk: !evk,
     %input: !ct_const, %out: !emitc.ptr<f32> {bufferize.result})
-    attributes {
-      client.dec_func = {func_name = "entry", index = 0 : i64}
-    } {
+    attributes {heir.interface = {func_name = "entry", index = 0 : i64, roles = ["client.decrypt"]}} {
   return
 }
 
 func.func private @outlined_layout(%input: !emitc.ptr<f32>)
-    attributes {client.pack_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["client.pack"]}} {
   emitc.call_opaque "heir::loadResource"(%input) <{
     args = [#emitc.opaque<"\22data/weights.bin\22">, 0 : index,
             #emitc.opaque<"4">],

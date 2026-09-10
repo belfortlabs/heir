@@ -981,9 +981,9 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   if (side == InterfaceSide::Server) functions.setup = functions.serverSetup;
 
   ArrayAttr inputTypeAttrs =
-      getLogicalTypes(functions.contract, kEntryInputTypesAttrName);
+      getLogicalTypes(functions.contract, kEntryInputTypes);
   ArrayAttr resultTypeAttrs =
-      getLogicalTypes(functions.contract, kEntryResultTypesAttrName);
+      getLogicalTypes(functions.contract, kEntryResultTypes);
   if (!inputTypeAttrs || !resultTypeAttrs)
     return module.emitError("entry interface is missing logical type metadata");
 

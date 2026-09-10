@@ -36,11 +36,11 @@ module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [3602879
 // CHECK-SAME: cheddar.logN = 13 : i64
 // CHECK-NOT: ckks.schemeParam
 // CHECK: func.func @main__setup
-// CHECK-SAME: client.setup_func = {func_name = "main"}
+// CHECK-SAME: heir.interface = {func_name = "main", roles = ["client.setup"]}
 // CHECK: cheddar.make_parameter
 // CHECK: cheddar.create_context
 // CHECK: func.func @main__keygen
-// CHECK-SAME: client.keygen_func = {func_name = "main"}
+// CHECK-SAME: heir.interface = {func_name = "main", roles = ["client.keygen"]}
 // CHECK: cheddar.create_user_interface
 // CHECK: cheddar.prepare_rot_key
 // CHECK-SAME: distance = 2

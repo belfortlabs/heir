@@ -166,7 +166,7 @@ void InterfaceEmitter::emitConversion(StringRef name, StringRef src,
 LogicalResult InterfaceEmitter::emitContext() {
   if (!functions.setup)
     return functions.contract.emitOpError(
-        "has no client.setup_func; run the configure-crypto-context pass");
+        "has no client.setup; run the configure-crypto-context pass");
 
   for (Type type : functions.setup.getResultTypes()) {
     std::optional<std::string> field = contextFieldFor(type);
@@ -350,13 +350,13 @@ LogicalResult InterfaceEmitter::emitPreprocess() {
   }
 
   DictionaryAttr role =
-      getRoleAttr(functions.preprocess, kServerPreprocessingFuncAttrName);
+      getRoleAttr(functions.preprocess, kServerPreprocessingRole);
   auto entryArgs = dyn_cast_or_null<DenseI64ArrayAttr>(
       role.get(kServerPreprocessingEntryArgs));
   SmallVector<DataArgument> data = dataArguments(functions.preprocess);
   if (!entryArgs || entryArgs.size() != static_cast<int64_t>(data.size()))
     return functions.preprocess.emitOpError()
-           << "server.preprocessing_func is missing entry_arg_indices";
+           << "server.preprocessing is missing entry_arg_indices";
 
   os << "func (ctx *" << prefix << "Context) Preprocess(inputs [][]float64) "
      << prefix << "Prepared {\n";
@@ -456,10 +456,9 @@ LogicalResult InterfaceEmitter::emit(ModuleOp module) {
 
   if (functions.contract) {
     ArrayAttr inputTypes =
-        getLogicalTypes(functions.contract, kEntryInputTypesAttrName);
+        getLogicalTypes(functions.contract, kEntryInputTypes);
     if (!inputTypes)
-      return functions.contract.emitOpError(
-          "is missing heir.entry_input_types");
+      return functions.contract.emitOpError("is missing input_types");
     numLogicalInputs = inputTypes.size();
 
     for (auto [index, type] :
@@ -479,7 +478,7 @@ LogicalResult InterfaceEmitter::emit(ModuleOp module) {
     }
     if (entryArgTypes.size() < numLogicalInputs)
       return functions.contract.emitOpError()
-             << "has fewer arguments than heir.entry_input_types";
+             << "has fewer arguments than input_types";
     if (failed(validateIndexedHelpers(functions.inputHelpers, numLogicalInputs,
                                       "encryption", functions.contract)) ||
         failed(validateIndexedHelpers(functions.outputHelpers,

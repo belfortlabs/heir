@@ -86,7 +86,7 @@ DictionaryAttr encZeroRoleAttr(OpBuilder& builder, func::FuncOp parentFunc,
 // function is created for each ciphertext type returned by originalOp and each
 // mgmt attribute attached to the originalOp, and otherwise duplicate functions
 // are looked up by symbol name. Created functions are tagged with
-// client.enc_zero_func.
+// client.encrypt_zero.
 func::FuncOp getOrCreateEncryptionOfZerosFunc(func::FuncOp parentFunc,
                                               TrivialEncryptOp originalOp,
                                               ModuleOp module, int index) {
@@ -102,8 +102,8 @@ func::FuncOp getOrCreateEncryptionOfZerosFunc(func::FuncOp parentFunc,
   std::string encFuncName = std::string(sanitizeIdentifier(buffer, buffer2));
 
   if (auto existingFunc = module.lookupSymbol<func::FuncOp>(encFuncName)) {
-    assert(existingFunc->hasAttr(kClientEncZeroFuncAttrName) &&
-           "existing function does not have client.enc_zero_func attribute");
+    assert(hasInterfaceRole(existingFunc, kClientEncZeroRole) &&
+           "existing function does not have client.encrypt_zero role");
     return existingFunc;
   }
 
@@ -127,8 +127,8 @@ func::FuncOp getOrCreateEncryptionOfZerosFunc(func::FuncOp parentFunc,
       FunctionType::get(builder.getContext(), {keyTy}, {ciphertextType});
   auto encFuncOp = func::FuncOp::create(builder, encFuncName, encFuncType);
 
-  encFuncOp->setAttr(kClientEncZeroFuncAttrName,
-                     encZeroRoleAttr(builder, parentFunc, index));
+  setInterfaceRole(encFuncOp, kClientEncZeroRole,
+                   encZeroRoleAttr(builder, parentFunc, index));
   Block* entryBlock = encFuncOp.addEntryBlock();
   builder.setInsertionPointToEnd(entryBlock);
 

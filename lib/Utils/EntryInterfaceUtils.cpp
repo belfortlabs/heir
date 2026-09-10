@@ -18,7 +18,7 @@ namespace mlir {
 namespace heir {
 
 DictionaryAttr getRoleAttr(func::FuncOp function, StringRef name) {
-  return function->getAttrOfType<DictionaryAttr>(name);
+  return getInterfaceAttr(function, name);
 }
 
 std::optional<StringRef> getRoleEntry(func::FuncOp function, StringRef name) {
@@ -39,7 +39,8 @@ FailureOr<unsigned> getRoleIndex(func::FuncOp function, StringRef name) {
 }
 
 ArrayAttr getLogicalTypes(func::FuncOp function, StringRef name) {
-  return function->getAttrOfType<ArrayAttr>(name);
+  auto metadata = getInterfaceAttr(function);
+  return metadata ? metadata.getAs<ArrayAttr>(name) : ArrayAttr();
 }
 
 func::FuncOp findIndexedHelper(
@@ -71,20 +72,20 @@ FailureOr<EntryFunctions> findEntryFunctions(ModuleOp module,
   // secret level never ran --add-client-interface and so has no contract; the
   // setup function the backend generated still names its entry.
   SmallVector<func::FuncOp> anchors;
-  StringRef anchorRole = kEntryFuncAttrName;
+  StringRef anchorRole = kEntryRole;
   module.walk([&](func::FuncOp function) {
-    if (function->hasAttr(kEntryFuncAttrName)) anchors.push_back(function);
+    if (hasInterfaceRole(function, kEntryRole)) anchors.push_back(function);
   });
   if (anchors.empty()) {
-    anchorRole = kClientSetupFuncAttrName;
+    anchorRole = kClientSetupRole;
     module.walk([&](func::FuncOp function) {
-      if (function->hasAttr(kClientSetupFuncAttrName))
+      if (hasInterfaceRole(function, kClientSetupRole))
         anchors.push_back(function);
     });
   }
   if (anchors.empty())
     return module.emitError(
-        "missing a function with heir.entry_func or client.setup_func");
+        "missing a function with an entry or client.setup interface role");
 
   func::FuncOp anchor;
   if (!requestedEntry.empty()) {
@@ -109,7 +110,7 @@ FailureOr<EntryFunctions> findEntryFunctions(ModuleOp module,
 
   EntryFunctions functions;
   functions.entryName = entry->str();
-  if (anchorRole == kEntryFuncAttrName) functions.contract = anchor;
+  if (anchorRole == kEntryRole) functions.contract = anchor;
   LogicalResult collectionResult = success();
   module.walk([&](func::FuncOp function) {
     auto matches = [&](StringRef role) {
@@ -126,24 +127,23 @@ FailureOr<EntryFunctions> findEntryFunctions(ModuleOp module,
           helpers.emplace_back(*index, function);
         };
 
-    if (matches(kClientSetupFuncAttrName)) functions.setup = function;
-    if (matches(kServerSetupFuncAttrName)) functions.serverSetup = function;
-    if (matches(kClientKeygenFuncAttrName)) functions.keygen = function;
-    if (matches(kServerPreprocessingFuncAttrName))
-      functions.preprocess = function;
-    if (matches(kServerEvaluateFuncAttrName)) functions.evaluate = function;
-    for (StringRef role : {kClientEncFuncAttrName, kClientPackFuncAttrName}) {
+    if (matches(kClientSetupRole)) functions.setup = function;
+    if (matches(kServerSetupRole)) functions.serverSetup = function;
+    if (matches(kClientKeygenRole)) functions.keygen = function;
+    if (matches(kServerPreprocessingRole)) functions.preprocess = function;
+    if (matches(kServerEvaluateRole)) functions.evaluate = function;
+    for (StringRef role : {kClientEncRole, kClientPackRole}) {
       if (!matches(role)) continue;
-      // An unindexed client.pack_func is an outlined layout helper.
-      if (role == kClientPackFuncAttrName &&
+      // An unindexed client.pack is an outlined layout helper.
+      if (role == kClientPackRole &&
           !getRoleAttr(function, role).get(kClientHelperIndex))
         continue;
       collectIndexed(role, functions.inputHelpers);
     }
-    if (matches(kClientDecFuncAttrName))
-      collectIndexed(kClientDecFuncAttrName, functions.outputHelpers);
-    if (matches(kClientEncZeroFuncAttrName))
-      collectIndexed(kClientEncZeroFuncAttrName, functions.zeroHelpers);
+    if (matches(kClientDecRole))
+      collectIndexed(kClientDecRole, functions.outputHelpers);
+    if (matches(kClientEncZeroRole))
+      collectIndexed(kClientEncZeroRole, functions.zeroHelpers);
   });
 
   if (failed(collectionResult)) return failure();

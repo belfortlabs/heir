@@ -208,9 +208,11 @@ static void removeDeadAffineForIterArgs(func::FuncOp funcOp) {
 // The logical entry identity of `op`: the role it already carries (preserved
 // across symbol renames), or its current symbol name.
 SmallVector<NamedAttribute> logicalRole(FuncOp op, OpBuilder& builder) {
-  auto role = op->getAttrOfType<DictionaryAttr>(kServerEvaluateFuncAttrName);
-  if (!role) role = op->getAttrOfType<DictionaryAttr>(kEntryFuncAttrName);
-  if (role) return SmallVector<NamedAttribute>(role.begin(), role.end());
+  auto role = getInterfaceAttr(op, kServerEvaluateRole);
+  if (!role) role = getInterfaceAttr(op, kEntryRole);
+  if (role)
+    return {builder.getNamedAttr(kClientHelperFuncName,
+                                 role.get(kClientHelperFuncName))};
   return {builder.getNamedAttr(kClientHelperFuncName,
                                builder.getStringAttr(op.getName()))};
 }
@@ -282,7 +284,7 @@ struct SplitPreprocessingPass
 
     updateOriginalFunc(funcOp, preprocessingFuncOp, preprocessedFuncOp,
                        analysis);
-    funcOp->removeAttr(kServerEvaluateFuncAttrName);
+    removeInterfaceRole(funcOp, kServerEvaluateRole);
 
     // Remove dead values to clean up the created/updated functions
     OpPassManager pipeline("func.func");
@@ -423,8 +425,8 @@ struct SplitPreprocessingPass
     role.push_back(
         builder.getNamedAttr(kServerPreprocessingEntryArgs,
                              builder.getDenseI64ArrayAttr(entryArgIndices)));
-    funcOp->setAttr(kServerPreprocessingFuncAttrName,
-                    builder.getDictionaryAttr(role));
+    setInterfaceRole(funcOp, kServerPreprocessingRole,
+                     builder.getDictionaryAttr(role));
 
     // Set up the operation cloning infra: map the analysis-identified inputs to
     // the new func's block arguments
@@ -554,14 +556,14 @@ struct SplitPreprocessingPass
     auto funcName = op.getName().str() + "__preprocessed";
     auto funcOp = FuncOp::create(op.getLoc(), funcName, funcType);
     funcOp.setVisibility(op.getVisibility());
-    funcOp->setAttr(
-        kClientPreprocessedFuncAttrName,
+    setInterfaceRole(
+        funcOp, kClientPreprocessedRole,
         builder.getDictionaryAttr({
             builder.getNamedAttr(kClientHelperFuncName,
                                  builder.getStringAttr(op.getName())),
         }));
-    funcOp->setAttr(kServerEvaluateFuncAttrName,
-                    builder.getDictionaryAttr(logicalRole(op, builder)));
+    setInterfaceRole(funcOp, kServerEvaluateRole,
+                     builder.getDictionaryAttr(logicalRole(op, builder)));
 
     IRMapping map;
     Block* entryBlock = funcOp.addEntryBlock();

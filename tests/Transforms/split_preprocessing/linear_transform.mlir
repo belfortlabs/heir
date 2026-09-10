@@ -1,7 +1,7 @@
 // RUN: heir-opt --split-preprocessing %s | FileCheck %s
 
 // CHECK: func.func @dynamic_linear_transform__preprocessing(%{{.*}}: tensor<2x4xf32>)
-// CHECK-SAME: server.preprocessing_func = {entry_arg_indices = array<i64: 1>, func_name = "dynamic_linear_transform"}
+// CHECK-SAME: heir.interface = {entry_arg_indices = array<i64: 1>, func_name = "dynamic_linear_transform", roles = ["server.preprocessing"]}
 // CHECK: func.func @dynamic_linear_transform__preprocessed(
 // CHECK-SAME: %[[DIAGS:.*]]: tensor<2x4xf32>
 // CHECK: kernel.linear_transform %{{.*}}, %[[DIAGS:[a-zA-Z0-9_]+]]

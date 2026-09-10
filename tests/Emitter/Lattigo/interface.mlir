@@ -29,7 +29,7 @@ module attributes {scheme.ckks, backend.lattigo} {
   // CHECK-NEXT: Decryptor *rlwe.Decryptor
   // CHECK: func MainSetup() *MainContext {
   // CHECK: ctx.BootEvaluator, ctx.Evaluator, ctx.Params, ctx.Encoder, ctx.Encryptor, ctx.Decryptor = Main__configure()
-  func.func private @main__configure() -> (!boot_evaluator, !evaluator, !params, !encoder, !encryptor, !decryptor) attributes {client.setup_func = {func_name = "main"}}
+  func.func private @main__configure() -> (!boot_evaluator, !evaluator, !params, !encoder, !encryptor, !decryptor) attributes {heir.interface = {func_name = "main", roles = ["client.setup"]}}
 
   // Two storage slices, one per distinct preprocessed element type.
   // CHECK: type MainPrepared struct {
@@ -49,24 +49,24 @@ module attributes {scheme.ckks, backend.lattigo} {
   // CHECK: arg1 := make([]float32, len(inputs[1]))
   // CHECK: enc.Arg1 = arg1
   // CHECK: enc.Zero0 = Main__encrypt__zero__0(ctx.Evaluator, ctx.Params, ctx.Encoder, ctx.Encryptor)
-  func.func private @main__encrypt__arg0(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %encryptor: !encryptor, %arg: memref<16xf32>) -> memref<1x!ct> attributes {client.enc_func = {func_name = "main", index = 0 : i64}}
+  func.func private @main__encrypt__arg0(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %encryptor: !encryptor, %arg: memref<16xf32>) -> memref<1x!ct> attributes {heir.interface = {func_name = "main", index = 0 : i64, roles = ["client.encrypt"]}}
 
-  func.func private @main__encrypt__zero__0(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %encryptor: !encryptor) -> !ct attributes {client.enc_zero_func = {func_name = "main", index = 0 : i64}}
+  func.func private @main__encrypt__zero__0(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %encryptor: !encryptor) -> !ct attributes {heir.interface = {func_name = "main", index = 0 : i64, roles = ["client.encrypt_zero"]}}
 
   // entry_arg_indices says entry argument 1 is the one that feeds preprocessing.
   // CHECK: func (ctx *MainContext) Preprocess(inputs [][]float64) MainPrepared {
   // CHECK: arg1 := make([]float32, len(inputs[1]))
   // CHECK: prep.S0, prep.S1 = Main__preprocessing(ctx.Params, ctx.Encoder, arg1)
-  func.func private @main__preprocessing(%params: !params, %encoder: !encoder, %arg: memref<16xf32>) -> (memref<1x!lintrans>, memref<2x!pt>) attributes {server.preprocessing_func = {entry_arg_indices = array<i64: 1>, func_name = "main"}}
+  func.func private @main__preprocessing(%params: !params, %encoder: !encoder, %arg: memref<16xf32>) -> (memref<1x!lintrans>, memref<2x!pt>) attributes {heir.interface = {entry_arg_indices = array<i64: 1>, func_name = "main", roles = ["server.preprocessing"]}}
 
   // CHECK: func (ctx *MainContext) Evaluate(prep MainPrepared, enc MainEncrypted) MainEvaluated {
   // CHECK: out.Res0 = Main__preprocessed(ctx.BootEvaluator, ctx.Evaluator, ctx.Params, ctx.Encoder, enc.Arg0, enc.Arg1, enc.Zero0, prep.S0, prep.S1)
-  func.func private @main__preprocessed(%boot: !boot_evaluator, %evaluator: !evaluator, %params: !params, %encoder: !encoder, %ct: memref<1x!ct>, %arg1: memref<16xf32>, %zero: !ct, %s0: memref<1x!lintrans>, %s1: memref<2x!pt>) -> memref<1x!ct> attributes {client.preprocessed_func = {func_name = "main"}, server.evaluate_func = {func_name = "main"}}
+  func.func private @main__preprocessed(%boot: !boot_evaluator, %evaluator: !evaluator, %params: !params, %encoder: !encoder, %ct: memref<1x!ct>, %arg1: memref<16xf32>, %zero: !ct, %s0: memref<1x!lintrans>, %s1: memref<2x!pt>) -> memref<1x!ct> attributes {heir.interface = {func_name = "main", roles = ["client.preprocessed", "server.evaluate"]}}
 
   // CHECK: func (ctx *MainContext) Decrypt(out MainEvaluated) [][]float64 {
   // CHECK: res0 := Main__decrypt__result0(ctx.Evaluator, ctx.Params, ctx.Encoder, ctx.Decryptor, out.Res0)
   // CHECK: results[0] = make([]float64, len(res0))
-  func.func private @main__decrypt__result0(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %decryptor: !decryptor, %ct: memref<1x!ct>) -> memref<16xf32> attributes {client.dec_func = {func_name = "main", index = 0 : i64}}
+  func.func private @main__decrypt__result0(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %decryptor: !decryptor, %ct: memref<1x!ct>) -> memref<16xf32> attributes {heir.interface = {func_name = "main", index = 0 : i64, roles = ["client.decrypt"]}}
 
-  func.func private @main(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %ct: memref<1x!ct>, %arg1: memref<16xf32>, %zero: !ct {client.enc_zero_arg = {func_name = "main", index = 0 : i64}}) -> memref<1x!ct> attributes {heir.entry_func = {func_name = "main"}, heir.entry_input_types = [tensor<16xf32>, tensor<16xf32>], heir.entry_result_types = [tensor<16xf32>]}
+  func.func private @main(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %ct: memref<1x!ct>, %arg1: memref<16xf32>, %zero: !ct {client.enc_zero_arg = {func_name = "main", index = 0 : i64}}) -> memref<1x!ct> attributes {heir.interface = {func_name = "main", input_types = [tensor<16xf32>, tensor<16xf32>], result_types = [tensor<16xf32>], roles = ["entry"]}}
 }

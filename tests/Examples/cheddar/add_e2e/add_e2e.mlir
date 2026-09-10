@@ -22,7 +22,7 @@
 #layout = #tensor_ext.layout<"{ [i0] -> [ct, slot] : ct = 0 and (-i0 + slot) mod 1024 = 0 and 0 <= i0 <= 1023 and 0 <= slot <= 1023 }">
 #original_type = #tensor_ext.original_type<originalType = tensor<1024xf32>, layout = #layout>
 module attributes {backend.cheddar, cheddar.P = array<i64: 1152921504606994433>, cheddar.Q = array<i64: 36028797018652673, 35184372121601>, cheddar.logDefaultScale = 45 : i64, cheddar.logN = 13 : i64, scheme.actual_slot_count = 4096 : i64, scheme.requested_slot_count = 1024 : i64} {
-  func.func @add__preprocessing(%encoder: !encoder) -> (tensor<1x!plaintext>, tensor<1x!plaintext>) attributes {client.pack_func = {func_name = "add"}} {
+  func.func @add__preprocessing(%encoder: !encoder) -> (tensor<1x!plaintext>, tensor<1x!plaintext>) attributes {heir.interface = {func_name = "add", roles = ["client.pack"]}} {
     %cst = arith.constant dense<2.000000e+00> : tensor<1024xf32>
     %cst_0 = arith.constant dense<5.000000e-01> : tensor<1024xf32>
     %d_pt = tensor.empty() : tensor<!plaintext>
@@ -35,7 +35,7 @@ module attributes {backend.cheddar, cheddar.P = array<i64: 1152921504606994433>,
     %from_elements_2 = tensor.insert_slice %pt into %e1[0] [1] [1] : tensor<!plaintext> into tensor<1x!plaintext>
     return %from_elements, %from_elements_2 : tensor<1x!plaintext>, tensor<1x!plaintext>
   }
-  func.func @add__preprocessed(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1x!ciphertext>, %arg1: tensor<1x!ciphertext>, %arg2: tensor<1x!plaintext>, %arg3: tensor<1x!plaintext>) -> tensor<1x!ciphertext> attributes {client.preprocessed_func = {func_name = "add"}} {
+  func.func @add__preprocessed(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1x!ciphertext>, %arg1: tensor<1x!ciphertext>, %arg2: tensor<1x!plaintext>, %arg3: tensor<1x!plaintext>) -> tensor<1x!ciphertext> attributes {heir.interface = {func_name = "add", roles = ["client.preprocessed"]}} {
     %pt_05 = tensor.extract_slice %arg2[0] [1] [1] : tensor<1x!plaintext> to tensor<!plaintext>
     %pt_20 = tensor.extract_slice %arg3[0] [1] [1] : tensor<1x!plaintext> to tensor<!plaintext>
     %a = tensor.extract_slice %arg0[0] [1] [1] : tensor<1x!ciphertext> to tensor<!ciphertext>
@@ -59,7 +59,7 @@ module attributes {backend.cheddar, cheddar.P = array<i64: 1152921504606994433>,
     %1 = call @add__preprocessed(%ctx, %encoder, %ui, %evk, %arg0, %arg1, %0#0, %0#1) : (!context, !encoder, !user_interface, !eval_key, tensor<1x!ciphertext>, tensor<1x!ciphertext>, tensor<1x!plaintext>, tensor<1x!plaintext>) -> tensor<1x!ciphertext>
     return %1 : tensor<1x!ciphertext>
   }
-  func.func @add__encrypt__arg0(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1024xf32>, %ui_0: !user_interface) -> tensor<1x!ciphertext> attributes {client.enc_func = {func_name = "add", index = 0 : i64}} {
+  func.func @add__encrypt__arg0(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1024xf32>, %ui_0: !user_interface) -> tensor<1x!ciphertext> attributes {heir.interface = {func_name = "add", index = 0 : i64, roles = ["client.encrypt"]}} {
     %c0 = arith.constant 0 : index
     %cst = arith.constant dense<0.000000e+00> : tensor<1x1024xf32>
     %c0_i32 = arith.constant 0 : i32
@@ -80,7 +80,7 @@ module attributes {backend.cheddar, cheddar.P = array<i64: 1152921504606994433>,
     %from_elements = tensor.insert_slice %ct into %e[0] [1] [1] : tensor<!ciphertext> into tensor<1x!ciphertext>
     return %from_elements : tensor<1x!ciphertext>
   }
-  func.func @add__encrypt__arg1(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1024xf32>, %ui_0: !user_interface) -> tensor<1x!ciphertext> attributes {client.enc_func = {func_name = "add", index = 1 : i64}} {
+  func.func @add__encrypt__arg1(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1024xf32>, %ui_0: !user_interface) -> tensor<1x!ciphertext> attributes {heir.interface = {func_name = "add", index = 1 : i64, roles = ["client.encrypt"]}} {
     %c0 = arith.constant 0 : index
     %cst = arith.constant dense<0.000000e+00> : tensor<1x1024xf32>
     %c0_i32 = arith.constant 0 : i32
@@ -101,7 +101,7 @@ module attributes {backend.cheddar, cheddar.P = array<i64: 1152921504606994433>,
     %from_elements = tensor.insert_slice %ct into %e[0] [1] [1] : tensor<!ciphertext> into tensor<1x!ciphertext>
     return %from_elements : tensor<1x!ciphertext>
   }
-  func.func @add__decrypt__result0(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1x!ciphertext>, %ui_0: !user_interface) -> tensor<1024xf32> attributes {client.dec_func = {func_name = "add", index = 0 : i64}} {
+  func.func @add__decrypt__result0(%ctx: !context, %encoder: !encoder, %ui: !user_interface, %evk: !eval_key, %arg0: tensor<1x!ciphertext>, %ui_0: !user_interface) -> tensor<1024xf32> attributes {heir.interface = {func_name = "add", index = 0 : i64, roles = ["client.decrypt"]}} {
     %c0 = arith.constant 0 : index
     %c1024_i32 = arith.constant 1024 : i32
     %c1_i32 = arith.constant 1 : i32

@@ -15,7 +15,7 @@
 module attributes {scheme.ckks, backend.lattigo} {
   // CHECK: type ModelContext struct {
   // CHECK: func ModelSetup() *ModelContext {
-  func.func private @model__configure() -> (!evaluator, !params, !encoder, !encryptor, !decryptor) attributes {client.setup_func = {func_name = "model"}}
+  func.func private @model__configure() -> (!evaluator, !params, !encoder, !encryptor, !decryptor) attributes {heir.interface = {func_name = "model", roles = ["client.setup"]}}
 
   // CHECK: type ModelPrepared struct {
   // CHECK-NEXT: S0 []*rlwe.Plaintext
@@ -35,9 +35,9 @@ module attributes {scheme.ckks, backend.lattigo} {
 
   // CHECK: func (ctx *ModelContext) Preprocess(inputs [][]float64) ModelPrepared {
   // CHECK: prep.S0 = Model__preprocessing(ctx.Params, ctx.Encoder, arg2)
-  func.func private @model__preprocessing(%params: !params, %encoder: !encoder, %arg: memref<16xf64>) -> memref<2x!pt> attributes {server.preprocessing_func = {entry_arg_indices = array<i64: 2>, func_name = "model"}}
+  func.func private @model__preprocessing(%params: !params, %encoder: !encoder, %arg: memref<16xf64>) -> memref<2x!pt> attributes {heir.interface = {entry_arg_indices = array<i64: 2>, func_name = "model", roles = ["server.preprocessing"]}}
 
   // CHECK: func (ctx *ModelContext) Evaluate(prep ModelPrepared, enc ModelEncrypted) ModelEvaluated {
   // CHECK: out.Res0 = Model__preprocessed(ctx.Evaluator, ctx.Params, ctx.Encoder, enc.Arg0, enc.Arg1, enc.Arg2, prep.S0)
-  func.func private @model__preprocessed(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %ct: !ct, %arg1: memref<16xf64>, %arg2: memref<16xf64>, %s0: memref<2x!pt>) -> !ct attributes {client.preprocessed_func = {func_name = "model"}, server.evaluate_func = {func_name = "model"}}
+  func.func private @model__preprocessed(%evaluator: !evaluator, %params: !params, %encoder: !encoder, %ct: !ct, %arg1: memref<16xf64>, %arg2: memref<16xf64>, %s0: memref<2x!pt>) -> !ct attributes {heir.interface = {func_name = "model", roles = ["client.preprocessed", "server.evaluate"]}}
 }

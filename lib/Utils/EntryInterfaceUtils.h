@@ -22,17 +22,17 @@ namespace heir {
 // builds a public API without inspecting lowered signatures or symbol names.
 struct EntryFunctions {
   std::string entryName;
-  func::FuncOp contract;     // heir.entry_func; null below the secret level
-  func::FuncOp setup;        // client.setup_func
-  func::FuncOp serverSetup;  // server.setup_func
-  func::FuncOp keygen;       // client.keygen_func; null when setup does keygen
-  func::FuncOp preprocess;   // server.preprocessing_func
-  func::FuncOp evaluate;     // server.evaluate_func
-  // client.enc_func / indexed client.pack_func, by entry-argument index.
+  func::FuncOp contract;     // entry; null below the secret level
+  func::FuncOp setup;        // client.setup
+  func::FuncOp serverSetup;  // server.setup
+  func::FuncOp keygen;       // client.keygen; null when setup does keygen
+  func::FuncOp preprocess;   // server.preprocessing
+  func::FuncOp evaluate;     // server.evaluate
+  // client.encrypt / indexed client.pack, by entry-argument index.
   SmallVector<std::pair<unsigned, func::FuncOp>> inputHelpers;
-  // client.dec_func, by entry-result index.
+  // client.decrypt, by entry-result index.
   SmallVector<std::pair<unsigned, func::FuncOp>> outputHelpers;
-  // client.enc_zero_func, by index; each pairs with the entry argument
+  // client.encrypt_zero, by index; each pairs with the entry argument
   // carrying client.enc_zero_arg at the same index.
   SmallVector<std::pair<unsigned, func::FuncOp>> zeroHelpers;
 };
@@ -43,7 +43,7 @@ std::optional<StringRef> getRoleEntry(func::FuncOp function, StringRef name);
 
 FailureOr<unsigned> getRoleIndex(func::FuncOp function, StringRef name);
 
-// heir.entry_input_types / heir.entry_result_types.
+// input_types / result_types.
 ArrayAttr getLogicalTypes(func::FuncOp function, StringRef name);
 
 func::FuncOp findIndexedHelper(
