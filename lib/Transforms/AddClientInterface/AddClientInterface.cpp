@@ -60,11 +60,6 @@ Type stripSecretType(Type type) {
   return type;
 }
 
-DictionaryAttr getEntryRoleAttr(func::FuncOp op, OpBuilder& builder) {
-  return builder.getDictionaryAttr({builder.getNamedAttr(
-      kClientHelperFuncName, builder.getStringAttr(op.getSymName()))});
-}
-
 Type getOriginalArgType(func::FuncOp op, unsigned index) {
   auto originalTypeAttr =
       op.getArgAttrOfType<OriginalTypeAttr>(index, kOriginalTypeAttrName);
@@ -294,21 +289,19 @@ LogicalResult generateDecryptionFunc(func::FuncOp op, Type decFuncArgType,
 /// "entry" func for the IR being compiled, but there may be multiple.
 LogicalResult convertFunc(func::FuncOp op, int64_t minSlotCount,
                           bool enableLayoutAssignment) {
-  if (op.isDeclaration()) {
-    LLVM_DEBUG(op->emitWarning("Skipping client interface for external func"));
+  if (op.isDeclaration() || isClientHelper(op)) {
     return success();
   }
-  // Helpers an earlier pass created (the outlined layout assignment from
-  // convert-to-ciphertext-semantics) are not entry points.
-  if (isClientHelper(op)) return success();
 
   auto module = op->getParentOfType<ModuleOp>();
   ImplicitLocOpBuilder builder =
       ImplicitLocOpBuilder::atBlockEnd(module.getLoc(), module.getBody());
   builder.setInsertionPointAfter(op);
 
-  op->setAttr(kEntryFuncAttrName, getEntryRoleAttr(op, builder));
-  op->setAttr(kServerEvaluateFuncAttrName, getEntryRoleAttr(op, builder));
+  auto role = builder.getDictionaryAttr({builder.getNamedAttr(
+      kClientHelperFuncName, builder.getStringAttr(op.getSymName()))});
+  op->setAttr(kEntryFuncAttrName, role);
+  op->setAttr(kServerEvaluateFuncAttrName, role);
   SmallVector<Attribute> logicalInputTypes;
   for (unsigned i = 0; i < op.getNumArguments(); ++i)
     logicalInputTypes.push_back(TypeAttr::get(getOriginalArgType(op, i)));
@@ -358,7 +351,6 @@ LogicalResult convertFunc(func::FuncOp op, int64_t minSlotCount,
       }
     }
   }
-
   LLVM_DEBUG(module.dump());
 
   return success();

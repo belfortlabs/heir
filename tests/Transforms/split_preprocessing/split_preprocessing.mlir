@@ -42,3 +42,26 @@ func.func @hoist_one_assign(%ct: !ct_L1) -> (!ct_L1) {
   %0 = ckks.add_plain %ct, %pt : (!ct_L1, !pt) -> !ct_L1
   return %0 : !ct_L1
 }
+
+// Splitting preserves the logical signature and identity across symbol renames.
+// CHECK: func.func @renamed__preprocessing
+// CHECK-SAME: server.preprocessing_func = {entry_arg_indices = array<i64>, func_name = "logical_entry"}
+// CHECK: func.func @renamed__preprocessed
+// CHECK-SAME: server.evaluate_func = {func_name = "logical_entry"}
+// CHECK: func.func @renamed(
+// CHECK-SAME: heir.entry_func = {func_name = "logical_entry"}
+// CHECK-SAME: heir.entry_input_types = [tensor<16xf32>]
+// CHECK-SAME: heir.entry_result_types = [tensor<16xf32>]
+// CHECK-NOT: server.evaluate_func
+// CHECK: return
+func.func @renamed(%ct: !ct_L1) -> !ct_L1 attributes {
+  heir.entry_func = {func_name = "logical_entry"},
+  heir.entry_input_types = [tensor<16xf32>],
+  heir.entry_result_types = [tensor<16xf32>],
+  server.evaluate_func = {func_name = "logical_entry"}
+} {
+  %c1 = arith.constant dense<1.0> : tensor<1024xf32>
+  %pt = lwe.rlwe_encode %c1 {encoding = #inverse_canonical_encoding, ring = #ring_f64_1_x1024} : tensor<1024xf32> -> !pt
+  %0 = ckks.add_plain %ct, %pt : (!ct_L1, !pt) -> !ct_L1
+  return %0 : !ct_L1
+}

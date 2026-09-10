@@ -205,6 +205,16 @@ static void removeDeadAffineForIterArgs(func::FuncOp funcOp) {
   }
 }
 
+// The logical entry identity of `op`: the role it already carries (preserved
+// across symbol renames), or its current symbol name.
+SmallVector<NamedAttribute> logicalRole(FuncOp op, OpBuilder& builder) {
+  auto role = op->getAttrOfType<DictionaryAttr>(kServerEvaluateFuncAttrName);
+  if (!role) role = op->getAttrOfType<DictionaryAttr>(kEntryFuncAttrName);
+  if (role) return SmallVector<NamedAttribute>(role.begin(), role.end());
+  return {builder.getNamedAttr(kClientHelperFuncName,
+                               builder.getStringAttr(op.getName()))};
+}
+
 struct SplitPreprocessingPass
     : impl::SplitPreprocessingBase<SplitPreprocessingPass> {
   using SplitPreprocessingBase::SplitPreprocessingBase;
@@ -272,6 +282,7 @@ struct SplitPreprocessingPass
 
     updateOriginalFunc(funcOp, preprocessingFuncOp, preprocessedFuncOp,
                        analysis);
+    funcOp->removeAttr(kServerEvaluateFuncAttrName);
 
     // Remove dead values to clean up the created/updated functions
     OpPassManager pipeline("func.func");
@@ -408,14 +419,12 @@ struct SplitPreprocessingPass
     auto funcName = op.getName().str() + "__preprocessing";
     auto funcOp = FuncOp::create(op.getLoc(), funcName, funcType);
     funcOp.setVisibility(op.getVisibility());
-    funcOp->setAttr(
-        kServerPreprocessingFuncAttrName,
-        builder.getDictionaryAttr({
-            builder.getNamedAttr(kClientHelperFuncName,
-                                 builder.getStringAttr(op.getName())),
-            builder.getNamedAttr(kServerPreprocessingEntryArgs,
-                                 builder.getDenseI64ArrayAttr(entryArgIndices)),
-        }));
+    SmallVector<NamedAttribute> role(logicalRole(op, builder));
+    role.push_back(
+        builder.getNamedAttr(kServerPreprocessingEntryArgs,
+                             builder.getDenseI64ArrayAttr(entryArgIndices)));
+    funcOp->setAttr(kServerPreprocessingFuncAttrName,
+                    builder.getDictionaryAttr(role));
 
     // Set up the operation cloning infra: map the analysis-identified inputs to
     // the new func's block arguments
@@ -551,13 +560,8 @@ struct SplitPreprocessingPass
             builder.getNamedAttr(kClientHelperFuncName,
                                  builder.getStringAttr(op.getName())),
         }));
-    funcOp->setAttr(
-        kServerEvaluateFuncAttrName,
-        builder.getDictionaryAttr({
-            builder.getNamedAttr(kClientHelperFuncName,
-                                 builder.getStringAttr(op.getName())),
-        }));
-    op->removeAttr(kServerEvaluateFuncAttrName);
+    funcOp->setAttr(kServerEvaluateFuncAttrName,
+                    builder.getDictionaryAttr(logicalRole(op, builder)));
 
     IRMapping map;
     Block* entryBlock = funcOp.addEntryBlock();

@@ -111,6 +111,8 @@ constexpr const static ::llvm::StringLiteral kServerPreprocessingEntryArgs =
     "entry_arg_indices";
 constexpr const static ::llvm::StringLiteral kServerEvaluateFuncAttrName =
     "server.evaluate_func";
+constexpr const static ::llvm::StringLiteral kServerSetupFuncAttrName =
+    "server.setup_func";
 constexpr const static ::llvm::StringLiteral kClientSetupFuncAttrName =
     "client.setup_func";
 constexpr const static ::llvm::StringLiteral kClientKeygenFuncAttrName =
@@ -128,6 +130,7 @@ inline bool isClientHelper(Operation* op) {
   return op->hasAttr(kClientEncFuncAttrName) ||
          op->hasAttr(kClientDecFuncAttrName) ||
          op->hasAttr(kClientPackFuncAttrName) ||
+         op->hasAttr(kServerSetupFuncAttrName) ||
          op->hasAttr(kServerPreprocessingFuncAttrName) ||
          op->hasAttr(kClientSetupFuncAttrName) ||
          op->hasAttr(kClientKeygenFuncAttrName) ||
