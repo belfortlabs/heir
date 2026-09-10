@@ -24,3 +24,6 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+# Cyclops supplies the external headers when compiling generated sources.
+exports_files(["CyclopsRuntime.h"])

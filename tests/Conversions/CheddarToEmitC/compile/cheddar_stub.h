@@ -144,6 +144,8 @@ struct Plaintext {
   Plaintext(const Plaintext&) = delete;
   Plaintext& operator=(const Plaintext&) = delete;
 #ifdef HEIR_CYCLOPS_STUB
+  // Containers carry their ring; encode targets take it from the context.
+  void MatchRing(const Plaintext& other);
   void SetSecretId(SecretId secret);
 #endif
 };
@@ -282,7 +284,6 @@ class Context {
   void HConj(Ct& res, const Ct& a, const Evk& conj_key) const;
   void HConjAdd(Ct& res, const Ct& a, const Ct& b, const Evk& conj_key) const;
 
-
   // In-place multiply-accumulate: `res` is mutated, so it is a *non-const*
   // reference. This is the crux of the mad_unsafe finding.
   void MadUnsafe(Ct& res, const Ct& a, const Const& b) const;
@@ -292,6 +293,7 @@ class Context {
   Parameter<word> param_;
 #ifdef HEIR_CYCLOPS_STUB
   SecretId BootSecretId() const;
+  Plaintext<word> NewPlaintext() const;
 #endif
 };
 

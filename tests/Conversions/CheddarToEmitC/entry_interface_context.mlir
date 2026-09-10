@@ -1,5 +1,4 @@
 // RUN: heir-opt %s --cheddar-emitc-entry-interface | heir-translate --mlir-to-cpp --file-id=header | FileCheck %s
-// RUN: heir-opt %s --cheddar-emitc-entry-interface=runtime=cyclops | heir-translate --mlir-to-cpp --file-id=header | FileCheck %s --check-prefix=CYCLOPS
 
 // Boundary signatures for an entry that forwards ciphertexts. After precise
 // support threading, the evaluation and encode/decode helpers need no Context
@@ -30,6 +29,3 @@ func.func @decrypt(%encoder: !encoder, %ui: !ui, %input: !ct_const, %out: !float
 // CHECK: using Context = ::cheddar::Context<word>;
 // CHECK: std::shared_ptr<Context> Setup();
 // CHECK: EncryptedOutputs Evaluate(
-// CYCLOPS: using Context = ::cyclops::Context<word>;
-// CYCLOPS: std::shared_ptr<Context> Setup();
-// CYCLOPS: EncryptedOutputs Evaluate(

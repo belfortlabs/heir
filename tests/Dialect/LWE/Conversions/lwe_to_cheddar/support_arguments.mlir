@@ -14,7 +14,7 @@ module attributes {
     logDefaultScale = 40
   >
 } {
-  // CYCLOPS: func.func private @encode(%[[CTX:[a-zA-Z0-9_]+]]: !context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder,
+  // CYCLOPS: func.func private @encode(%[[CTX:[a-zA-Z0-9_]+]]: !client_context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder,
   // CHECK: func.func private @encode(%[[ENC:[a-zA-Z0-9_]+]]: !encoder,
   // CYCLOPS: cheddar.encode %[[CTX]], %[[ENC]]
   // CHECK: cheddar.encode %[[ENC]]
@@ -23,7 +23,7 @@ module attributes {
       level = 1 : i64, scale = 40 : i64} : tensor<4xf64> -> !pt
     return %0 : !pt
   }
-  // CYCLOPS: func.func private @forward(%[[CTX:[a-zA-Z0-9_]+]]: !context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder,
+  // CYCLOPS: func.func private @forward(%[[CTX:[a-zA-Z0-9_]+]]: !client_context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder,
   // CHECK: func.func private @forward(%[[ENC:[a-zA-Z0-9_]+]]: !encoder,
   // CYCLOPS: call @encode(%[[CTX]], %[[ENC]],
   // CHECK: call @encode(%[[ENC]],
@@ -31,7 +31,7 @@ module attributes {
     %0 = call @encode(%input) : (tensor<4xf64>) -> !pt
     return %0 : !pt
   }
-  // CYCLOPS: func.func @entry(%[[CTX:[a-zA-Z0-9_]+]]: !context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder,
+  // CYCLOPS: func.func @entry(%[[CTX:[a-zA-Z0-9_]+]]: !client_context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder,
   // CHECK: func.func @entry(%[[ENC:[a-zA-Z0-9_]+]]: !encoder,
   // CYCLOPS: call @forward(%[[CTX]], %[[ENC]],
   // CHECK: call @forward(%[[ENC]],
@@ -41,7 +41,7 @@ module attributes {
   }
   // An existing encoder must not be prepended again when converting calls.
   // CHECK: func.func private @encode_existing(%[[ENC:[a-zA-Z0-9_]+]]: !encoder, %{{[^:]+}}: tensor<4xf64>)
-  // CYCLOPS: func.func private @encode_existing(%[[CTX:[a-zA-Z0-9_]+]]: !context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder, %{{[^:]+}}: tensor<4xf64>)
+  // CYCLOPS: func.func private @encode_existing(%[[CTX:[a-zA-Z0-9_]+]]: !client_context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder, %{{[^:]+}}: tensor<4xf64>)
   func.func private @encode_existing(%encoder: !cheddar.encoder, %input: tensor<4xf64>) -> !pt {
     %0 = lwe.rlwe_encode %input {encoding = #encoding, ring = #ring_f64,
       level = 1 : i64, scale = 40 : i64} : tensor<4xf64> -> !pt
@@ -49,7 +49,7 @@ module attributes {
   }
   // CHECK: func.func @forward_existing(%[[ENC:[a-zA-Z0-9_]+]]: !encoder, %[[INPUT:[a-zA-Z0-9_]+]]: tensor<4xf64>)
   // CHECK: call @encode_existing(%[[ENC]], %[[INPUT]])
-  // CYCLOPS: func.func @forward_existing(%[[CTX:[a-zA-Z0-9_]+]]: !context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder, %[[INPUT:[a-zA-Z0-9_]+]]: tensor<4xf64>)
+  // CYCLOPS: func.func @forward_existing(%[[CTX:[a-zA-Z0-9_]+]]: !client_context, %[[ENC:[a-zA-Z0-9_]+]]: !encoder, %[[INPUT:[a-zA-Z0-9_]+]]: tensor<4xf64>)
   // CYCLOPS: call @encode_existing(%[[CTX]], %[[ENC]], %[[INPUT]])
   func.func @forward_existing(%encoder: !cheddar.encoder, %input: tensor<4xf64>) -> !pt {
     %0 = call @encode_existing(%encoder, %input) : (!cheddar.encoder, tensor<4xf64>) -> !pt

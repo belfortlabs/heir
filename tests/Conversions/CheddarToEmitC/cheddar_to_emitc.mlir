@@ -210,6 +210,7 @@ func.func @enc_chain_slots(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_inter
 // so a `$ctx` operand makes encode tag it first, with the same secret
 // UserInterface::EncryptMessage uses.
 // CHECK: func.func @enc_chain_tagged
+// CHECK: emitc.verbatim "{}.MatchRing({}->NewPlaintext());"
 // CHECK: emitc.verbatim "{}.SetSecretId({}->BootSecretId());"
 // CHECK: emitc.verbatim "{}.EncodeSlots({}, 5, {}.GetScale(5), {});"
 // CHECK: emitc.member_call_opaque %arg3 "Encrypt"
