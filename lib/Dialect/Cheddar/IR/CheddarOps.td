@@ -117,11 +117,26 @@ def Cheddar_AnyContextLike :
     TensorOrMemRef<[Cheddar_Context, Cheddar_BootContext]>;
 def Cheddar_BootContextResult : Variadic<RankedTensorOf<[Cheddar_BootContext]>>;
 def Cheddar_AnyOwningContextLike :
-    TensorOrMemRef<[Cheddar_Context, Cheddar_BootContext]>;
+    TensorOrMemRef<[Cheddar_ClientContext, Cheddar_Context, Cheddar_BootContext]>;
 
 //===----------------------------------------------------------------------===//
 // Setup operations
 //===----------------------------------------------------------------------===//
+
+def Cheddar_CreateClientContextOp : Cheddar_DpsOp<"create_client_context"> {
+  let summary = "Create a Cyclops CPU client context";
+  let arguments = (ins Cheddar_Parameter:$params,
+      TensorOrMemRef<[Cheddar_ClientContext]>:$output);
+  let results = (outs Variadic<RankedTensorOf<[Cheddar_ClientContext]>>:$result);
+}
+
+def Cheddar_PrepareBootstrapContextOp :
+    Cheddar_ReadWriteDpsOp<"prepare_bootstrap_context", [], "Ctx"> {
+  let summary = "Prepare Cyclops bootstrap tables without generating keys";
+  let arguments = (ins Cheddar_BootContextLike:$ctx,
+                       Builtin_IntegerAttr:$numSlots);
+  let results = (outs Cheddar_BootContextResult:$result);
+}
 
 def Cheddar_CreateContextOp : Cheddar_DpsOp<"create_context"> {
   let summary = "Create a CHEDDAR context from parameters";
@@ -217,7 +232,7 @@ def Cheddar_GetEncoderOp : Cheddar_Op<"get_encoder", [Pure]> {
   let description = [{
     Returns a reference to the context's encoder (context->encoder_).
   }];
-  let arguments = (ins Cheddar_AnyContext:$ctx);
+  let arguments = (ins Cheddar_AnyClientContext:$ctx);
   let results = (outs Cheddar_Encoder:$encoder);
 }
 
@@ -352,7 +367,7 @@ def Cheddar_EncodeOp : Cheddar_DpsOp<"encode", [PlaintextEncodeOpInterface]> {
     the tag.
   }];
   let arguments = (ins
-    Optional<Cheddar_AnyContext>:$ctx,
+    Optional<Cheddar_AnyClientContext>:$ctx,
     Cheddar_Encoder:$encoder,
     Cheddar_FloatLike:$message,
     Cheddar_PtLike:$output,

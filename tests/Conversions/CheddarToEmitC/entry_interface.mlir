@@ -1,5 +1,5 @@
 // RUN: heir-opt --cheddar-emitc-entry-interface %s | FileCheck %s
-// RUN: heir-opt --cheddar-emitc-entry-interface=runtime=cyclops %s | FileCheck %s --check-prefix=CYCLOPS
+// RUN: not heir-opt --cheddar-emitc-entry-interface=runtime=cyclops %s 2>&1 | FileCheck %s --check-prefix=CYCLOPS
 // RUN: not heir-opt --cheddar-emitc-entry-interface=runtime=invalid %s 2>&1 | FileCheck %s --check-prefix=INVALID
 
 !ctx = !emitc.ptr<!emitc.opaque<"Context<word>">>
@@ -18,49 +18,41 @@
 
 func.func @entry__setup(
     %out: !ctx_owner {bufferize.result})
-    attributes {client.setup_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["client.setup"]}} {
   return
 }
 
 func.func @entry__keygen(
     %ctx: !ctx_owner_const,
     %out: !ui_owner {bufferize.result})
-    attributes {client.keygen_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["client.keygen"]}} {
   return
 }
 
 func.func @entry(
     %input0: !ct_const, %input1: !ct_const, %prepared: !pt_const,
     %out: !ct {bufferize.result})
-    attributes {
-      heir.entry_func = {func_name = "entry"},
-      heir.entry_input_types = [tensor<4xf32>, tensor<2xf32>],
-      heir.entry_result_types = [tensor<2xf32>]
-    } {
+    attributes {heir.interface = {func_name = "entry", input_types = [tensor<4xf32>, tensor<2xf32>], result_types = [tensor<2xf32>], roles = ["entry"]}} {
   return
 }
 
 func.func @entry__encrypt__arg0(
     %ctx: !ctx, %encoder: !encoder, %ui: !ui, %input: !emitc.ptr<f32>,
     %out: !ct {bufferize.result})
-    attributes {
-      client.enc_func = {func_name = "entry", index = 0 : i64}
-    } {
+    attributes {heir.interface = {func_name = "entry", index = 0 : i64, roles = ["client.encrypt"]}} {
   return
 }
 
 func.func @entry__encrypt__arg1(
     %ctx: !ctx, %encoder: !encoder, %ui: !ui, %input: !emitc.ptr<f32>,
     %out: !ct {bufferize.result})
-    attributes {
-      client.enc_func = {func_name = "entry", index = 1 : i64}
-    } {
+    attributes {heir.interface = {func_name = "entry", index = 1 : i64, roles = ["client.encrypt"]}} {
   return
 }
 
 func.func @entry__preprocessing(
     %ctx: !boot_ctx, %encoder: !encoder, %out: !pt {bufferize.result})
-    attributes {server.preprocessing_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["server.preprocessing"]}} {
   %data = emitc.literal "nullptr" : !emitc.ptr<f32>
   call @outlined_layout(%data) : (!emitc.ptr<f32>) -> ()
   return
@@ -71,21 +63,19 @@ func.func @entry__preprocessed(
     %evk_map: !evk_map, %input0: !ct_const, %input1: !ct_const,
     %prepared: !pt_const,
     %out: !ct {bufferize.result})
-    attributes {server.evaluate_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["server.evaluate"]}} {
   return
 }
 
 func.func @entry__decrypt__result0(
     %ctx: !ctx, %encoder: !encoder, %ui: !ui, %evk: !evk,
     %input: !ct_const, %out: !emitc.ptr<f32> {bufferize.result})
-    attributes {
-      client.dec_func = {func_name = "entry", index = 0 : i64}
-    } {
+    attributes {heir.interface = {func_name = "entry", index = 0 : i64, roles = ["client.decrypt"]}} {
   return
 }
 
 func.func private @outlined_layout(%input: !emitc.ptr<f32>)
-    attributes {client.pack_func = {func_name = "entry"}} {
+    attributes {heir.interface = {func_name = "entry", roles = ["client.pack"]}} {
   emitc.call_opaque "heir::loadResource"(%input) <{
     args = [#emitc.opaque<"\22data/weights.bin\22">, 0 : index,
             #emitc.opaque<"4">],
@@ -116,15 +106,7 @@ func.func private @call_preprocessing(
 // CHECK: verbatim "using EncryptedInputs = std::tuple<std::array<Ciphertext<word>, 1>, std::array<Ciphertext<word>, 1>>;"
 // CHECK: func @Setup() -> !emitc.opaque<"std::shared_ptr<Context>">
 
-// CYCLOPS: emitc.file "header"
-// CYCLOPS: include "extension/boot/BootContext.h"
-// CYCLOPS: include "extension/poly/EvalPoly.h"
-// CYCLOPS: include "extension/linalg/LinearTransform.h"
-// CYCLOPS: verbatim "using namespace ::cyclops;"
-// CYCLOPS: verbatim "using Context = ::cyclops::BootContext<word>;"
-// CYCLOPS: verbatim "using SecretKey = ::cyclops::UserInterface<word>*;"
-// CYCLOPS: emitc.file "source"
-// CYCLOPS: verbatim "using namespace ::cyclops;"
+// CYCLOPS: error: Cyclops split output requires separate server setup
 // INVALID: error: unsupported C++ runtime 'invalid'
 // CHECK: func @Encrypt(!emitc.opaque<"Context&">, !emitc.opaque<"SecretKey">, !emitc.opaque<"CleartextInputs&">) -> !emitc.opaque<"EncryptedInputs">
 // CHECK: emitc.file "source"

@@ -3,9 +3,9 @@
 
 #include <cstdint>
 
-#include "llvm/include/llvm/ADT/StringRef.h"  // from @llvm-project
-#include "mlir/include/mlir/IR/Attributes.h"  // from @llvm-project
-#include "mlir/include/mlir/IR/Operation.h"   // from @llvm-project
+#include "llvm/include/llvm/ADT/StringRef.h"         // from @llvm-project
+#include "mlir/include/mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/Operation.h"          // from @llvm-project
 
 namespace mlir {
 namespace heir {
@@ -74,65 +74,62 @@ void moduleSetOpenfhe(Operation* moduleOp);
 void moduleSetLattigo(Operation* moduleOp);
 void moduleSetCheddar(Operation* moduleOp);
 
-// Func attributes for client helpers
-//
-// This corresponds to a named attribute client.enc_func whose
-// value is a dictionary {func_name = "foo", index = 2 : i64}
-//
-// This means that the function with this attribute is an encryption
-// helper for the function "foo" and the argument at index 2.
+// A function's client/server interface metadata lives in one dictionary:
+// heir.interface = {func_name = "foo", roles = ["entry", "server.evaluate"],
+//                   input_types = [...], result_types = [...]}
+// Indexed helpers add `index`; preprocessing adds `entry_arg_indices`.
+constexpr const static ::llvm::StringLiteral kInterfaceAttrName =
+    "heir.interface";
+constexpr const static ::llvm::StringLiteral kInterfaceRoles = "roles";
 
-constexpr const static ::llvm::StringLiteral kClientEncFuncAttrName =
-    "client.enc_func";
-constexpr const static ::llvm::StringLiteral kClientDecFuncAttrName =
-    "client.dec_func";
-constexpr const static ::llvm::StringLiteral kClientPackFuncAttrName =
-    "client.pack_func";
-// The zero-encryption helper and the entry argument receiving it carry the
-// same {func_name, index} dictionary, which is what pairs them.
-constexpr const static ::llvm::StringLiteral kClientEncZeroFuncAttrName =
-    "client.enc_zero_func";
+// An absent role returns a null dictionary. An empty role selects all metadata.
+DictionaryAttr getInterfaceAttr(Operation* op, StringRef role = {});
+bool hasInterfaceRole(Operation* op, StringRef role);
+void setInterfaceRole(Operation* op, StringRef role, DictionaryAttr metadata);
+void removeInterfaceRole(Operation* op, StringRef role);
+void setInterfaceField(Operation* op, StringRef name, Attribute value);
+
+constexpr const static ::llvm::StringLiteral kClientEncRole = "client.encrypt";
+constexpr const static ::llvm::StringLiteral kClientDecRole = "client.decrypt";
+constexpr const static ::llvm::StringLiteral kClientPackRole = "client.pack";
+// The zero-encryption helper and its entry argument share func_name and index.
+constexpr const static ::llvm::StringLiteral kClientEncZeroRole =
+    "client.encrypt_zero";
 constexpr const static ::llvm::StringLiteral kClientEncZeroArgAttrName =
     "client.enc_zero_arg";
 
 // Func attributes for the logical entry-point interface. Each attribute
 // contains the original entry function name in `func_name`.
-constexpr const static ::llvm::StringLiteral kEntryFuncAttrName =
-    "heir.entry_func";
-constexpr const static ::llvm::StringLiteral kEntryInputTypesAttrName =
-    "heir.entry_input_types";
-constexpr const static ::llvm::StringLiteral kEntryResultTypesAttrName =
-    "heir.entry_result_types";
-constexpr const static ::llvm::StringLiteral kServerPreprocessingFuncAttrName =
-    "server.preprocessing_func";
-// In the server.preprocessing_func dictionary: the entry argument each
+constexpr const static ::llvm::StringLiteral kEntryRole = "entry";
+constexpr const static ::llvm::StringLiteral kEntryInputTypes = "input_types";
+constexpr const static ::llvm::StringLiteral kEntryResultTypes = "result_types";
+constexpr const static ::llvm::StringLiteral kServerPreprocessingRole =
+    "server.preprocessing";
+// For the server.preprocessing role: the entry argument each
 // preprocessing parameter is forwarded from, in parameter order (-1 if none).
 constexpr const static ::llvm::StringLiteral kServerPreprocessingEntryArgs =
     "entry_arg_indices";
-constexpr const static ::llvm::StringLiteral kServerEvaluateFuncAttrName =
-    "server.evaluate_func";
-constexpr const static ::llvm::StringLiteral kClientSetupFuncAttrName =
-    "client.setup_func";
-constexpr const static ::llvm::StringLiteral kClientKeygenFuncAttrName =
-    "client.keygen_func";
+constexpr const static ::llvm::StringLiteral kServerEvaluateRole =
+    "server.evaluate";
+constexpr const static ::llvm::StringLiteral kServerSetupRole = "server.setup";
+constexpr const static ::llvm::StringLiteral kClientSetupRole = "client.setup";
+constexpr const static ::llvm::StringLiteral kClientKeygenRole =
+    "client.keygen";
 
-// Corresponds to a named attribute client.preprocessed_func whose value is a
-// dictionary {func_name = "foo"} that references the name of the function that
-// this was derived from. This preprocessed function contains just the
-// ciphertexts workload of the original function, with any plaintexts processing
-// done ahead of time and passed in with new arguments.
-constexpr const static ::llvm::StringLiteral kClientPreprocessedFuncAttrName =
-    "client.preprocessed_func";
+// Marks the ciphertext workload after plaintext preprocessing is split out.
+constexpr const static ::llvm::StringLiteral kClientPreprocessedRole =
+    "client.preprocessed";
 
 inline bool isClientHelper(Operation* op) {
-  return op->hasAttr(kClientEncFuncAttrName) ||
-         op->hasAttr(kClientDecFuncAttrName) ||
-         op->hasAttr(kClientPackFuncAttrName) ||
-         op->hasAttr(kServerPreprocessingFuncAttrName) ||
-         op->hasAttr(kClientSetupFuncAttrName) ||
-         op->hasAttr(kClientKeygenFuncAttrName) ||
-         op->hasAttr(kClientPreprocessedFuncAttrName) ||
-         op->hasAttr(kClientEncZeroFuncAttrName);
+  return hasInterfaceRole(op, kClientEncRole) ||
+         hasInterfaceRole(op, kClientDecRole) ||
+         hasInterfaceRole(op, kClientPackRole) ||
+         hasInterfaceRole(op, kServerSetupRole) ||
+         hasInterfaceRole(op, kServerPreprocessingRole) ||
+         hasInterfaceRole(op, kClientSetupRole) ||
+         hasInterfaceRole(op, kClientKeygenRole) ||
+         hasInterfaceRole(op, kClientPreprocessedRole) ||
+         hasInterfaceRole(op, kClientEncZeroRole);
 }
 
 // The name of the function this client helper is made for.
@@ -142,8 +139,8 @@ constexpr const static ::llvm::StringLiteral kClientHelperFuncName =
 constexpr const static ::llvm::StringLiteral kClientHelperIndex = "index";
 
 inline bool isPreprocessingHelper(Operation* op) {
-  return op->hasAttr(kClientPackFuncAttrName) ||
-         op->hasAttr(kServerPreprocessingFuncAttrName);
+  return hasInterfaceRole(op, kClientPackRole) ||
+         hasInterfaceRole(op, kServerPreprocessingRole);
 }
 
 }  // namespace heir

@@ -117,6 +117,8 @@ std::string stdArrayName(ArrayRef<int64_t> shape, StringRef elt) {
 // out-param), as opposed to the bare borrowed handle the compute funcs take
 // (`Context<word>*` / `UserInterface<word>*`).
 std::string owningHandleTypeName(Type t) {
+  if (isa<cheddar::ClientContextType>(t))
+    return "std::shared_ptr<ClientContext<word>>";
   if (isa<cheddar::ContextType>(t)) return "std::shared_ptr<Context<word>>";
   if (isa<cheddar::BootContextType>(t))
     return "std::shared_ptr<BootContext<word>>";
@@ -246,6 +248,13 @@ void emitOutParamCall(OpBuilder& b, Location loc, Value receiver,
 // kernels). Function-boundary buffers are re-typed to C++ references by the
 // `cheddar-emitc-boundary` pass (a func cannot carry lvalue args).
 void addCheddarEmitCTypeConversions(TypeConverter& tc, MLIRContext* ctx) {
+  tc.addConversion([ctx](cheddar::ClientContextType) -> Type {
+    return PointerType::get(ctx, OpaqueType::get(ctx, "ClientContext<word>"));
+  });
+  tc.addConversion([ctx](cheddar::DebugHandlerType) -> Type {
+    return PointerType::get(
+        OpaqueType::get(ctx, "const heir::cyclops::DebugSink"));
+  });
   // Identity for the emitc types we produce, so they are recognised as already
   // legal (the shared EmitCTypeConverter's generic rule rejects e.g. lvalue,
   // leaving a converted func signature perpetually "illegal").
@@ -425,7 +434,12 @@ struct ConvertSetupAssign : public OpConversionPattern<Op> {
       Op op, typename Op::Adaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     auto operands = adaptor.getOperands();
-    VerbatimOp::create(rewriter, op.getLoc(), "{} = " + rhsCallee + "({});",
+    // Seed Cyclops key material instead of sampling every coefficient directly.
+    std::string args = "{}";
+    if (isa<cheddar::CreateUserInterfaceOp>(op) && useCyclopsRuntime(op))
+      args += ", true";
+    VerbatimOp::create(rewriter, op.getLoc(),
+                       "{} = " + rhsCallee + "(" + args + ");",
                        ValueRange{operands[1], operands[0]});
     rewriter.eraseOp(op);
     return success();
@@ -620,6 +634,24 @@ struct ConvertPrepareBootstrap
   }
 };
 
+struct ConvertPrepareBootstrapContext
+    : public OpConversionPattern<cheddar::PrepareBootstrapContextOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      cheddar::PrepareBootstrapContextOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    VerbatimOp::create(rewriter, op.getLoc(), "{}->PrepareEvalMod();",
+                       ValueRange{adaptor.getCtx()});
+    VerbatimOp::create(rewriter, op.getLoc(),
+                       "{}->PrepareHomomorphicDFT(" +
+                           intLit(op.getNumSlotsAttr()) +
+                           ", BootVariant::kImaginaryRemoving);",
+                       ValueRange{adaptor.getCtx()});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // cheddar.encode: fill a std::vector from the float message buffer, then
 // encode at the requested logarithmic scale, or CHEDDAR's canonical scale
 // for the level when no explicit scale is present. Cyclops' slots API takes
@@ -652,10 +684,18 @@ struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
         rewriter, op.getLoc(),
         "{} = " + vecType + "({}, {} + " + std::to_string(n) + ");",
         ValueRange{vec, begin, begin});
-    if (Value ctx = adaptor.getCtx())
+    // A Cyclops encoder rejects a plaintext whose ring differs from its own;
+    // a default-constructed plaintext only has the right ring for the
+    // backend's largest degree. Take the ring from the context, then tag the
+    // secret the same way UserInterface::EncryptMessage does.
+    if (Value ctx = adaptor.getCtx()) {
+      VerbatimOp::create(rewriter, op.getLoc(),
+                         "{}.MatchRing({}->NewPlaintext());",
+                         ValueRange{out, ctx});
       VerbatimOp::create(rewriter, op.getLoc(),
                          "{}.SetSecretId({}->BootSecretId());",
                          ValueRange{out, ctx});
+    }
     // TODO(#2364): Use scale from op once HEIR can do precise scale tracking.
     std::string scale = "{}.GetScale(" + lvl + ")";
     SmallVector<Value> operands{adaptor.getEncoder(), out,
@@ -1147,10 +1187,14 @@ struct ConvertDebugCall : public OpConversionPattern<func::CallOp> {
       args.push_back(rewriter.getIndexAttr(i));
     args.push_back(emitc::OpaqueAttr::get(ctx, name));
     args.push_back(emitc::OpaqueAttr::get(ctx, metadata));
-    CallOpaqueOp::create(rewriter, op.getLoc(), TypeRange{},
-                         rewriter.getStringAttr("__heir_debug"), operands,
-                         rewriter.getArrayAttr(args),
-                         /*template_args=*/ArrayAttr{});
+    CallOpaqueOp::create(
+        rewriter, op.getLoc(), TypeRange{},
+        rewriter.getStringAttr(
+            isa<cheddar::DebugHandlerType>(op.getOperand(0).getType())
+                ? "heir::cyclops::emitCheckpoint"
+                : "__heir_debug"),
+        operands, rewriter.getArrayAttr(args),
+        /*template_args=*/ArrayAttr{});
     rewriter.eraseOp(op);
     return success();
   }
@@ -1850,16 +1894,17 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
                                                           /*benefit=*/3);
     patterns.add<ConvertCiphertextCopy>(typeConverter, ctx, /*benefit=*/3);
 
-    patterns
-        .add<ConvertMakeParameter, ConvertPrepareRotKey,
-             ConvertCreateBootContext, ConvertPrepareBootstrap, ConvertEncode,
-             ConvertEncodeConstant, ConvertDecode, ConvertHRot, ConvertHRotAdd,
-             ConvertHConj, ConvertHConjAdd, ConvertLinearTransform,
-             ConvertPrepareLinearTransform, ConvertApplyPreparedLinearTransform,
-             ConvertEvalPoly, ConvertPrepareLinearTransformKeys>(typeConverter,
-                                                                 ctx);
+    patterns.add<
+        ConvertMakeParameter, ConvertPrepareRotKey, ConvertCreateBootContext,
+        ConvertPrepareBootstrap, ConvertPrepareBootstrapContext, ConvertEncode,
+        ConvertEncodeConstant, ConvertDecode, ConvertHRot, ConvertHRotAdd,
+        ConvertHConj, ConvertHConjAdd, ConvertLinearTransform,
+        ConvertPrepareLinearTransform, ConvertApplyPreparedLinearTransform,
+        ConvertEvalPoly, ConvertPrepareLinearTransformKeys>(typeConverter, ctx);
     patterns.add<ConvertSetupAssign<cheddar::CreateContextOp>>(
         typeConverter, ctx, "Context<word>::Create");
+    patterns.add<ConvertSetupAssign<cheddar::CreateClientContextOp>>(
+        typeConverter, ctx, "ClientContext<word>::Create");
     patterns.add<ConvertSetupAssign<cheddar::CreateUserInterfaceOp>>(
         typeConverter, ctx, "std::make_unique<UserInterface<word>>");
 

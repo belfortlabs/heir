@@ -473,7 +473,8 @@ struct ConvertLWEEncodeOp : public OpConversionPattern<lwe::RLWEEncodeOp> {
     // the Cyclops runtime is selected.
     Value ctx;
     if (useCyclopsRuntime) {
-      auto contextualCtx = getContextualContext(op.getOperation());
+      auto contextualCtx =
+          getContextualArg<cheddar::ClientContextType>(op.getOperation());
       if (failed(contextualCtx)) return contextualCtx;
       ctx = contextualCtx.value();
     }
@@ -983,6 +984,7 @@ SmallVector<Type> getDirectSupportTypes(func::FuncOp function,
   Type bootType = cheddar::BootContextType::get(context);
   Type encoderType = cheddar::EncoderType::get(context);
   Type uiType = cheddar::UserInterfaceType::get(context);
+  Type debugType = cheddar::DebugHandlerType::get(context);
   Type keyType = cheddar::EvalKeyType::get(context);
   Type mapType = cheddar::EvkMapType::get(context);
   SmallVector<Type> required;
@@ -1000,7 +1002,10 @@ SmallVector<Type> getDirectSupportTypes(func::FuncOp function,
             kernel::EvalChebyshevOp>(op))
       add(ctxType);
     // Cyclops encode tags plaintexts with the context's secret.
-    if (useCyclopsRuntime && isa<lwe::RLWEEncodeOp>(op)) add(ctxType);
+    // In the split flow the encoding side holds a ClientContext (the GPU
+    // Context derives from it, so server preprocessing passes its own).
+    if (useCyclopsRuntime && isa<lwe::RLWEEncodeOp>(op))
+      add(cheddar::ClientContextType::get(context));
     if (isa<ckks::BootstrapOp>(op)) add(bootType);
     if (isa<lwe::RLWEEncodeOp, lwe::RLWEDecodeOp>(op)) add(encoderType);
     if (isa<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp>(op)) add(uiType);
@@ -1010,8 +1015,12 @@ SmallVector<Type> getDirectSupportTypes(func::FuncOp function,
       add(mapType);
     if (auto call = dyn_cast<func::CallOp>(op);
         call && isDebugPort(call.getCallee())) {
-      add(encoderType);
-      add(uiType);
+      if (useCyclopsRuntime) {
+        add(debugType);
+      } else {
+        add(encoderType);
+        add(uiType);
+      }
     }
   });
   return required;
@@ -1153,7 +1162,10 @@ struct ConvertCheddarFuncCallOp : public OpConversionPattern<func::CallOp> {
 // `tensor<!cheddar.ciphertext>`, or a packed `tensor<Nx!lwe.ciphertext>` ->
 // `tensor<Nx!cheddar.ciphertext>`), converted via the type converter.
 struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertDebugFuncDecl(const TypeConverter& converter, MLIRContext* context,
+                       bool split)
+      : OpConversionPattern(converter, context, /*benefit=*/3), split(split) {}
+  bool split;
   LogicalResult matchAndRewrite(
       func::FuncOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
@@ -1165,6 +1177,7 @@ struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
     auto* ctx = getContext();
     SmallVector<Type> argTypes{cheddar::EncoderType::get(ctx),
                                cheddar::UserInterfaceType::get(ctx), ctType};
+    if (split) argTypes = {cheddar::DebugHandlerType::get(ctx), ctType};
     rewriter.modifyOpInPlace(op, [&] {
       op.setType(FunctionType::get(ctx, argTypes, {}));
       // __heir_debug only READS the ciphertext (decrypt+decode for printing).
@@ -1173,7 +1186,8 @@ struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
       // a move-only cheddar Ciphertext becomes a destructive std::move, leaving
       // the observed value (and its later uses) empty -> "num primes mismatch".
       // Mark the ciphertext arg read-only so bufferization borrows it.
-      op.setArgAttr(2, "bufferization.access", rewriter.getStringAttr("read"));
+      op.setArgAttr(split ? 1 : 2, "bufferization.access",
+                    rewriter.getStringAttr("read"));
     });
     return success();
   }
@@ -1183,12 +1197,26 @@ struct ConvertDebugFuncDecl : public OpConversionPattern<func::FuncOp> {
 // UserInterface contextual args, followed by the (converted) ciphertext operand
 // (the last original operand; the original secret-key operand is dropped).
 struct ConvertDebugCall : public OpConversionPattern<func::CallOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertDebugCall(const TypeConverter& converter, MLIRContext* context,
+                   bool split)
+      : OpConversionPattern(converter, context, /*benefit=*/3), split(split) {}
+  bool split;
   LogicalResult matchAndRewrite(
       func::CallOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     if (!isDebugPort(op.getCallee())) return failure();
     auto* ctx = getContext();
+    if (split) {
+      auto handler = getContextualArgFromFunc(
+          op.getOperation(), cheddar::DebugHandlerType::get(ctx));
+      if (failed(handler)) return failure();
+      auto call = func::CallOp::create(
+          rewriter, op.getLoc(), op.getCallee(), TypeRange{},
+          ValueRange{*handler, adaptor.getOperands().back()});
+      call->setDialectAttrs(op->getDialectAttrs());
+      rewriter.replaceOp(op, call);
+      return success();
+    }
     auto encoder = getContextualArgFromFunc(op.getOperation(),
                                             cheddar::EncoderType::get(ctx));
     if (failed(encoder)) return failure();
@@ -1303,18 +1331,21 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     const auto required = collectSupportRequirements(module, useCyclopsRuntime);
     SmallVector<Type> supportTypes{cheddar::ContextType::get(context),
                                    cheddar::BootContextType::get(context),
+                                   cheddar::ClientContextType::get(context),
                                    cheddar::EncoderType::get(context),
                                    cheddar::UserInterfaceType::get(context),
+                                   cheddar::DebugHandlerType::get(context),
                                    cheddar::EvalKeyType::get(context),
                                    cheddar::EvkMapType::get(context)};
     patterns.add<AddCheddarContextArg>(typeConverter, context, supportTypes,
                                        required);
     patterns.add<ConvertCheddarFuncCallOp>(typeConverter, context,
                                            supportTypes);
+
     // Debug ports get dedicated, higher-benefit handling (the generic call /
     // structural func patterns would mis-thread their context args).
     patterns.add<ConvertDebugFuncDecl, ConvertDebugCall>(typeConverter, context,
-                                                         /*benefit=*/3);
+                                                         useCyclopsRuntime);
 
     patterns.add<ConvertCKKSAddOp, ConvertCKKSSubOp, ConvertCKKSMulOp,
                  ConvertCKKSAddPlainOp, ConvertCKKSSubPlainOp,
@@ -1344,7 +1375,13 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     // A reshaped `__heir_debug_*` declaration / call has exactly
     // (Encoder, UserInterface, tensor<...x!cheddar.ciphertext>) inputs and no
     // results.
-    auto isReshapedDebugSig = [](TypeRange ins) {
+    auto isReshapedDebugSig = [&](TypeRange ins) {
+      if (useCyclopsRuntime) {
+        if (ins.size() != 2 || !isa<cheddar::DebugHandlerType>(ins[0]))
+          return false;
+        auto type = dyn_cast<RankedTensorType>(ins[1]);
+        return type && isa<cheddar::CiphertextType>(type.getElementType());
+      }
       if (ins.size() != 3 || !isa<cheddar::EncoderType>(ins[0]) ||
           !isa<cheddar::UserInterfaceType>(ins[1]))
         return false;

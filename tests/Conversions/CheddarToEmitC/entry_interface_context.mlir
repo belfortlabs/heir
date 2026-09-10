@@ -1,5 +1,4 @@
 // RUN: heir-opt %s --cheddar-emitc-entry-interface | heir-translate --mlir-to-cpp --file-id=header | FileCheck %s
-// RUN: heir-opt %s --cheddar-emitc-entry-interface=runtime=cyclops | heir-translate --mlir-to-cpp --file-id=header | FileCheck %s --check-prefix=CYCLOPS
 
 // Boundary signatures for an entry that forwards ciphertexts. After precise
 // support threading, the evaluation and encode/decode helpers need no Context
@@ -14,22 +13,16 @@
 !float = !emitc.ptr<f32>
 
 func.func @entry__setup(%out: !ctx_owner {bufferize.result})
-    attributes {client.setup_func = {func_name = "entry"}} { return }
+    attributes {heir.interface = {func_name = "entry", roles = ["client.setup"]}} { return }
 func.func @entry__keygen(%ctx: !ctx_const, %out: !ui_owner {bufferize.result})
-    attributes {client.keygen_func = {func_name = "entry"}} { return }
+    attributes {heir.interface = {func_name = "entry", roles = ["client.keygen"]}} { return }
 func.func @entry(%input: !ct_const, %out: !ct {bufferize.result})
-    attributes {heir.entry_func = {func_name = "entry"},
-      server.evaluate_func = {func_name = "entry"},
-      heir.entry_input_types = [tensor<4xf32>],
-      heir.entry_result_types = [tensor<4xf32>]} { return }
+    attributes {heir.interface = {func_name = "entry", input_types = [tensor<4xf32>], result_types = [tensor<4xf32>], roles = ["entry", "server.evaluate"]}} { return }
 func.func @encrypt(%encoder: !encoder, %ui: !ui, %input: !float, %out: !ct {bufferize.result})
-    attributes {client.enc_func = {func_name = "entry", index = 0 : i64}} { return }
+    attributes {heir.interface = {func_name = "entry", index = 0 : i64, roles = ["client.encrypt"]}} { return }
 func.func @decrypt(%encoder: !encoder, %ui: !ui, %input: !ct_const, %out: !float {bufferize.result})
-    attributes {client.dec_func = {func_name = "entry", index = 0 : i64}} { return }
+    attributes {heir.interface = {func_name = "entry", index = 0 : i64, roles = ["client.decrypt"]}} { return }
 
 // CHECK: using Context = ::cheddar::Context<word>;
 // CHECK: std::shared_ptr<Context> Setup();
 // CHECK: EncryptedOutputs Evaluate(
-// CYCLOPS: using Context = ::cyclops::Context<word>;
-// CYCLOPS: std::shared_ptr<Context> Setup();
-// CYCLOPS: EncryptedOutputs Evaluate(

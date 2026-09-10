@@ -60,11 +60,6 @@ Type stripSecretType(Type type) {
   return type;
 }
 
-DictionaryAttr getEntryRoleAttr(func::FuncOp op, OpBuilder& builder) {
-  return builder.getDictionaryAttr({builder.getNamedAttr(
-      kClientHelperFuncName, builder.getStringAttr(op.getSymName()))});
-}
-
 Type getOriginalArgType(func::FuncOp op, unsigned index) {
   auto originalTypeAttr =
       op.getArgAttrOfType<OriginalTypeAttr>(index, kOriginalTypeAttrName);
@@ -107,8 +102,8 @@ LogicalResult generateEncryptionFunc(func::FuncOp op,
       FunctionType::get(builder.getContext(), {encArgType}, {encReturnType});
   auto encFuncOp = func::FuncOp::create(builder, encFuncName, encFuncType);
 
-  encFuncOp->setAttr(
-      kClientEncFuncAttrName,
+  setInterfaceRole(
+      encFuncOp, kClientEncRole,
       builder.getDictionaryAttr({
           builder.getNamedAttr(kClientHelperFuncName,
                                builder.getStringAttr(op.getSymName())),
@@ -185,8 +180,8 @@ LogicalResult generatePlaintextPackedFunc(func::FuncOp op,
       FunctionType::get(builder.getContext(), {packArgType}, {packReturnType});
   auto packFuncOp = func::FuncOp::create(builder, packFuncName, packFuncType);
 
-  packFuncOp->setAttr(
-      kClientPackFuncAttrName,
+  setInterfaceRole(
+      packFuncOp, kClientPackRole,
       builder.getDictionaryAttr({
           builder.getNamedAttr(kClientHelperFuncName,
                                builder.getStringAttr(op.getSymName())),
@@ -247,8 +242,8 @@ LogicalResult generateDecryptionFunc(func::FuncOp op, Type decFuncArgType,
       FunctionType::get(builder.getContext(), {decFuncArgType}, {originalType});
   auto decFuncOp = func::FuncOp::create(builder, decFuncName, decFuncType);
 
-  decFuncOp->setAttr(
-      kClientDecFuncAttrName,
+  setInterfaceRole(
+      decFuncOp, kClientDecRole,
       builder.getDictionaryAttr({
           builder.getNamedAttr(kClientHelperFuncName,
                                builder.getStringAttr(op.getSymName())),
@@ -294,31 +289,29 @@ LogicalResult generateDecryptionFunc(func::FuncOp op, Type decFuncArgType,
 /// "entry" func for the IR being compiled, but there may be multiple.
 LogicalResult convertFunc(func::FuncOp op, int64_t minSlotCount,
                           bool enableLayoutAssignment) {
-  if (op.isDeclaration()) {
-    LLVM_DEBUG(op->emitWarning("Skipping client interface for external func"));
+  if (op.isDeclaration() || isClientHelper(op)) {
     return success();
   }
-  // Helpers an earlier pass created (the outlined layout assignment from
-  // convert-to-ciphertext-semantics) are not entry points.
-  if (isClientHelper(op)) return success();
 
   auto module = op->getParentOfType<ModuleOp>();
   ImplicitLocOpBuilder builder =
       ImplicitLocOpBuilder::atBlockEnd(module.getLoc(), module.getBody());
   builder.setInsertionPointAfter(op);
 
-  op->setAttr(kEntryFuncAttrName, getEntryRoleAttr(op, builder));
-  op->setAttr(kServerEvaluateFuncAttrName, getEntryRoleAttr(op, builder));
+  auto role = builder.getDictionaryAttr({builder.getNamedAttr(
+      kClientHelperFuncName, builder.getStringAttr(op.getSymName()))});
+  setInterfaceRole(op, kEntryRole, role);
+  setInterfaceRole(op, kServerEvaluateRole, role);
   SmallVector<Attribute> logicalInputTypes;
   for (unsigned i = 0; i < op.getNumArguments(); ++i)
     logicalInputTypes.push_back(TypeAttr::get(getOriginalArgType(op, i)));
-  op->setAttr(kEntryInputTypesAttrName,
-              builder.getArrayAttr(logicalInputTypes));
+  setInterfaceField(op, kEntryInputTypes,
+                    builder.getArrayAttr(logicalInputTypes));
   SmallVector<Attribute> logicalResultTypes;
   for (unsigned i = 0; i < op.getNumResults(); ++i)
     logicalResultTypes.push_back(TypeAttr::get(getOriginalResultType(op, i)));
-  op->setAttr(kEntryResultTypesAttrName,
-              builder.getArrayAttr(logicalResultTypes));
+  setInterfaceField(op, kEntryResultTypes,
+                    builder.getArrayAttr(logicalResultTypes));
 
   // We need one encryption function per argument and one decryption
   // function per return value. This is mainly to avoid complicated C++ codegen
@@ -358,7 +351,6 @@ LogicalResult convertFunc(func::FuncOp op, int64_t minSlotCount,
       }
     }
   }
-
   LLVM_DEBUG(module.dump());
 
   return success();

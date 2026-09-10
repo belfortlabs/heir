@@ -48,7 +48,7 @@ module attributes {scheme.requested_slot_count = 32 : i64} {
   // This is usually auto-generated, but needed in this example test so that
   // the new encryption helper knows what encryption key type to use
   // (secret/public).
-  func.func @enc_helper(%arg0: tensor<32xf32>, %pk: !pkey) attributes {client.enc_func = {func_name = "doctest", index = 0 : i64}} {
+  func.func @enc_helper(%arg0: tensor<32xf32>, %pk: !pkey) attributes {heir.interface = {func_name = "doctest", index = 0 : i64, roles = ["client.encrypt"]}} {
     return
   }
 

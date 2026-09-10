@@ -17,7 +17,7 @@ func.func @add(
 }
 
 // CHECK: func.func @add
-// CHECK-SAME: heir.entry_func = {func_name = "add"}
+// CHECK-SAME: heir.interface = {func_name = "add"{{.*}}roles = [{{.*}}"entry"{{.*}}]}
 // CHECK: func.func @add__encrypt__arg0
 // CHECK: func.func @add__encrypt__arg1
 // CHECK: func.func @add__decrypt__result0

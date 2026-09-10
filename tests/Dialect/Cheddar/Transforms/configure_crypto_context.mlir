@@ -36,11 +36,11 @@ module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [3602879
 // CHECK-SAME: cheddar.logN = 13 : i64
 // CHECK-NOT: ckks.schemeParam
 // CHECK: func.func @main__setup
-// CHECK-SAME: client.setup_func = {func_name = "main"}
+// CHECK-SAME: heir.interface = {func_name = "main", roles = ["client.setup"]}
 // CHECK: cheddar.make_parameter
 // CHECK: cheddar.create_context
 // CHECK: func.func @main__keygen
-// CHECK-SAME: client.keygen_func = {func_name = "main"}
+// CHECK-SAME: heir.interface = {func_name = "main", roles = ["client.keygen"]}
 // CHECK: cheddar.create_user_interface
 // CHECK: cheddar.prepare_rot_key
 // CHECK-SAME: distance = 2
@@ -54,18 +54,12 @@ module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [3602879
 // CHECK: call @main__setup
 // CHECK: call @main__keygen
 
-// Cyclops indexes every evaluation key by the secret it matches, so key
-// preparation takes the context that names it. A transform whose split the
-// runtime plans contributes no distances of its own; the keygen asks the
-// runtime for them instead, once per distinct transform shape.
+// With the Cyclops runtime the server reports its evaluation-key request and
+// the client generates the keys from it, so keygen itself prepares none.
 // CYCLOPS: func.func @main__keygen
-// CYCLOPS: cheddar.prepare_rot_key %{{[^,]*}}, %{{[^ ]*}} {distance = 2
-// CYCLOPS: cheddar.prepare_rot_key %{{[^,]*}}, %{{[^ ]*}} {distance = 7
-// CYCLOPS: cheddar.prepare_linear_transform_keys
-// CYCLOPS-SAME: diagonal_indices = array<i32: 0, 1>
-// CYCLOPS-SAME: level = 1 : i64
-// CYCLOPS-SAME: width = 8 : i64
+// CYCLOPS-NOT: cheddar.prepare_rot_key
 // CYCLOPS-NOT: cheddar.prepare_linear_transform_keys
+// CYCLOPS: return
 
 // USE-LEVELS: func.func @main__keygen
 // USE-LEVELS: cheddar.prepare_rot_key
