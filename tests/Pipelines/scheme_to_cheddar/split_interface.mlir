@@ -7,16 +7,16 @@
 // CLIENT-H: #include "core/ClientContext.h"
 // CLIENT-H: namespace heir::generated::split::client
 // CLIENT-H: using Context = ::cyclops::ClientContext<word>;
-// CLIENT-H: KeyGen(const std::shared_ptr<Context>&, const EvaluationKeyRequest&)
+// CLIENT-H: EvaluationKeyRequest GetKeyRequest(Context&)
+// CLIENT-H: KeyGen(const std::shared_ptr<Context>&)
 // CLIENT-CPP: #include "split_client.h"
 // CLIENT-CPP: ClientContext<word>::Create
 // CLIENT-CPP: namespace heir::generated::split::client
-// CLIENT-CPP: PrepareRotationKey
+// CLIENT-CPP: EvaluationKeyRequest GetKeyRequest
+// CLIENT-CPP: PrepareRotationKey(GetKeyRequest(
 // SERVER-H: namespace heir::generated::split::server
-// SERVER-H: GetKeyRequest
 // SERVER-CPP: #include "split_server.h"
 // SERVER-CPP: Context<word>::Create
-// SERVER-CPP: GetKeyRequest
 
 func.func @split(%input: tensor<4xf32> {secret.secret}) -> tensor<4xf32> {
   %result = arith.mulf %input, %input : tensor<4xf32>

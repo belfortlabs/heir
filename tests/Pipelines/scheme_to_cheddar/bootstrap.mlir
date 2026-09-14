@@ -1,5 +1,6 @@
 // RUN: heir-opt --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=8192 greedy-level-budget=6 greedy-bootstrap-waterline=3" --scheme-to-cheddar="entry-function=bootstrap log-message-ratio=1" %s | FileCheck %s
 // RUN: heir-opt --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=8192 greedy-level-budget=6 greedy-bootstrap-waterline=3" --scheme-to-cheddar="entry-function=bootstrap runtime=cyclops" %s | FileCheck %s --check-prefix=CYCLOPS
+// RUN: heir-opt --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=8192 greedy-level-budget=6 greedy-bootstrap-waterline=3" --scheme-to-cheddar="entry-function=bootstrap runtime=cyclops" --cheddar-to-emitc --cheddar-emitc-entry-interface=runtime=cyclops %s | heir-translate --mlir-to-cpp --file-id=client_source | FileCheck %s --check-prefix=CLIENT
 
 // Exercise parameter generation and context configuration together. The
 // generated Q chain must be deep enough for 4 CtS + 8 EvalMod + 2 StC levels;
@@ -21,6 +22,9 @@
 // CHECK-SAME: numStcLevels = 2
 // CYCLOPS: cheddar.create_boot_context
 // CYCLOPS-SAME: logMessageRatio = 8
+// CLIENT: AddBootstrapRequiredKeys
+// CLIENT-SAME: BootParameter({{.*}}.param_.max_level_, 4, 2, 8), 8192,
+// CLIENT-SAME: BootVariant::kImaginaryRemoving
 // CHECK: func.func @bootstrap__keygen
 // CHECK: cheddar.prepare_bootstrap
 // CHECK: func.func @bootstrap__configure

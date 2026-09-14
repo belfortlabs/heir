@@ -6,7 +6,7 @@
 namespace api = heir::generated::split::client;
 int main() {
   auto context = api::Setup();
-  auto keys = api::KeyGen(context, {});
+  auto keys = api::KeyGen(context);
   api::CleartextInputs input{api::Input0{0.125f, -0.25f, 0.5f, 0.75f}};
   auto encrypted = api::Encrypt(*context, keys.secret_key, input);
   std::stringstream ciphertextWire;
