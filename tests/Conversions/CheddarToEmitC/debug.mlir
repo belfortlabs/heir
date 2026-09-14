@@ -1,9 +1,8 @@
 // RUN: heir-opt --cheddar-bufferize --fold-memref-alias-ops --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s
 
-// A `__heir_debug_*` call (the form LWEToCheddar produces for cheddar --debug)
-// lowers to a free C++ `__heir_debug(encoder, ui, ct, "name", "metadata")`
-// call. The external `func.func` declaration is erased because the upstream
-// Cpp emitter cannot print an external func.func.
+// A `__heir_debug_*` call lowers to `__heir_debug(encoder, ui, ct, "name",
+// "metadata")` (`ct, N` for a buffer of N ciphertexts); the external
+// declaration is erased.
 
 !ciphertext = !cheddar.ciphertext
 !context = !cheddar.context
@@ -32,10 +31,11 @@ func.func @debug_chain(%enc: !encoder, %ui: !user_interface, %ct: tensor<!cipher
 }
 
 // A rank-1 (1-element array) ciphertext value -- the usual cheddar value rep --
-// lowers the ct operand to a const std::array<Ciphertext<word>, N>&.
+// is a `const Ciphertext<word>[1]` argument, passed with its element count.
 // CHECK: func.func @debug_arr
 // CHECK: emitc.call_opaque "__heir_debug"
-// CHECK-SAME: !emitc.opaque<"const std::array<Ciphertext<word>, 1>&">
+// CHECK-SAME: #emitc.opaque<"1">
+// CHECK-SAME: !emitc.array<1x!emitc.opaque<"const Ciphertext<word>">>
 func.func private @__heir_debug_1(!encoder, !user_interface, tensor<1x!ciphertext>)
 func.func @debug_arr(%enc: !encoder, %ui: !user_interface, %ct: tensor<1x!ciphertext>) {
   func.call @__heir_debug_1(%enc, %ui, %ct) {debug.name = "arr0", debug.metadata = "m"} : (!encoder, !user_interface, tensor<1x!ciphertext>) -> ()

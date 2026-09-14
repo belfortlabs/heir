@@ -1,40 +1,10 @@
-// Header-only stub of the CHEDDAR C++ API, used to *compile* (not run) the
-// C++ that `cheddar-to-emitc` + `heir-translate --mlir-to-cpp` produce, with
-// no GPU/CUDA toolchain. This is a CI-runnable guard that the emitted code
-// honours CHEDDAR's move/const contract -- the kind of bug that FileCheck
-// (which only inspects emitted text) cannot catch.
-//
-// The move/const semantics below mirror the real library (verified against
-// CHEDDAR's include/core headers); only these properties matter here, so the
-// method bodies are empty and the data layout is omitted:
-//
-//   * Ciphertext/Plaintext/Constant/EvaluationKey -- move-only (copy deleted)
-//     *with* move-assignment, default-constructible.   (core/Container.h)
-//   * EvkMap -- move-only, copy deleted, *no* move-assignment. (core/EvkMap.h)
-//   * Context::MadUnsafe(Ct& res, ...) mutates `res` in place, so `res` is a
-//     non-const reference.                              (core/Context.h:377)
-//   * UserInterface::Get*Key() / GetEvkMap() return `const&`. (UserInterface.h)
-//
+// Header-only stub of the CHEDDAR API with the real library's move/const
+// semantics (move-only payloads with move-assignment; EvkMap move-only without
+// move-assignment; MadUnsafe mutates `res`; getters return const&). Used to
+// compile, not run, the emitted C++ without CUDA.
 // `HEIR_CYCLOPS_STUB` switches the fork-specific half of the surface to
-// Cyclops.
-//
-//   * Cyclops has no level-blind key getter; every lookup goes through the
-//     level-aware EvkMap overloads, which the emitter calls for both forks.
-//     Compiling the Cyclops kernels against a stub that still declared the
-//     getters would prove nothing, so they are compiled out here.
-//   * Every Cyclops evaluation key is indexed by the secret it matches, so
-//     lookups and key preparation take a SecretId.
-//   * Cyclops containers start untagged and Encrypt rejects an untagged
-//     plaintext, hence Plaintext::SetSecretId.
-//   * Cyclops' LinearTransform::Evaluate has no min_ks flag, and its
-//     constructor takes the compact plaintext period where scale-snu takes
-//     pre_rotation.
-//   * Cyclops' EvalPoly states the polynomial's parity in the constructor.
-//   * Cyclops names the homomorphic DFT preparation PrepareHomomorphicDFT,
-//     scale-snu PrepareEvalSpecialFFT.
-//
-// Kept deliberately narrow: setup is covered by conversion and opt-in real
-// CHEDDAR compile tests. Getter ops remain unsupported by this lowering.
+// Cyclops: secret-indexed key lookups, tagged plaintexts, no min_ks flag on
+// LinearTransform::Evaluate, parity on EvalPoly, PrepareHomomorphicDFT.
 
 #ifndef TESTS_CONVERSIONS_CHEDDARTOEMITC_COMPILE_CHEDDAR_STUB_H_
 #define TESTS_CONVERSIONS_CHEDDARTOEMITC_COMPILE_CHEDDAR_STUB_H_
@@ -107,8 +77,7 @@ struct Parameter {
   int NPToLevel(NPInfo np) const;
 };
 
-// The encoder exposes the per-level canonical scale (the EvalPoly emitter reads
-// input/target scales via `encoder.GetScale(level)`).
+// The encoder exposes the per-level canonical scale.
 template <typename word>
 struct Encoder {
   double GetScale(int level) const;
@@ -132,7 +101,6 @@ struct Ciphertext {
   Ciphertext& operator=(Ciphertext&&) = default;
   Ciphertext(const Ciphertext&) = delete;
   Ciphertext& operator=(const Ciphertext&) = delete;
-  // The EvalPoly emitter reads the actual level/scale off the input ct.
   double GetScale() const;
   NPInfo GetNP() const;
 };
@@ -144,6 +112,8 @@ struct Plaintext {
   Plaintext(const Plaintext&) = delete;
   Plaintext& operator=(const Plaintext&) = delete;
 #ifdef HEIR_CYCLOPS_STUB
+  // Containers carry their ring; encode targets take it from the context.
+  void MatchRing(const Plaintext& other);
   void SetSecretId(SecretId secret);
 #endif
 };
@@ -164,10 +134,8 @@ struct EvaluationKey {
   EvaluationKey& operator=(const EvaluationKey&) = delete;
 };
 
-// Move-only, and -- unlike the payload types -- has *no* move-assignment and
-// is not default-constructible (the real EvkMap inherits std::unordered_map
-// and declares only a move ctor). This is what makes the value+assign getter
-// shape uncompilable, so the stub preserves it.
+// Move-only, no move-assignment, not default-constructible (like the real
+// EvkMap, which inherits std::unordered_map and declares only a move ctor).
 template <typename word>
 struct EvkMap {
   EvkMap(EvkMap&&) = default;
@@ -282,16 +250,14 @@ class Context {
   void HConj(Ct& res, const Ct& a, const Evk& conj_key) const;
   void HConjAdd(Ct& res, const Ct& a, const Ct& b, const Evk& conj_key) const;
 
-
-  // In-place multiply-accumulate: `res` is mutated, so it is a *non-const*
-  // reference. This is the crux of the mad_unsafe finding.
+  // In-place: `res` is a non-const reference.
   void MadUnsafe(Ct& res, const Ct& a, const Const& b) const;
 
-  // The EvalPoly emitter reads the canonical scale from here; the key lookups
-  // read the parameters and, for Cyclops, the boot secret's handle.
   Parameter<word> param_;
+  Encoder<word> encoder_;
 #ifdef HEIR_CYCLOPS_STUB
   SecretId BootSecretId() const;
+  Plaintext<word> NewPlaintext() const;
 #endif
 };
 
@@ -299,8 +265,8 @@ class Context {
 template <typename word>
 using ConstContextPtr = std::shared_ptr<const Context<word>>;
 
-// CHEDDAR's EvalPoly extension: also a class -- construct from coefficients,
-// Compile(), then Evaluate() with the multiplication key.
+// CHEDDAR's EvalPoly extension: construct from coefficients, Compile(), then
+// Evaluate() with the multiplication key.
 #ifdef HEIR_CYCLOPS_STUB
 // Selects the multiplication key per relinearization: from a fixed key, or
 // from an EvkMap at the ciphertext's own level. (extension/poly/EvalPoly.h)
@@ -337,9 +303,7 @@ class EvalPoly {
 #endif
 };
 
-// Boot lives on the derived BootContext (extension/BootContext.h), not Context.
-// cheddar.boot takes a !cheddar.boot_context, lowered to BootContext<word>*, so
-// the emitter calls `ctx->Boot(...)` directly; the stub mirrors that hierarchy.
+// Boot lives on BootContext, not Context.
 template <typename word>
 class BootContext : public Context<word> {
  public:

@@ -1,23 +1,14 @@
-// Input for the cheddar-to-emitc *compile* test (see BUILD): every function
-// here is lowered to C++ and compiled against cheddar_stub.h. The point is to
-// exercise the emitter's move/const handling on the op surface that real
-// kernels use, with ctx / user_interface / keys / evk_map taken as function
-// arguments (the shape a CKKS-to-Cheddar lowering produces).
-//
-// Destination-passing form: each payload-producing cheddar op takes an explicit
-// shape-only `tensor.empty` destination (its `outs` init), a scalar payload
-// is a rank-0 `tensor<!cheddar.X>`, and the whole module flows through the same
-// pipeline the e2e examples use (one-shot-bufferize -> buffer-results-to-out-
-// params -> convert-to-emitc -> cheddar-emitc-boundary).
-//
-// Setup ops are intentionally absent: conversion and opt-in real CHEDDAR
-// compile tests cover them. Getter ops remain unsupported by this lowering.
+// Compiled against cheddar_stub.h (see BUILD): the op surface real kernels use,
+// with ctx / user_interface / keys / evk_map as function arguments.
 
 !ciphertext = !cheddar.ciphertext
 !plaintext = !cheddar.plaintext
 !constant = !cheddar.constant
 !context = !cheddar.context
 !encoder = !cheddar.encoder
+!eval_key = !cheddar.eval_key
+!evk_map = !cheddar.evk_map
+!user_interface = !cheddar.user_interface
 
 // Add / Sub / Mult chained on ciphertexts.
 func.func @arith(%ctx: !context, %a: tensor<!ciphertext>,
@@ -32,16 +23,6 @@ func.func @arith(%ctx: !context, %a: tensor<!ciphertext>,
   %2 = cheddar.mult %ctx, %1, %a, %d2
       : (!context, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
   return %2 : tensor<!ciphertext>
-}
-
-// Explicit semantic deep copy through Context::Copy.
-func.func @copy(%ctx: !context, %input: tensor<!ciphertext>)
-    -> tensor<!ciphertext> {
-  %dest = tensor.empty() : tensor<!ciphertext>
-  %result = cheddar.copy %ctx, %input, %dest
-      : (!context, tensor<!ciphertext>, tensor<!ciphertext>)
-          -> tensor<!ciphertext>
-  return %result : tensor<!ciphertext>
 }
 
 // ct+pt and ct+const overloaded dispatch.
@@ -104,9 +85,7 @@ func.func @hmult(%ctx: !context, %a: tensor<!ciphertext>,
   return %0 : tensor<!ciphertext>
 }
 
-// Rotation / conjugation: the key is looked up inline on the EvkMap argument
-// (secret handle and parameters off the context), so these functions carry an
-// evk_map arg and need no UserInterface.
+// Rotation / conjugation look the key up on the EvkMap argument.
 func.func @rotations(%ctx: !context, %evk: !cheddar.evk_map,
                      %a: tensor<!ciphertext>, %b: tensor<!ciphertext>)
     -> tensor<!ciphertext> {
@@ -125,9 +104,7 @@ func.func @rotations(%ctx: !context, %evk: !cheddar.evk_map,
   return %3 : tensor<!ciphertext>
 }
 
-// mad_unsafe with a *local* accumulator (the result of add): the accumulator
-// is the in-place DPS init, so MadUnsafe(acc, ...) binds fine. This path
-// already compiled; it's here as the control case.
+// mad_unsafe with a local accumulator.
 func.func @mad_local(%ctx: !context, %a: tensor<!ciphertext>,
                      %b: tensor<!ciphertext>, %c: tensor<!constant>)
     -> tensor<!ciphertext> {
@@ -185,10 +162,7 @@ func.func @encrypt_decrypt(%ui: !cheddar.user_interface, %pt: tensor<!plaintext>
   return %0, %1 : tensor<!ciphertext>, tensor<!plaintext>
 }
 
-// Destination-passing loop kernel: empty-tensor elimination redirects each
-// payload producer through tensor.insert_slice into element `i` of the output.
-// No payload store/copy remains after bufferization, and the boundary is a
-// mutable `std::array<Ciphertext<word>, 8>&`.
+// Loop kernel: each producer writes element `i` of the out-param directly.
 func.func @loop_store(%ctx: !context, %in: tensor<!ciphertext>)
     -> tensor<8x!ciphertext> {
   %out = tensor.empty() : tensor<8x!ciphertext>
@@ -206,4 +180,31 @@ func.func @loop_store(%ctx: !context, %in: tensor<!ciphertext>)
     scf.yield %ins : tensor<8x!ciphertext>
   }
   return %r : tensor<8x!ciphertext>
+}
+
+// Returning a call result leaves a temporary plus a copy into the out-param
+// after bufferization; the copy of the dead temporary becomes a move.
+func.func private @produce(%ctx: !context, %ct: tensor<!ciphertext>)
+    -> tensor<!ciphertext> {
+  %d = tensor.empty() : tensor<!ciphertext>
+  %r = cheddar.neg %ctx, %ct, %d
+      : (!context, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %r : tensor<!ciphertext>
+}
+func.func @forward_call(%ctx: !context, %ct: tensor<!ciphertext>)
+    -> tensor<!ciphertext> {
+  %r = func.call @produce(%ctx, %ct)
+      : (!context, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %r : tensor<!ciphertext>
+}
+
+// Support values derived from the context and key material.
+func.func @support_values(%ctx: !context, %ui: !user_interface,
+                          %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
+  %map = cheddar.get_evk_map %ui : (!user_interface) -> !evk_map
+  %key = cheddar.get_mult_key %map, %ctx : (!evk_map, !context) -> !eval_key
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %0 = cheddar.relinearize %ctx, %ct, %key, %d0
+      : (!context, tensor<!ciphertext>, !eval_key, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %0 : tensor<!ciphertext>
 }

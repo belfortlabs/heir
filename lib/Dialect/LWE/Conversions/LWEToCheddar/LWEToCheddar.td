@@ -10,15 +10,11 @@ def LWEToCheddar : Pass<"lwe-to-cheddar"> {
     This pass lowers the `lwe` and `ckks` dialects to the `cheddar` dialect,
     targeting the CHEDDAR GPU FHE library.
 
-    The pass threads a context, encoder, user interface, and multiplication
-    key through function arguments following the same pattern as the
-    LWE-to-Lattigo pass. Rotation/conjugation keys are not threaded as
-    arguments: the `cheddar-to-emitc` lowering looks them up inline from the
-    UserInterface at the use site.
-
-    Linear transforms are intentionally not lowered by this pass. They must be
-    decomposed before conversion until the separate Cheddar linear-transform
-    support is available.
+    The pass threads a context, encoder, user interface, multiplication key
+    and evaluation-key map through function arguments following the same
+    pattern as the LWE-to-Lattigo pass. Rotation and conjugation keys are not
+    threaded individually: the `cheddar-to-emitc` lowering reads them off the
+    evaluation-key map at the use site.
   }];
 
   let dependentDialects = [

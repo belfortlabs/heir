@@ -1,14 +1,7 @@
 // RUN: heir-opt --cheddar-bufferize --fold-memref-alias-ops --cse --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s
 
-// A destination-passing loop kernel: an scf.for whose body computes a
-// ciphertext and writes it into element `i` of a locally allocated output via
-// `tensor.insert_slice`. Cheddar bufferization exposes the result out-parameter
-// before One-Shot, and the loop operates over a
-// `memref<8x!cheddar.ciphertext>`. Empty-tensor elimination redirects the
-// Cheddar producer into the dynamic-offset rank-reducing insertion subview, so
-// no payload copy/store survives bufferization. The Cheddar EmitC lowering
-// turns that destination into `out[i]`; SCF/Arith are lowered by their own
-// interfaces in the same pass.
+// A loop kernel: the payload producer in the scf.for body writes `out[i]`
+// directly; no payload copy survives bufferization.
 
 !ciphertext = !cheddar.ciphertext
 !context = !cheddar.context
@@ -16,7 +9,7 @@
 // The ops inside the `emitc.for` body print without the `emitc.` prefix (emitc
 // is the body region's default dialect), so match the bare op names there.
 // CHECK: func.func @loop_store
-// CHECK-SAME: %[[OUT:[a-zA-Z0-9_]+]]: !emitc.opaque<"std::array<Ciphertext<word>, 8>&"> {bufferize.result}
+// CHECK-SAME: %[[OUT:[a-zA-Z0-9_]+]]: !emitc.array<8x!emitc.opaque<"Ciphertext<word>">> {bufferize.result}
 // CHECK-NOT: emitc.variable
 // CHECK: emitc.for
 // CHECK: %[[ELEMENT:.*]] = subscript %[[OUT]][%{{.*}}]

@@ -1,5 +1,5 @@
-#ifndef LIB_RUNTIME_CLEARTEXTRESOURCE_H_
-#define LIB_RUNTIME_CLEARTEXTRESOURCE_H_
+#ifndef INCLUDE_HEIR_RUNTIME_CLEARTEXTRESOURCE_H_
+#define INCLUDE_HEIR_RUNTIME_CLEARTEXTRESOURCE_H_
 
 #include <cstddef>
 #include <cstdlib>
@@ -42,4 +42,4 @@ void loadResource(std::string_view directory, const std::string& path, T* data,
 
 }  // namespace heir
 
-#endif  // LIB_RUNTIME_CLEARTEXTRESOURCE_H_
+#endif  // INCLUDE_HEIR_RUNTIME_CLEARTEXTRESOURCE_H_

@@ -30,19 +30,15 @@ using UI = cheddar::UserInterface<word>;
 
 void add__encrypt__arg0(cheddar::Context<word>* ctx,
                         const cheddar::Encoder<word>& encoder, UI* ui,
-                        const Evk& evk, float a[1024], UI* ui2,
-                        std::array<Ct, 1>& out);
+                        const Evk& evk, float a[1024], UI* ui2, Ct out[1]);
 void add__encrypt__arg1(cheddar::Context<word>* ctx,
                         const cheddar::Encoder<word>& encoder, UI* ui,
-                        const Evk& evk, float b[1024], UI* ui2,
-                        std::array<Ct, 1>& out);
+                        const Evk& evk, float b[1024], UI* ui2, Ct out[1]);
 void add(cheddar::Context<word>* ctx, const cheddar::Encoder<word>& encoder,
-         UI* ui, const Evk& evk, const std::array<Ct, 1>& a,
-         const std::array<Ct, 1>& b, std::array<Ct, 1>& out);
+         UI* ui, const Evk& evk, const Ct a[1], const Ct b[1], Ct out[1]);
 void add__decrypt__result0(cheddar::Context<word>* ctx,
                            const cheddar::Encoder<word>& encoder, UI* ui,
-                           const Evk& evk, const std::array<Ct, 1>& in, UI* ui2,
-                           float* out);
+                           const Evk& evk, const Ct in[1], UI* ui2, float* out);
 
 namespace {
 constexpr int kN = 1024;
@@ -75,7 +71,7 @@ TEST(CheddarAddE2E, GpuRun) {
   auto ui = std::make_unique<UI>(ctx);
   const Evk& evk = ui->GetMultiplicationKey();
 
-  std::array<Ct, 1> ca, cb, cout;
+  Ct ca[1], cb[1], cout[1];
   add__encrypt__arg0(ctx.get(), ctx->encoder_, ui.get(), evk, a, ui.get(), ca);
   add__encrypt__arg1(ctx.get(), ctx->encoder_, ui.get(), evk, b, ui.get(), cb);
   add(ctx.get(), ctx->encoder_, ui.get(), evk, ca, cb, cout);

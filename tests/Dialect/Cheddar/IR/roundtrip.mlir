@@ -43,9 +43,9 @@ func.func @test_get_evk_map(%ui: !cheddar.user_interface) -> !cheddar.evk_map {
 }
 
 // CHECK: @test_get_mult_key
-func.func @test_get_mult_key(%ui: !cheddar.user_interface) -> !cheddar.eval_key {
+func.func @test_get_mult_key(%map: !cheddar.evk_map, %ctx: !cheddar.context) -> !cheddar.eval_key {
   // CHECK: cheddar.get_mult_key
-  %key = cheddar.get_mult_key %ui : (!cheddar.user_interface) -> !cheddar.eval_key
+  %key = cheddar.get_mult_key %map, %ctx : (!cheddar.evk_map, !cheddar.context) -> !cheddar.eval_key
   return %key : !cheddar.eval_key
 }
 
@@ -132,16 +132,6 @@ func.func @test_decrypt(
 }
 
 // --- Binary ct-ct operations ---
-
-// CHECK: @test_copy
-func.func @test_copy(
-    %ctx: !cheddar.context,
-    %input: tensor<!cheddar.ciphertext>,
-    %out: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
-  // CHECK: cheddar.copy
-  %result = cheddar.copy %ctx, %input, %out : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
-  return %result : tensor<!cheddar.ciphertext>
-}
 
 // CHECK: @test_add
 func.func @test_add(

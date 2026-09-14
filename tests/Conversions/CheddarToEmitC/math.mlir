@@ -1,4 +1,7 @@
-// RUN: heir-opt --convert-to-emitc=filter-dialects=math %s | FileCheck %s
+// RUN: heir-opt --convert-to-emitc=filter-dialects=math --cheddar-emitc-boundary %s | FileCheck %s
+
+// math ops are lowered by upstream MathToEmitC through its dialect interface
+// (patches/math_to_emitc_interface.patch); the boundary pass adds <cmath>.
 
 // CHECK: emitc.include <"cmath">
 // CHECK: func.func @square_root

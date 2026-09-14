@@ -9,12 +9,8 @@ package(
     default_visibility = ["//visibility:public"],
 )
 
-# Compile-only guard that `cheddar-to-emitc` emits C++ which honours CHEDDAR's
-# move/const contract. Unlike the GPU end-to-end tests under
-# tests/Examples/cheddar, this compiles the emitted code against a header-only
-# stub (cheddar_stub.h) with no CUDA, so it runs in normal CI. The cheddar
-# dialect and pass are registered unconditionally in heir-opt/-translate, so
-# this needs neither a GPU nor --//:enable_cheddar.
+# Compiles the emitted C++ against a header-only stub of the CHEDDAR API, so a
+# move/const violation fails the build without needing CUDA.
 
 heir_opt(
     name = "kernels_emitc",
@@ -52,6 +48,7 @@ genrule(
 #include <complex>
 #include <cstdint>
 #include <initializer_list>
+#include <utility>
 #include <vector>
 #include "tests/Conversions/CheddarToEmitC/compile/cheddar_stub.h"
 using namespace cheddar;
@@ -69,7 +66,10 @@ cc_library(
 cc_library(
     name = "kernels_compiled",
     srcs = [":kernels_lib_src"],
-    deps = [":cheddar_stub"],
+    deps = [
+        ":cheddar_stub",
+        "//include/heir/runtime:CheddarRuntime",
+    ],
 )
 
 heir_opt(
@@ -120,13 +120,12 @@ cat $(location :kernels_cyclops_raw.cc) >> $@
 cc_library(
     name = "kernels_cyclops_compiled",
     srcs = [":kernels_cyclops_lib_src"],
-    deps = [":cheddar_stub"],
+    deps = [
+        ":cheddar_stub",
+        "//include/heir/runtime:CheddarRuntime",
+    ],
 )
 
-# Compiling the generated C++ against the stub *is* the assertion: if the
-# emitter produced C++ that violates CHEDDAR's move/const contract, this fails
-# to build. build_test compiles without linking, so the stub only needs
-# declarations (no method bodies), and no GPU/CUDA is involved.
 build_test(
     name = "compile_test",
     targets = [
@@ -135,9 +134,7 @@ build_test(
     ],
 )
 
-# Compile the same generated kernels against the pinned scale-snu CHEDDAR API.
-# The stub remains the fast CPU/CI contract check; this opt-in target detects
-# drift between that contract and the actual library headers.
+# Opt-in: compile the same kernels against the real CHEDDAR headers.
 genrule(
     name = "kernels_real_lib_src",
     srcs = [":kernels_raw.cc"],
@@ -169,7 +166,10 @@ cc_library(
     name = "kernels_real_compiled",
     srcs = [":kernels_real_lib_src"],
     target_compatible_with = requires_cheddar(),
-    deps = ["@cheddar"],
+    deps = [
+        "//include/heir/runtime:CheddarRuntime",
+        "@cheddar",
+    ],
 )
 
 build_test(

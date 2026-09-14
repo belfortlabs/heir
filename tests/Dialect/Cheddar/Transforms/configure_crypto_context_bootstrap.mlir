@@ -61,13 +61,7 @@ module attributes {
 // EMITC: emitc.call_opaque "main__setup"
 // EMITC: emitc.call_opaque "main__keygen"
 
-// The same keygen under the Cyclops runtime. Both PrepareRotationKey overloads
-// must take the SecretId: the keys land in one EvkMap and compile against one
-// header, but the per-distance call learns the runtime from its optional $ctx
-// operand while the EvkRequest call learns it from prepare_bootstrap's
-// useCyclopsRuntime attribute. Check them together so the two cannot diverge.
-// CYCLOPS: emitc.verbatim "{}->PrepareRotationKey(7, {}->BootSecretId(), 13);"
-// CYCLOPS: emitc.verbatim "{}->PrepareEvalMod();"
+// Under the Cyclops runtime the server setup prepares the bootstrap DFT; the
+// rotation keys come from the server's key request, not from keygen.
 // CYCLOPS: emitc.verbatim "{}->PrepareHomomorphicDFT(256, BootVariant::kImaginaryRemoving);"
-// CYCLOPS: emitc.verbatim "EvkRequest boot_evk_req;"
-// CYCLOPS: emitc.verbatim "{}->PrepareRotationKey(boot_evk_req, {}->BootSecretId());"
+// CYCLOPS-NOT: PrepareRotationKey

@@ -6,17 +6,8 @@
 
 namespace mlir::heir {
 
-// Attaches MemRefElementTypeInterface as an external (marker-only) model to
-// emitc::OpaqueType. Needed so that the cheddar-to-emitc type converter can
-// form `memref<Nx!emitc.opaque<...>>` as the converted form of
-// `memref<Nx!cheddar.*>` after bufferization. Call once at tool startup.
-void registerCheddarToEmitCExternalModels(DialectRegistry& registry);
-
-// Attaches the cheddar `ConvertToEmitCPatternInterface` so that
-// `--convert-to-emitc` lowers cheddar ops (and keeps `func.func` boundaries via
-// a structural type conversion) to EmitC. Call once at tool startup. Run
-// `--convert-to-emitc=filter-dialects=cheddar,arith,scf` followed by the
-// `cheddar-emitc-boundary` pass.
+// Attaches the cheddar `ConvertToEmitCPatternInterface`, so that
+// `--convert-to-emitc` lowers cheddar ops to EmitC.
 void registerCheddarConvertToEmitCInterface(DialectRegistry& registry);
 
 #define GEN_PASS_DECL

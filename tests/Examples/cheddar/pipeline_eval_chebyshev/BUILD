@@ -59,7 +59,10 @@ cc_library(
     name = "pipeline_eval_chebyshev_lib",
     srcs = [":pipeline_eval_chebyshev_lib_src"],
     target_compatible_with = requires_cheddar(),
-    deps = ["@cheddar"],
+    deps = [
+        "//include/heir/runtime:CheddarRuntime",
+        "@cheddar",
+    ],
 )
 
 cc_test(

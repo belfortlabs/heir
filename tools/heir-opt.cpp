@@ -4,7 +4,6 @@
 #include <string>
 
 #include "lib/Conversions/CheddarToEmitC/CheddarToEmitC.h"
-#include "lib/Conversions/MathToEmitC/MathToEmitC.h"
 #include "lib/Dialect/Arith/Conversions/ArithToCGGI/ArithToCGGI.h"
 #include "lib/Dialect/Arith/Conversions/ArithToCGGIQuart/ArithToCGGIQuart.h"
 #include "lib/Dialect/Arith/Conversions/ArithToModArith/ArithToModArith.h"
@@ -21,6 +20,7 @@
 #include "lib/Dialect/CKKS/Transforms/Passes.h"
 #include "lib/Dialect/Cheddar/IR/CheddarDialect.h"
 #include "lib/Dialect/Cheddar/Transforms/BufferizableOpInterfaceImpl.h"
+#include "lib/Dialect/Cheddar/Transforms/BuildEntryInterface.h"
 #include "lib/Dialect/Cheddar/Transforms/CheddarBufferize.h"
 #include "lib/Dialect/Cheddar/Transforms/ConfigureCryptoContext.h"
 #include "lib/Dialect/Cheddar/Transforms/FuseOps.h"
@@ -165,6 +165,7 @@
 #include "mlir/include/mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/IndexToLLVM/IndexToLLVM.h"  // from @llvm-project
+#include "mlir/include/mlir/Conversion/MathToEmitC/MathToEmitC.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/MathToLLVM/MathToLLVM.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/MemRefToEmitC/MemRefToEmitC.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"  // from @llvm-project
@@ -180,7 +181,6 @@
 #include "mlir/include/mlir/Dialect/Arith/IR/ValueBoundsOpInterfaceImpl.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/Transforms/BufferDeallocationOpInterfaceImpl.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"  // from @llvm-project
-#include "mlir/include/mlir/Dialect/Arith/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/IR/Bufferization.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/Transforms/BufferizableOpInterfaceImpl.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"  // from @llvm-project
@@ -326,11 +326,10 @@ int main(int argc, char** argv) {
 
   // Converting to EmitC
   mlir::registerConvertArithToEmitCInterface(registry);
-  mlir::heir::registerConvertMathToEmitCInterface(registry);
+  mlir::registerConvertMathToEmitCInterface(registry);
   mlir::registerConvertFuncToEmitCInterface(registry);
   mlir::registerConvertMemRefToEmitCInterface(registry);
   mlir::registerConvertSCFToEmitCInterface(registry);
-  mlir::heir::registerCheddarToEmitCExternalModels(registry);
   mlir::heir::registerCheddarConvertToEmitCInterface(registry);
 
   // Misc
@@ -360,9 +359,6 @@ int main(int argc, char** argv) {
       []() -> std::unique_ptr<Pass> { return createLowerAffinePass(); });
   registerPass([]() -> std::unique_ptr<Pass> {
     return createReconcileUnrealizedCastsPass();
-  });
-  registerPass([]() -> std::unique_ptr<Pass> {
-    return mlir::arith::createArithExpandOpsPass();
   });
   registerPass(
       []() -> std::unique_ptr<Pass> { return createConvertToLLVMPass(); });
@@ -395,7 +391,8 @@ int main(int argc, char** argv) {
 
   // Custom passes in HEIR
   registerEmitCInterfacePass();
-  registerCheddarToEmitCPasses();
+  registerCheddarEmitCBoundaryPasses();
+  cheddar::registerCheddarBuildEntryInterfacePasses();
   cheddar::registerCheddarConfigureCryptoContextPasses();
   cheddar::registerCheddarFuseOpsPasses();
   cggi::registerCGGIPasses();

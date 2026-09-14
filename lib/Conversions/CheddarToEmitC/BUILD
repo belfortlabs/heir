@@ -15,6 +15,7 @@ cc_library(
     hdrs = ["CheddarToEmitC.h"],
     deps = [
         ":pass_inc_gen",
+        "@heir//include/heir/runtime:CleartextResource",
         "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/Cheddar/IR:Dialect",
         "@heir//lib/Dialect/Preprocessing/IR:Dialect",
@@ -26,8 +27,10 @@ cc_library(
         "@llvm-project//mlir:DestinationStyleOpInterface",
         "@llvm-project//mlir:EmitCDialect",
         "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:FuncToEmitC",
         "@llvm-project//mlir:FuncTransforms",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MathDialect",
         "@llvm-project//mlir:MemRefDialect",
         "@llvm-project//mlir:MemRefToEmitC",
         "@llvm-project//mlir:MemRefUtils",
@@ -40,6 +43,6 @@ cc_library(
 
 add_heir_transforms(
     header_filename = "CheddarToEmitC.h.inc",
-    pass_name = "CheddarToEmitC",
+    pass_name = "CheddarEmitCBoundary",
     td_file = "CheddarToEmitC.td",
 )

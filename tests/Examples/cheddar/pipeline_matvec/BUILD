@@ -54,7 +54,7 @@ cc_library(
     strip_include_prefix = ".",
     target_compatible_with = requires_cheddar(),
     deps = [
-        "//lib/Runtime:CheddarRuntime",
+        "//include/heir/runtime:CheddarRuntime",
         "@cheddar",
     ],
 )

@@ -63,7 +63,8 @@ cc_library(
     srcs = [":heir_mlp_lib_src"],
     target_compatible_with = requires_cheddar(),
     deps = [
-        "//lib/Runtime:CleartextResource",
+        "//include/heir/runtime:CheddarRuntime",
+        "//include/heir/runtime:CleartextResource",
         "@cheddar",
     ],
 )

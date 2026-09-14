@@ -163,9 +163,15 @@ class BuildBazelExtension(build_ext.build_ext):
     )
 
   def copy_runtime_headers(self):
-    for header in ("CheddarRuntime.h", "CleartextResource.h"):
-      src = Path("lib") / "Runtime" / header
-      dst = Path(self.build_lib) / "heir" / "include" / src
+    for header in (
+        "CheddarRuntime.h",
+        "CleartextResource.h",
+        "CyclopsRuntime.h",
+    ):
+      src = Path("include") / "heir" / "runtime" / header
+      dst = (
+          Path(self.build_lib) / "heir" / "include" / src.relative_to("include")
+      )
       dst.parent.mkdir(parents=True, exist_ok=True)
       shutil.copyfile(src, dst)
 
@@ -281,7 +287,7 @@ setuptools.setup(
             "py.typed",
             "*.pyi",
             "techmaps/*",
-            "include/lib/Runtime/*.h",
+            "include/heir/runtime/*.h",
         ]
     },
     ext_modules=[

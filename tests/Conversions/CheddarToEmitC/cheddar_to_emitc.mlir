@@ -1,12 +1,6 @@
 // RUN: heir-opt --cheddar-bufferize --fold-memref-alias-ops --cse --canonicalize --drop-equivalent-buffer-results "--buffer-results-to-out-params=hoist-static-allocs=true modify-public-functions=true add-result-attr=true" --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s
 
-// End-to-end op coverage for the cheddar -> EmitC lowering, now driven by stock
-// `--convert-to-emitc` (cheddar's dialect interface) + the
-// `--cheddar-emitc-boundary` pass, over destination-passing-style cheddar ops.
-// Every payload-producing op carries a `tensor.empty` `$output`
-// destination; bufferization + `--buffer-results-to-out-params` turn func
-// results into trailing out-params, and the boundary pass re-types move-only
-// payload args as C++ references (`const T&` inputs, `T&` out-params).
+// Op coverage for the cheddar -> EmitC lowering over destination-passing ops.
 
 !ciphertext = !cheddar.ciphertext
 !plaintext = !cheddar.plaintext
@@ -20,6 +14,7 @@
 !boot_context = !cheddar.boot_context
 !linear_transform = !cheddar.linear_transform
 
+// CHECK: emitc.include "heir/runtime/CheddarRuntime.h"
 // CHECK: emitc.global static @resource : !emitc.array<4xf32> = dense<[1.000000e+00, 2.000000e+00, 3.000000e+00, 4.000000e+00]>
 memref.global "private" constant @resource : memref<4xf32> = dense_resource<weights>
 
@@ -79,9 +74,7 @@ func.func @configure_cyclops() -> (tensor<!context>, tensor<!user_interface>) {
   return %context, %keys : tensor<!context>, tensor<!user_interface>
 }
 
-// A two-op chain: each op is `ctx->Method(out, a, b)`. The first op's result is
-// an intermediate local (`emitc.variable`); the second writes the function
-// out-param. Inputs are `const Ciphertext<word>&`, the out-param is mutable.
+// A two-op chain: the intermediate is a local, the last op writes the out-param.
 // CHECK: func.func @arith(
 // CHECK-SAME: !emitc.ptr<!emitc.opaque<"Context<word>">>
 // CHECK-SAME: !emitc.opaque<"const Ciphertext<word>&">
@@ -96,21 +89,35 @@ func.func @arith(%ctx: !context, %a: tensor<!ciphertext>, %b: tensor<!ciphertext
   return %s : tensor<!ciphertext>
 }
 
-// A semantic ciphertext copy lowers to CHEDDAR's deep-copy API, never C++
-// copy-assignment on the move-only payload.
-// CHECK: func.func @copy
-// CHECK: emitc.member_call_opaque %arg0 "Copy"(%arg2, %arg1)
-func.func @copy(%ctx: !context, %input: tensor<!ciphertext>) -> tensor<!ciphertext> {
-  %dest = tensor.empty() : tensor<!ciphertext>
-  %result = cheddar.copy %ctx, %input, %dest : (!context, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
-  return %result : tensor<!ciphertext>
+// Support values derived from a context and a UserInterface (the runtime
+// include they need is checked at the top of the file).
+// CHECK: func.func @support_values(%[[CTX:.*]]: !emitc.ptr<!emitc.opaque<"Context<word>">>, %[[UI:.*]]: !emitc.ptr<!emitc.opaque<"UserInterface<word>">>,
+// CHECK: %[[MAP:.*]] = emitc.member_call_opaque %[[UI]] "GetEvkMap"() : !emitc.ptr<!emitc.opaque<"UserInterface<word>">>, () -> !emitc.opaque<"const EvkMap<word>&">
+// CHECK: %[[KEY:.*]] = emitc.call_opaque "heir::multiplicationKey"(%[[MAP]], %[[CTX]]) : (!emitc.opaque<"const EvkMap<word>&">, !emitc.ptr<!emitc.opaque<"Context<word>">>) -> !emitc.opaque<"const EvaluationKey<word>&">
+// CHECK: "Relinearize"(%{{.*}}, %{{.*}}, %[[KEY]])
+func.func @support_values(%ctx: !context, %ui: !user_interface, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
+  %map = cheddar.get_evk_map %ui : (!user_interface) -> !evk_map
+  %key = cheddar.get_mult_key %map, %ctx : (!evk_map, !context) -> !eval_key
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %r = cheddar.relinearize %ctx, %ct, %key, %d0 : (!context, tensor<!ciphertext>, !eval_key, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %r : tensor<!ciphertext>
+}
+
+// CHECK: func.func @support_encoder(%[[CTX:.*]]: !emitc.ptr<!emitc.opaque<"Context<word>">>,
+// CHECK: %[[ENC:.*]] = emitc.call_opaque "heir::getEncoder"(%[[CTX]]) : (!emitc.ptr<!emitc.opaque<"Context<word>">>) -> !emitc.opaque<"const Encoder<word>&">
+// CHECK: emitc.verbatim "{}.Encode({}, 1, {}.GetScale(1), {});" args %[[ENC]]
+func.func @support_encoder(%ctx: !context, %input: tensor<4xf32>) -> tensor<!plaintext> {
+  %enc = cheddar.get_encoder %ctx : (!context) -> !encoder
+  %d = tensor.empty() : tensor<!plaintext>
+  %pt = cheddar.encode %enc, %input, %d {level = 1 : i64} : (!encoder, tensor<4xf32>, tensor<!plaintext>) -> tensor<!plaintext>
+  return %pt : tensor<!plaintext>
 }
 
 // A memref.copy that survives alias folding has true copy semantics and lowers
 // through the same CHEDDAR deep-copy API.
 // CHECK: func.func @memref_copy
 // CHECK: emitc.member_call_opaque %arg0 "Copy"(%arg2, %arg1)
-func.func @memref_copy(%ctx: !context, %input: memref<!ciphertext>,
+func.func @memref_copy(%ctx: !context {cheddar.support = "context"}, %input: memref<!ciphertext>,
                        %output: memref<!ciphertext>) {
   memref.copy %input, %output
       : memref<!ciphertext> to memref<!ciphertext>
@@ -210,6 +217,7 @@ func.func @enc_chain_slots(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_inter
 // so a `$ctx` operand makes encode tag it first, with the same secret
 // UserInterface::EncryptMessage uses.
 // CHECK: func.func @enc_chain_tagged
+// CHECK: emitc.verbatim "{}.MatchRing({}->NewPlaintext());"
 // CHECK: emitc.verbatim "{}.SetSecretId({}->BootSecretId());"
 // CHECK: emitc.verbatim "{}.EncodeSlots({}, 5, {}.GetScale(5), {});"
 // CHECK: emitc.member_call_opaque %arg3 "Encrypt"
@@ -233,9 +241,8 @@ func.func @dec_chain_slots(%enc: !encoder, %ui: !user_interface, %ct: tensor<!ci
   return %msg : tensor<1x4xf32>
 }
 
-// HRot/HConj keep their verbatim form, looking the key up on the EvkMap operand
-// so an evaluating process needs no UserInterface. Static distance bakes the
-// distance into the format string; dynamic distance threads the SSA value twice.
+// HRot/HConj look the key up on the EvkMap operand; a static distance is baked
+// into the format string, a dynamic one threads the SSA value.
 // CHECK: func.func @hrot_static
 // CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey(5), 5);"
 func.func @hrot_static(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
@@ -261,8 +268,7 @@ func.func @hconj_add(%ctx: !context, %evk: !evk_map, %a: tensor<!ciphertext>, %b
   return %r : tensor<!ciphertext>
 }
 
-// Boot is a BootContext method; cheddar.boot requires a !cheddar.boot_context
-// (lowered to BootContext<word>*) so no downcast is needed.
+// cheddar.boot takes a !cheddar.boot_context, lowered to BootContext<word>*.
 // CHECK: func.func @boot
 // CHECK: emitc.member_call_opaque %arg0 "Boot"
 func.func @boot(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
@@ -271,15 +277,9 @@ func.func @boot(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map) -
   return %r : tensor<!ciphertext>
 }
 
-// eval_poly lowers to the real EvalPoly<word> class -- there is no
-// `RunEvalPoly` in cheddar. It mirrors cheddar's own EvalMod: the level/scale
-// are taken from the actual input ciphertext (NPToLevel(in.GetNP()),
-// in.GetScale()) and target_scale is the square/divide recurrence over
-// GetRescalePrimeProd -- seeding the constructor with anything else silently
-// blows the Chebyshev basis recurrence up. The construct/Compile/Evaluate
-// (which need the move-only ciphertext as a method receiver + ctx->param_ + the
-// recurrence) are emitted as verbatim real-cheddar statements in a `{ }` block
-// scope so the EvalPoly (and its GPU power basis) is destroyed right after use.
+// eval_poly uses CHEDDAR's EvalPoly<word> class the way EvalMod does: level and
+// scale are read off the input ciphertext, target_scale follows the rescale
+// recurrence, all inside a `{ }` block.
 // CHECK: func.func @eval_poly
 // CHECK-SAME: !emitc.opaque<"const Ciphertext<word>&">
 // CHECK: emitc.verbatim "{"

@@ -1,12 +1,8 @@
 // RUN: heir-opt --cheddar-bufferize --fold-memref-alias-ops --cse --canonicalize --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary --reconcile-unrealized-casts %s | FileCheck %s
 
-// A destination-passing `cheddar.add` (its `$output` operand is a
-// `tensor.empty`) lowers to an out-parameter `Context` method
-// call. `--cheddar-bufferize` turns the tensor result into a trailing memref
-// out-param before One-Shot, stock `--convert-to-emitc`
-// (with the cheddar dialect interface) emits `ctx->Add(out, a, b)`, and
-// `--cheddar-emitc-boundary` re-types the move-only payload args as C++
-// references: a mutable `Ciphertext<word>&` out-param and `const ...&` inputs.
+// A destination-passing `cheddar.add` lowers to `ctx->Add(out, a, b)`; the
+// boundary pass re-types the payload args as `Ciphertext<word>&` (out-param)
+// and `const Ciphertext<word>&` (inputs).
 
 !ciphertext = !cheddar.ciphertext
 !context = !cheddar.context

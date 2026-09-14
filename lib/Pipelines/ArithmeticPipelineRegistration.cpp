@@ -6,6 +6,7 @@
 #include "lib/Conversions/CheddarToEmitC/CheddarToEmitC.h"
 #include "lib/Dialect/BGV/Conversions/BGVToLWE/BGVToLWE.h"
 #include "lib/Dialect/CKKS/Transforms/CKKSToLWE.h"
+#include "lib/Dialect/Cheddar/Transforms/BuildEntryInterface.h"
 #include "lib/Dialect/Cheddar/Transforms/CheddarBufferize.h"
 #include "lib/Dialect/Cheddar/Transforms/ConfigureCryptoContext.h"
 #include "lib/Dialect/Cheddar/Transforms/FuseOps.h"
@@ -26,6 +27,7 @@
 #include "lib/Dialect/Preprocessing/Conversions/PreprocessingToCheddar/PreprocessingToCheddar.h"
 #include "lib/Dialect/Preprocessing/Conversions/PreprocessingToLattigo/PreprocessingToLattigo.h"
 #include "lib/Dialect/Preprocessing/Conversions/PreprocessingToOpenfhe/PreprocessingToOpenfhe.h"
+#include "lib/Dialect/Preprocessing/Transforms/ThreadResourceDir.h"
 #include "lib/Dialect/Preprocessing/Transforms/ValidatePreprocessing.h"
 #include "lib/Dialect/Secret/Conversions/SecretToBGV/SecretToBGV.h"
 #include "lib/Dialect/Secret/Conversions/SecretToCKKS/SecretToCKKS.h"
@@ -754,6 +756,7 @@ CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
       pm.addPass(createExternalizeConstants(extConstOptions));
     }
     pm.addPass(preprocessing::createPreprocessingToCheddar());
+    pm.addPass(preprocessing::createThreadResourceDir());
     pm.addPass(createCanonicalizerPass());
     pm.addPass(createCSEPass());
 
@@ -767,6 +770,9 @@ CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
     configureOptions.prepareRotationKeysAtUseLevels = useCyclops;
     configureOptions.useCyclopsRuntime = useCyclops;
     pm.addPass(cheddar::createCheddarConfigureCryptoContext(configureOptions));
+    cheddar::CheddarBuildEntryInterfaceOptions facadeOptions;
+    facadeOptions.entryFunction = options.entryFunction;
+    pm.addPass(cheddar::createCheddarBuildEntryInterface(facadeOptions));
 
     pm.addPass(createRemoveUnusedPureCall());
     pm.addPass(createCSEPass());
@@ -788,15 +794,6 @@ void cheddarToEmitCPipelineBuilder(OpPassManager& pm) {
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
 
-  pm.addPass(bufferization::createDropEquivalentBufferResultsPass());
-  bufferization::BufferResultsToOutParamsPassOptions outParamsOptions;
-  outParamsOptions.hoistStaticAllocs = true;
-  outParamsOptions.modifyPublicFunctions = true;
-  outParamsOptions.addResultAttribute = true;
-  pm.addPass(
-      bufferization::createBufferResultsToOutParamsPass(outParamsOptions));
-  pm.addPass(createCanonicalizerPass());
-
   pm.addPass(bufferization::createOwnershipBasedBufferDeallocationPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(bufferization::createBufferDeallocationSimplificationPass());
@@ -808,9 +805,10 @@ void cheddarToEmitCPipelineBuilder(OpPassManager& pm) {
   pm.addPass(arith::createArithExpandOpsPass(arithExpandOptions));
 
   ConvertToEmitCOptions emitCOptions;
-  emitCOptions.filterDialects = {"cheddar", "arith", "math", "scf", "memref"};
+  emitCOptions.filterDialects = {"cheddar", "arith", "math", "scf"};
+  emitCOptions.lowerToCpp = true;
   pm.addPass(createConvertToEmitC(emitCOptions));
-  pm.addPass(createCheddarToEmitC());
+  pm.addPass(createCheddarEmitCBoundary());
   pm.addPass(createReconcileUnrealizedCastsPass());
 }
 

@@ -34,7 +34,6 @@ cc_binary(
         "@heir//lib/Analysis/NoiseAnalysis/BFV:NoiseAnalysis",  # buildcleaner: keep
         "@heir//lib/Analysis/NoiseAnalysis/BGV:NoiseAnalysis",  # buildcleaner: keep
         "@heir//lib/Conversions/CheddarToEmitC",
-        "@heir//lib/Conversions/MathToEmitC",
         "@heir//lib/Dialect:HEIRInterfaces",
         "@heir//lib/Dialect:reduces_level_op_interface_registration",
         "@heir//lib/Dialect/Arith/Conversions/ArithToCGGI",
@@ -52,6 +51,7 @@ cc_binary(
         "@heir//lib/Dialect/CKKS/Transforms",
         "@heir//lib/Dialect/Cheddar/IR:Dialect",
         "@heir//lib/Dialect/Cheddar/Transforms:BufferizableOpInterfaceImpl",
+        "@heir//lib/Dialect/Cheddar/Transforms:BuildEntryInterface",
         "@heir//lib/Dialect/Cheddar/Transforms:CheddarBufferize",
         "@heir//lib/Dialect/Cheddar/Transforms:ConfigureCryptoContext",
         "@heir//lib/Dialect/Cheddar/Transforms:FuseOps",
@@ -227,6 +227,7 @@ cc_binary(
         "@llvm-project//mlir:LinalgDialect",
         "@llvm-project//mlir:LinalgTransforms",
         "@llvm-project//mlir:MathDialect",
+        "@llvm-project//mlir:MathToEmitC",
         "@llvm-project//mlir:MathToLLVM",
         "@llvm-project//mlir:MemRefDialect",
         "@llvm-project//mlir:MemRefToEmitC",
@@ -272,7 +273,6 @@ cc_binary(
         "@heir//lib/Target/Verilog:VerilogEmitter",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:AllTranslations",
-        "@llvm-project//mlir:TargetCpp",
         "@llvm-project//mlir:TranslateLib",
     ],
 )

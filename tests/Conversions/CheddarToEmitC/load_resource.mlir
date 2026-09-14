@@ -1,6 +1,6 @@
-// RUN: heir-opt --ownership-based-buffer-deallocation --canonicalize --buffer-deallocation-simplification --bufferization-lower-deallocations --cheddar-emitc-boundary --convert-to-emitc=filter-dialects=cheddar,arith,scf %s | FileCheck %s
+// RUN: heir-opt --ownership-based-buffer-deallocation --canonicalize --buffer-deallocation-simplification --bufferization-lower-deallocations --convert-to-emitc=filter-dialects=cheddar,arith,scf --cheddar-emitc-boundary %s | FileCheck %s
 
-// CHECK: emitc.include "lib/Runtime/CleartextResource.h"
+// CHECK: emitc.include "heir/runtime/CleartextResource.h"
 // CHECK: func.func @load_resource
 // CHECK: emitc.call_opaque "malloc"
 // CHECK: %[[DATA:.*]] = emitc.cast
@@ -73,5 +73,18 @@ func.func @load_large_resource() -> f32 {
       : (memref<1024xf32>) -> ()
   %c0 = arith.constant 0 : index
   %value = memref.load %resource[%c0] : memref<1024xf32>
+  return %value : f32
+}
+
+// A directory operand leads the runtime helper's arguments.
+// CHECK: func.func @load_from_directory(%[[DIR:.*]]: !emitc.opaque<"std::string_view">)
+// CHECK: emitc.call_opaque "heir::loadResource"(%[[DIR]], %{{[0-9a-z]+}})
+// CHECK-SAME: args = [0 : index, {{.*}}weights.bin{{.*}}, 1 : index, #emitc.opaque<"4">]
+func.func @load_from_directory(%dir: !preprocessing.resource_dir) -> f32 {
+  %resource = memref.alloc() : memref<2x2xf32>
+  preprocessing.load_resource "weights.bin" from %dir into %resource
+      : (!preprocessing.resource_dir, memref<2x2xf32>) -> ()
+  %c0 = arith.constant 0 : index
+  %value = memref.load %resource[%c0, %c0] : memref<2x2xf32>
   return %value : f32
 }

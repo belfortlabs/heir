@@ -61,7 +61,10 @@ cc_library(
     name = "pipeline_mlp_lib",
     srcs = [":pipeline_mlp_lib_src"],
     target_compatible_with = requires_cheddar(),
-    deps = ["@cheddar"],
+    deps = [
+        "//include/heir/runtime:CheddarRuntime",
+        "@cheddar",
+    ],
 )
 
 cc_test(

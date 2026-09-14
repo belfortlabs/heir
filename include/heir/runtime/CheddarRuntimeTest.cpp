@@ -4,7 +4,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "lib/Runtime/CheddarRuntime.h"
+#include "heir/runtime/CheddarRuntime.h"
 
 namespace heir {
 namespace {

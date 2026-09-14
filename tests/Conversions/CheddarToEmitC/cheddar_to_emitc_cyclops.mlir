@@ -5,6 +5,14 @@
 !evk_map = !cheddar.evk_map
 
 module attributes {cheddar.runtime = "cyclops"} {
+  // CHECK: func.func @keygen
+  // CHECK: emitc.verbatim "{} = std::make_unique<UserInterface<word>>({}, true);"
+  func.func @keygen(%ctx: tensor<!cheddar.client_context>) -> tensor<!cheddar.user_interface> {
+    %dest = tensor.empty() : tensor<!cheddar.user_interface>
+    %ui = cheddar.create_user_interface %ctx, %dest : (tensor<!cheddar.client_context>, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+    return %ui : tensor<!cheddar.user_interface>
+  }
+
   // CHECK: func.func @hrot
   // CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey(5, {}->BootSecretId(), {}->param_, 4, KeyMode::kInherit), 5);"
   func.func @hrot(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {

@@ -69,7 +69,7 @@ def development_heir_config() -> HEIRConfig:
   return HEIRConfig(
       heir_opt_path=repo_root / "bazel-bin" / "tools" / "heir-opt",
       heir_translate_path=repo_root / "bazel-bin" / "tools" / "heir-translate",
-      runtime_include_dir_path=repo_root,
+      runtime_include_dir_path=repo_root / "include",
       techmap_dir_path=techmap_dir_path,
       abc_path=abc_path,
   )

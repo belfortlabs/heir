@@ -117,11 +117,26 @@ def Cheddar_AnyContextLike :
     TensorOrMemRef<[Cheddar_Context, Cheddar_BootContext]>;
 def Cheddar_BootContextResult : Variadic<RankedTensorOf<[Cheddar_BootContext]>>;
 def Cheddar_AnyOwningContextLike :
-    TensorOrMemRef<[Cheddar_Context, Cheddar_BootContext]>;
+    TensorOrMemRef<[Cheddar_ClientContext, Cheddar_Context, Cheddar_BootContext]>;
 
 //===----------------------------------------------------------------------===//
 // Setup operations
 //===----------------------------------------------------------------------===//
+
+def Cheddar_CreateClientContextOp : Cheddar_DpsOp<"create_client_context"> {
+  let summary = "Create a Cyclops CPU client context";
+  let arguments = (ins Cheddar_Parameter:$params,
+      TensorOrMemRef<[Cheddar_ClientContext]>:$output);
+  let results = (outs Variadic<RankedTensorOf<[Cheddar_ClientContext]>>:$result);
+}
+
+def Cheddar_PrepareBootstrapContextOp :
+    Cheddar_ReadWriteDpsOp<"prepare_bootstrap_context", [], "Ctx"> {
+  let summary = "Prepare Cyclops bootstrap tables without generating keys";
+  let arguments = (ins Cheddar_BootContextLike:$ctx,
+                       Builtin_IntegerAttr:$numSlots);
+  let results = (outs Cheddar_BootContextResult:$result);
+}
 
 def Cheddar_CreateContextOp : Cheddar_DpsOp<"create_context"> {
   let summary = "Create a CHEDDAR context from parameters";
@@ -217,7 +232,7 @@ def Cheddar_GetEncoderOp : Cheddar_Op<"get_encoder", [Pure]> {
   let description = [{
     Returns a reference to the context's encoder (context->encoder_).
   }];
-  let arguments = (ins Cheddar_AnyContext:$ctx);
+  let arguments = (ins Cheddar_AnyClientContext:$ctx);
   let results = (outs Cheddar_Encoder:$encoder);
 }
 
@@ -233,10 +248,10 @@ def Cheddar_GetEvkMapOp : Cheddar_Op<"get_evk_map", [Pure]> {
 def Cheddar_GetMultKeyOp : Cheddar_Op<"get_mult_key", [Pure]> {
   let summary = "Get the multiplication evaluation key";
   let description = [{
-    Returns the multiplication key from the UserInterface
-    (ui.GetMultiplicationKey()).
+    Returns the multiplication key from an evaluation-key map. A runtime that
+    keys evaluation keys by secret looks it up with the context's secret.
   }];
-  let arguments = (ins Cheddar_UserInterface:$ui);
+  let arguments = (ins Cheddar_EvkMap:$evkMap, Cheddar_AnyContext:$ctx);
   let results = (outs Cheddar_EvalKey:$key);
 }
 
@@ -304,12 +319,12 @@ def Cheddar_MakeParameterOp : Cheddar_Op<"make_parameter", [Pure]> {
   let description = [{
     Builds a `cheddar::Parameter<word>` from the CKKS modulus chain. The main
     primes are the CKKS `Q` limbs and the aux primes are the `P` limbs; the
-    canonical level config is one-main-prime-per-level (`{{1, 0}, {2, 0}, ...}`).
-    The default encryption level is `#mainPrimes - 1` for an ordinary context;
-    a boot context instead uses CHEDDAR's required SlotToCoeff start level.
-    `logScale` is the log2 of the default CKKS scale. This is the single setup
-    op that produces the `!cheddar.parameter` consumed by
-    `cheddar.create_context`, so a generated `__configure` is self-contained.
+    canonical level config is one-main-prime-per-level (`{{1, 0}, {2, 0}, ...}`)
+    and the default encryption level is `#mainPrimes - 1`, both derived from
+    `mainPrimes` by the emitter. `logScale` is the log2 of the default CKKS
+    scale. This is the single setup op that produces the `!cheddar.parameter`
+    consumed by `cheddar.create_context`, so a generated `__configure` is
+    self-contained.
 
     Bootstrapping programs override the defaults: `defaultEncryptionLevel`
     pins the encryption level below the chain top (the boot-circuit primes sit
@@ -352,7 +367,7 @@ def Cheddar_EncodeOp : Cheddar_DpsOp<"encode", [PlaintextEncodeOpInterface]> {
     the tag.
   }];
   let arguments = (ins
-    Optional<Cheddar_AnyContext>:$ctx,
+    Optional<Cheddar_AnyClientContext>:$ctx,
     Cheddar_Encoder:$encoder,
     Cheddar_FloatLike:$message,
     Cheddar_PtLike:$output,
@@ -437,21 +452,6 @@ class Cheddar_BinaryCtCtOp<string mnemonic, list<Trait> traits = []>
     Cheddar_AnyContext:$ctx,
     Cheddar_CtLike:$lhs,
     Cheddar_CtLike:$rhs,
-    Cheddar_CtLike:$output
-  );
-  let results = (outs Cheddar_CtResult:$result);
-}
-
-def Cheddar_CopyOp : Cheddar_DpsOp<"copy"> {
-  let summary = "Deep-copy a ciphertext";
-  let description = [{
-    Calls context->Copy(res, input). This operation represents a genuine
-    semantic copy, primarily for copies that One-Shot Bufferize cannot remove
-    at function and region boundaries.
-  }];
-  let arguments = (ins
-    Cheddar_AnyContext:$ctx,
-    Cheddar_CtLike:$input,
     Cheddar_CtLike:$output
   );
   let results = (outs Cheddar_CtResult:$result);

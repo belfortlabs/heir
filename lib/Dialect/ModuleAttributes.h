@@ -68,6 +68,16 @@ bool moduleIsOpenfhe(Operation* moduleOp);
 bool moduleIsLattigo(Operation* moduleOp);
 bool moduleIsCheddar(Operation* moduleOp);
 
+// The C++ runtime a Cheddar module was lowered for ("cheddar" or "cyclops"),
+// recorded by lwe-to-cheddar so later passes need not be told again.
+constexpr const static ::llvm::StringLiteral kCheddarRuntimeAttrName =
+    "cheddar.runtime";
+constexpr const static ::llvm::StringLiteral kCheddarRuntimeCheddar = "cheddar";
+constexpr const static ::llvm::StringLiteral kCheddarRuntimeCyclops = "cyclops";
+
+// The recorded runtime, or empty when no lowering recorded one.
+StringRef getCheddarRuntime(Operation* moduleOp);
+
 void moduleClearBackend(Operation* moduleOp);
 
 void moduleSetOpenfhe(Operation* moduleOp);
@@ -121,6 +131,19 @@ constexpr const static ::llvm::StringLiteral kEntryResultTypes = "result_types";
 // Marks the ciphertext workload after plaintext preprocessing is split out.
 constexpr const static ::llvm::StringLiteral kClientPreprocessedRole =
     "client.preprocessed";
+
+// The public facades a backend builds over the helpers above (see
+// cheddar-build-entry-interface): one function per interface step, taking the
+// values a caller can supply and deriving the rest. A generated language
+// binding wraps these instead of the helpers.
+constexpr const static ::llvm::StringLiteral kFacadeEncryptRole =
+    "facade.encrypt";
+constexpr const static ::llvm::StringLiteral kFacadeDecryptRole =
+    "facade.decrypt";
+constexpr const static ::llvm::StringLiteral kFacadeEvaluateRole =
+    "facade.evaluate";
+constexpr const static ::llvm::StringLiteral kFacadePreprocessRole =
+    "facade.preprocess";
 
 inline bool isClientHelper(Operation* op) {
   return hasInterfaceRole(op, kClientEncRole) ||

@@ -3,6 +3,7 @@
 !plaintext = !cheddar.plaintext
 !context = !cheddar.context
 !encoder = !cheddar.encoder
+!eval_key = !cheddar.eval_key
 !user_interface = !cheddar.user_interface
 !evk_map = !cheddar.evk_map
 !boot_context = !cheddar.boot_context
@@ -149,6 +150,17 @@ func.func @boot(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map)
   %0 = cheddar.boot %ctx, %ct, %evk, %d0
       : (!boot_context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>)
       -> tensor<!ciphertext>
+  return %0 : tensor<!ciphertext>
+}
+
+// Support values derived from the context and key material.
+func.func @support_values(%ctx: !context, %ui: !user_interface,
+                          %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
+  %map = cheddar.get_evk_map %ui : (!user_interface) -> !evk_map
+  %key = cheddar.get_mult_key %map, %ctx : (!evk_map, !context) -> !eval_key
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %0 = cheddar.relinearize %ctx, %ct, %key, %d0
+      : (!context, tensor<!ciphertext>, !eval_key, tensor<!ciphertext>) -> tensor<!ciphertext>
   return %0 : tensor<!ciphertext>
 }
 

@@ -19,22 +19,16 @@ using UI = cheddar::UserInterface<word>;
 
 void tiny_mlp__configure(std::shared_ptr<cheddar::Context<word>>& ctx,
                          std::unique_ptr<UI>& ui);
-void tiny_mlp__encrypt__arg0(cheddar::Context<word>* ctx,
-                             const cheddar::Encoder<word>& encoder,
-                             const Evk& evk, float input[4], UI* ui,
-                             std::array<Ct, 1>& out);
-void tiny_mlp__preprocessing(
-    cheddar::Context<word>* ctx,
-    std::array<std::shared_ptr<LinearTransform>, 2>& transforms);
-void tiny_mlp__preprocessed(
-    cheddar::Context<word>* ctx, const cheddar::Encoder<word>& encoder, UI* ui,
-    const Evk& evk, const EvkMap& evk_map, const std::array<Ct, 1>& input,
-    const std::array<std::shared_ptr<LinearTransform>, 2>& transforms,
-    std::array<Ct, 1>& out);
-void tiny_mlp__decrypt__result0(cheddar::Context<word>* ctx,
-                                const cheddar::Encoder<word>& encoder,
-                                const Evk& evk, const std::array<Ct, 1>& input,
-                                UI* ui, float* out);
+void tiny_mlp__encrypt_inputs(cheddar::Context<word>* ctx, UI* ui,
+                              float input[4], Ct out[1]);
+void tiny_mlp__preprocess(cheddar::Context<word>* ctx,
+                          std::shared_ptr<LinearTransform> transforms[2]);
+void tiny_mlp__evaluate(cheddar::Context<word>* ctx, const EvkMap& evk_map,
+                        const Ct input[1],
+                        const std::shared_ptr<LinearTransform> transforms[2],
+                        Ct out[1]);
+void tiny_mlp__decrypt_outputs(cheddar::Context<word>* ctx, UI* ui,
+                               const Ct input[1], float out[2]);
 
 TEST(CheddarPipelineMlpE2E, MatchesPlaintextNetworkAndReusesWeights) {
   constexpr float kW0[8][4] = {
@@ -68,32 +62,26 @@ TEST(CheddarPipelineMlpE2E, MatchesPlaintextNetworkAndReusesWeights) {
   EXPECT_NO_THROW(ui->GetRotationKey(2));
   EXPECT_NO_THROW(ui->GetRotationKey(3));
   EXPECT_NO_THROW(ui->GetRotationKey(4));
-  const Evk& evk = ui->GetMultiplicationKey();
   const EvkMap& evk_map = ui->GetEvkMap();
 
-  std::array<Ct, 1> encrypted;
-  tiny_mlp__encrypt__arg0(ctx.get(), ctx->encoder_, evk, input, ui.get(),
-                          encrypted);
-  std::array<std::shared_ptr<LinearTransform>, 2> transforms;
-  tiny_mlp__preprocessing(ctx.get(), transforms);
+  Ct encrypted[1];
+  tiny_mlp__encrypt_inputs(ctx.get(), ui.get(), input, encrypted);
+  std::shared_ptr<LinearTransform> transforms[2];
+  tiny_mlp__preprocess(ctx.get(), transforms);
   ASSERT_NE(transforms[0], nullptr);
   ASSERT_NE(transforms[1], nullptr);
 
-  std::array<Ct, 1> evaluated;
-  std::array<Ct, 1> repeated;
-  tiny_mlp__preprocessed(ctx.get(), ctx->encoder_, ui.get(), evk, evk_map,
-                         encrypted, transforms, evaluated);
-  tiny_mlp__preprocessed(ctx.get(), ctx->encoder_, ui.get(), evk, evk_map,
-                         encrypted, transforms, repeated);
+  Ct evaluated[1];
+  Ct repeated[1];
+  tiny_mlp__evaluate(ctx.get(), evk_map, encrypted, transforms, evaluated);
+  tiny_mlp__evaluate(ctx.get(), evk_map, encrypted, transforms, repeated);
   EXPECT_EQ(ctx->param_.NPToLevel(encrypted[0].GetNP()), 4);
   EXPECT_EQ(ctx->param_.NPToLevel(evaluated[0].GetNP()), 0);
 
   float actual[2];
   float actual_repeated[2];
-  tiny_mlp__decrypt__result0(ctx.get(), ctx->encoder_, evk, evaluated, ui.get(),
-                             actual);
-  tiny_mlp__decrypt__result0(ctx.get(), ctx->encoder_, evk, repeated, ui.get(),
-                             actual_repeated);
+  tiny_mlp__decrypt_outputs(ctx.get(), ui.get(), evaluated, actual);
+  tiny_mlp__decrypt_outputs(ctx.get(), ui.get(), repeated, actual_repeated);
   for (int row = 0; row < 2; ++row) {
     ASSERT_TRUE(std::isfinite(actual[row]));
     ASSERT_TRUE(std::isfinite(actual_repeated[row]));
