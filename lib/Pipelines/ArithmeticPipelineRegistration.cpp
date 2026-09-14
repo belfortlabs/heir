@@ -66,6 +66,7 @@
 #include "lib/Transforms/LayoutPropagation/LayoutPropagation.h"
 #include "lib/Transforms/LinalgCanonicalizations/LinalgCanonicalizations.h"
 #include "lib/Transforms/LinalgFuseLinearOps/LinalgFuseLinearOps.h"
+#include "lib/Transforms/LoweringHistory/LoweringHistory.h"
 #include "lib/Transforms/OperationBalancer/OperationBalancer.h"
 #include "lib/Transforms/OptimizeRelinearization/OptimizeRelinearization.h"
 #include "lib/Transforms/PopulateScale/PopulateScale.h"
@@ -225,6 +226,10 @@ void mlirToSecretArithmeticPipelineBuilder(
   pm.addPass(createValidateTensorKernels());
   mathToPolynomialApproximationBuilder(pm, options.useCompositeRelu);
 
+  if (options.loweringHistory)
+    pm.addPass(createRecordLoweringHistory(
+        RecordLoweringHistoryOptions{"before-layout-assignment"}));
+
   // Layout assignment and optimization
   LayoutPropagationOptions layoutPropagationOptions;
   layoutPropagationOptions.minSlotCount = options.minSlotCount;
@@ -239,6 +244,10 @@ void mlirToSecretArithmeticPipelineBuilder(
   earlyBootstrapOptions.levelBudget = options.greedyLevelBudget;
   earlyBootstrapOptions.bootstrapWaterline = options.greedyBootstrapWaterline;
   pm.addPass(createEarlyBootstrapPlacement(earlyBootstrapOptions));
+
+  if (options.loweringHistory)
+    pm.addPass(createRecordLoweringHistory(
+        RecordLoweringHistoryOptions{"before-ciphertext-conversion"}));
 
   // Linalg kernel implementation
   ConvertToCiphertextSemanticsOptions convertToCiphertextSemanticsOptions;
@@ -864,9 +873,18 @@ void linalgPreprocessingBuilder(OpPassManager& manager) {
 void torchLinalgToCkksBuilder(OpPassManager& manager,
                               const MlirToRLWEPipelineOptions& options) {
   manager.addPass(debug::createDebugValidateNames());
+  if (options.loweringHistory) {
+    manager.addPass(createExplainLoweringHistory());
+    manager.addPass(createRecordLoweringHistory(
+        RecordLoweringHistoryOptions{"torch-linalg-input"}));
+  }
   linalgPreprocessingBuilder(manager);
+  if (options.loweringHistory)
+    manager.addPass(createRecordLoweringHistory(
+        RecordLoweringHistoryOptions{"after-linalg-preprocessing"}));
   MlirToRLWEPipelineOptions suboptions;
 
+  suboptions.loweringHistory = options.loweringHistory;
   suboptions.enableArithmetization = true;
   suboptions.minSlotCount = options.minSlotCount;
   suboptions.greedyBootstrapWaterline = options.greedyBootstrapWaterline;
