@@ -191,8 +191,9 @@ EvaluationKeyRequest keyRequest(
   return request;
 }
 
-// Ciphertexts are borrowed for the duration of the callback. The consumer
-// chooses whether to serialize them; no secret key is needed by the evaluator.
+// Encrypted intermediate values for debugging. The evaluator passes them to
+// the callback for client-side decryption; it does not need the secret key.
+// Ciphertext pointers are valid only for the duration of the callback.
 struct Checkpoint {
   const char* name;
   const char* metadata;

@@ -653,8 +653,6 @@ LogicalResult addEncryptDefinition(OpBuilder& builder, Location loc,
   return success();
 }
 
-// Evaluate(Context&, PublicKey | const EvaluationKeys*, const PreparedInputs&,
-//          const EncryptedInputs&[, const DebugSink*]) -> EncryptedOutputs
 LogicalResult addEvaluateDefinition(OpBuilder& builder, Location loc,
                                     WrapperContext& wrapper) {
   OpBuilder::InsertionGuard guard(builder);
@@ -854,6 +852,11 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
         "setup and key generation must each have one destination");
   WrapperContext wrapper{functions, aggregateFields(functions.facadeEvaluate),
                          split, serverNeedsSecret};
+  if (wrapper.fields.outputs.size() != outputNames.size())
+    return functions.facadeEvaluate.emitOpError()
+           << "expected " << outputNames.size()
+           << " entry result destinations, but found "
+           << wrapper.fields.outputs.size();
 
   OpBuilder builder(ctx);
   builder.setInsertionPointToEnd(module.getBody());
