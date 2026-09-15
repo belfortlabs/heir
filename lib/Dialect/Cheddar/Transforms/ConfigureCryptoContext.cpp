@@ -41,17 +41,19 @@ struct LinearTransformKeyShape {
   DenseI32ArrayAttr indices;
   int64_t width;
   int64_t level;
+  int64_t bs;
+  int64_t gs;
 };
 
 SmallVector<LinearTransformKeyShape> collectLinearTransformKeyShapes(
     ModuleOp moduleOp) {
   SmallVector<LinearTransformKeyShape> shapes;
-  llvm::SmallDenseSet<std::tuple<Attribute, int64_t, int64_t>> seen;
+  llvm::SmallDenseSet<std::tuple<Attribute, int64_t, int64_t, int64_t, int64_t>>
+      seen;
   auto record = [&](DenseI32ArrayAttr indices, int64_t width, int64_t level,
                     int64_t bs, int64_t gs) {
-    if (bs != 0 || gs != 0) return;
-    if (!seen.insert({indices, width, level}).second) return;
-    shapes.push_back({indices, width, level});
+    if (!seen.insert({indices, width, level, bs, gs}).second) return;
+    shapes.push_back({indices, width, level, bs, gs});
   };
   moduleOp->walk([&](Operation* op) {
     if (auto transform = dyn_cast<LinearTransformOp>(op)) {
@@ -160,21 +162,11 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
           : CreateContextOp::create(builder, loc, TypeRange{ctxTensor},
                                     ValueRange{params, ctxInit})
                 ->getResult(0);
-  if (useCyclopsRuntime) {
-    SmallVector<int64_t> requests;
-    for (auto [distance, level] : rotationKeys) {
-      requests.push_back(distance);
-      requests.push_back(level);
-    }
-    setupFunc->setAttr(kRotationKeysAttrName,
-                       builder.getDenseI64ArrayAttr(requests));
-    if (bootstraps) {
-      setupFunc->setAttr(kBootstrapSlotsAttrName, i64(bootstrapNumSlots));
-      context =
-          PrepareBootstrapContextOp::create(builder, loc, TypeRange{ctxTensor},
-                                            context, i64(bootstrapNumSlots))
-              ->getResult(0);
-    }
+  if (useCyclopsRuntime && bootstraps) {
+    context =
+        PrepareBootstrapContextOp::create(builder, loc, TypeRange{ctxTensor},
+                                          context, i64(bootstrapNumSlots))
+            ->getResult(0);
   }
   func::ReturnOp::create(builder, loc, context);
 
@@ -193,6 +185,32 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
         CreateClientContextOp::create(builder, loc, TypeRange{ctxTensor},
                                       clientParams, init)
             ->getResult(0);
+    SmallVector<int64_t> requests;
+    for (auto [distance, level] : rotationKeys) {
+      requests.push_back(distance);
+      requests.push_back(level);
+    }
+    clientSetup->setAttr(kRotationKeysAttrName,
+                         builder.getDenseI64ArrayAttr(requests));
+    SmallVector<Attribute> shapes;
+    for (const LinearTransformKeyShape& shape : transformShapes) {
+      shapes.push_back(builder.getDictionaryAttr({
+          builder.getNamedAttr("indices", shape.indices),
+          builder.getNamedAttr("width", i64(shape.width)),
+          builder.getNamedAttr("level", i64(shape.level)),
+          builder.getNamedAttr("bs", i64(shape.bs)),
+          builder.getNamedAttr("gs", i64(shape.gs)),
+      }));
+    }
+    clientSetup->setAttr(kLinearTransformKeysAttrName,
+                         builder.getArrayAttr(shapes));
+    if (bootstraps) {
+      clientSetup->setAttr(kBootstrapSlotsAttrName, i64(bootstrapNumSlots));
+      clientSetup->setAttr(kBootstrapNumCtsAttrName, i64(numCtsLevels));
+      clientSetup->setAttr(kBootstrapNumStcAttrName, i64(numStcLevels));
+      clientSetup->setAttr(kBootstrapLogMessageRatioAttrName,
+                           i64(effLogMessageRatio));
+    }
     func::ReturnOp::create(builder, loc, clientContext);
   }
 
@@ -210,8 +228,8 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   Value ui = CreateUserInterfaceOp::create(builder, loc, TypeRange{uiTensor},
                                            ValueRange{context, uiInit})
                  ->getResult(0);
-  // With the Cyclops runtime the server side collects the key request and the
-  // client generates keys from it, so keygen prepares nothing here.
+  // With the Cyclops runtime the client derives the complete compiled key
+  // request from setup metadata, so this lowered keygen prepares nothing here.
   if (!useCyclopsRuntime) {
     for (auto [distance, level] : rotationKeys)
       ui = PrepareRotKeyOp::create(builder, loc, TypeRange{uiTensor}, Value(),
@@ -219,11 +237,13 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                ->getResult(0);
     // A runtime-planned transform contributes no distances above; ask the
     // runtime instead, once per distinct transform shape.
-    for (const LinearTransformKeyShape& shape : transformShapes)
+    for (const LinearTransformKeyShape& shape : transformShapes) {
+      if (shape.bs != 0 || shape.gs != 0) continue;
       ui = PrepareLinearTransformKeysOp::create(
                builder, loc, TypeRange{uiTensor}, context, ui, shape.indices,
                i64(shape.width), i64(shape.level))
                ->getResult(0);
+    }
   }
   if (bootstraps && !useCyclopsRuntime) {
     auto prepare = PrepareBootstrapOp::create(

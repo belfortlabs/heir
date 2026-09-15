@@ -482,8 +482,6 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
   auto* ctx = builder.getContext();
   SmallVector<Type> inputs{
       OpaqueType::get(ctx, "const std::shared_ptr<Context>&")};
-  if (split)
-    inputs.push_back(OpaqueType::get(ctx, "const EvaluationKeyRequest&"));
   auto function = createEmitCFunction(builder, loc, "KeyGen", inputs,
                                       {OpaqueType::get(ctx, "KeyPair")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
@@ -499,8 +497,10 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
                  .getResult(0);
   if (split)
     VerbatimOp::create(
-        builder, loc, "{}.storage->PrepareRotationKey({}, {}->BootSecretId());",
-        ValueRange{keyPair, function.getArgument(1), function.getArgument(0)});
+        builder, loc,
+        "{}.storage->PrepareRotationKey(GetKeyRequest(*{}), "
+        "{}->BootSecretId());",
+        ValueRange{keyPair, function.getArgument(0), function.getArgument(0)});
   for (StringRef field : {"secret_key", "public_key"}) {
     if (split && field == "public_key") continue;
     Type aliasType =
@@ -750,7 +750,47 @@ LogicalResult addDecryptDefinition(OpBuilder& builder, Location loc,
   return success();
 }
 
-// GetKeyRequest(Context&, const PreparedInputs&) -> EvaluationKeyRequest
+LogicalResult verifyKeyPlanningMetadata(func::FuncOp setup) {
+  if (Attribute attr = setup->getAttr(cheddar::kLinearTransformKeysAttrName)) {
+    auto shapes = dyn_cast<ArrayAttr>(attr);
+    if (!shapes)
+      return setup.emitOpError()
+             << cheddar::kLinearTransformKeysAttrName << " must be an array";
+    for (auto [index, attr] : llvm::enumerate(shapes)) {
+      auto shape = dyn_cast<DictionaryAttr>(attr);
+      if (!shape)
+        return setup.emitOpError()
+               << cheddar::kLinearTransformKeysAttrName << " entry " << index
+               << " must be a dictionary";
+      if (!shape.getAs<DenseI32ArrayAttr>("indices"))
+        return setup.emitOpError()
+               << cheddar::kLinearTransformKeysAttrName << " entry " << index
+               << " requires an indices field of type array<i32>";
+      for (StringRef field : {"width", "level", "bs", "gs"}) {
+        auto value = shape.getAs<IntegerAttr>(field);
+        if (!value || !value.getType().isInteger(64))
+          return setup.emitOpError()
+                 << cheddar::kLinearTransformKeysAttrName << " entry " << index
+                 << " requires an i64 " << field << " field";
+      }
+    }
+  }
+  const StringRef bootstrapAttrs[] = {
+      cheddar::kBootstrapSlotsAttrName, cheddar::kBootstrapNumCtsAttrName,
+      cheddar::kBootstrapNumStcAttrName,
+      cheddar::kBootstrapLogMessageRatioAttrName};
+  if (llvm::any_of(bootstrapAttrs,
+                   [&](StringRef name) { return setup->hasAttr(name); }))
+    for (StringRef name : bootstrapAttrs) {
+      auto value = setup->getAttrOfType<IntegerAttr>(name);
+      if (!value || !value.getType().isInteger(64))
+        return setup.emitOpError()
+               << "bootstrap key planning requires i64 attribute " << name;
+    }
+  return success();
+}
+
+// GetKeyRequest(Context&) -> EvaluationKeyRequest
 void addKeyRequestDefinition(OpBuilder& builder, Location loc,
                              const EntryFunctions& functions) {
   OpBuilder::InsertionGuard guard(builder);
@@ -758,33 +798,67 @@ void addKeyRequestDefinition(OpBuilder& builder, Location loc,
   Type request = OpaqueType::get(ctx, "EvaluationKeyRequest");
   auto function =
       createEmitCFunction(builder, loc, "GetKeyRequest",
-                          {OpaqueType::get(ctx, "Context&"),
-                           OpaqueType::get(ctx, "const PreparedInputs&")},
-                          {request}, false);
+                          {OpaqueType::get(ctx, "Context&")}, {request}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
-  // The compiled rotation keys as `{{distance, level}, ...}`.
-  std::string rotations = "{";
-  if (auto pairs = functions.serverSetup->getAttrOfType<DenseI64ArrayAttr>(
+  Value result = createLocal(builder, loc, "EvaluationKeyRequest");
+  if (auto pairs = functions.setup->getAttrOfType<DenseI64ArrayAttr>(
           cheddar::kRotationKeysAttrName)) {
     auto values = pairs.asArrayRef();
     for (size_t i = 0; i + 1 < values.size(); i += 2)
-      rotations += (i ? ", {" : "{") + std::to_string(values[i]) + ", " +
-                   std::to_string(values[i + 1]) + "}";
+      VerbatimOp::create(builder, loc,
+                         "{}.AddRequest(" + std::to_string(values[i]) + ", " +
+                             std::to_string(values[i + 1]) + ");",
+                         result);
   }
-  rotations += "}";
-  int64_t bootstrapSlots = 0;
-  if (auto slots = functions.serverSetup->getAttrOfType<IntegerAttr>(
-          cheddar::kBootstrapSlotsAttrName))
-    bootstrapSlots = slots.getInt();
-  auto call = CallOpaqueOp::create(
-      builder, loc, TypeRange{request}, "heir::cyclops::keyRequest",
-      function.getArguments(),
-      builder.getArrayAttr(
-          {builder.getIndexAttr(0), builder.getIndexAttr(1),
-           OpaqueAttr::get(ctx, rotations),
-           OpaqueAttr::get(ctx, std::to_string(bootstrapSlots))}),
-      ArrayAttr{});
-  ReturnOp::create(builder, loc, call.getResult(0));
+  if (auto shapes = functions.setup->getAttrOfType<ArrayAttr>(
+          cheddar::kLinearTransformKeysAttrName)) {
+    for (auto [shapeIndex, attr] : llvm::enumerate(shapes)) {
+      auto shape = cast<DictionaryAttr>(attr);
+      auto indices = shape.getAs<DenseI32ArrayAttr>("indices").asArrayRef();
+      std::string values;
+      for (auto [index, value] : llvm::enumerate(indices)) {
+        if (index) values += ", ";
+        values += std::to_string(value);
+      }
+      std::string name =
+          "linear_transform_indices_" + std::to_string(shapeIndex);
+      emitVerbatim(builder, loc,
+                   "constexpr std::array<int, " +
+                       std::to_string(indices.size()) + "> " + name + "{" +
+                       values + "};");
+      VerbatimOp::create(
+          builder, loc,
+          "::cyclops::AddLinearTransformRequiredKeys({}, {}.param_, " +
+              std::to_string(shape.getAs<IntegerAttr>("width").getInt()) +
+              ", " + name + ", " +
+              std::to_string(shape.getAs<IntegerAttr>("level").getInt()) +
+              ", " + std::to_string(shape.getAs<IntegerAttr>("bs").getInt()) +
+              ", " + std::to_string(shape.getAs<IntegerAttr>("gs").getInt()) +
+              ");",
+          ValueRange{result, function.getArgument(0)});
+    }
+  }
+  if (auto slots = functions.setup->getAttrOfType<IntegerAttr>(
+          cheddar::kBootstrapSlotsAttrName)) {
+    auto numCts = functions.setup->getAttrOfType<IntegerAttr>(
+        cheddar::kBootstrapNumCtsAttrName);
+    auto numStc = functions.setup->getAttrOfType<IntegerAttr>(
+        cheddar::kBootstrapNumStcAttrName);
+    auto ratio = functions.setup->getAttrOfType<IntegerAttr>(
+        cheddar::kBootstrapLogMessageRatioAttrName);
+    VerbatimOp::create(
+        builder, loc,
+        "::cyclops::AddBootstrapRequiredKeys({}, {}.param_, "
+        "::cyclops::BootParameter({}.param_.max_level_, " +
+            std::to_string(numCts.getInt()) + ", " +
+            std::to_string(numStc.getInt()) + ", " +
+            std::to_string(ratio.getInt()) + "), " +
+            std::to_string(slots.getInt()) +
+            ", ::cyclops::BootVariant::kImaginaryRemoving);",
+        ValueRange{result, function.getArgument(0), function.getArgument(0)});
+  }
+  ReturnOp::create(builder, loc,
+                   moveValue(builder, loc, result, "EvaluationKeyRequest"));
 }
 
 //===----------------------------------------------------------------------===//
@@ -877,6 +951,15 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   emitInclude(builder, loc, "core/Encode.h", false);
   emitInclude(builder, loc, "core/Parameter.h", false);
   if (split) emitInclude(builder, loc, "heir/runtime/CyclopsRuntime.h", false);
+  if (side == InterfaceSide::Client) {
+    if (functions.setup->hasAttr(cheddar::kBootstrapSlotsAttrName))
+      emitInclude(builder, loc, "extension/boot/BootKeyPlanner.h", false);
+    if (auto shapes = functions.setup->getAttrOfType<ArrayAttr>(
+            cheddar::kLinearTransformKeysAttrName);
+        shapes && !shapes.empty())
+      emitInclude(builder, loc, "extension/linalg/LinearTransformKeyPlanner.h",
+                  false);
+  }
   if (server)
     for (StringRef include : extensionIncludes)
       emitInclude(builder, loc, include, false);
@@ -997,6 +1080,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   emitVerbatim(builder, loc, "namespace " + namespaceName + " {");
 
   if (failed(addSetupDefinition(builder, loc, functions))) return failure();
+  if (split && client) addKeyRequestDefinition(builder, loc, functions);
   if (client && (failed(addKeygenDefinition(builder, loc, functions,
                                             keygenDestinations.front(),
                                             serverNeedsSecret, split)) ||
@@ -1008,7 +1092,6 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   if (client && failed(addDecryptDefinition(builder, loc, wrapper, outputNames,
                                             publicResultType)))
     return failure();
-  if (split && server) addKeyRequestDefinition(builder, loc, functions);
   emitVerbatim(builder, loc, "}  // namespace " + namespaceName);
 
   // The header declares the public functions: the definitions without their
@@ -1077,6 +1160,8 @@ struct CheddarEmitCEntryInterfacePass
             "run scheme-to-cheddar with runtime=cyclops first");
         return signalPassFailure();
       }
+      if (failed(verifyKeyPlanningMetadata(functions->setup)))
+        return signalPassFailure();
       sides = {InterfaceSide::Client, InterfaceSide::Server};
       extensionIncludes = {"extension/boot/BootContext.h",
                            "extension/poly/EvalPoly.h",

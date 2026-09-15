@@ -14,24 +14,24 @@ directory (or the wheel's `heir/include`), where the runtime headers live as
 `heir/runtime/*.h`, and use Cyclops' CMake targets to obtain its serialization
 dependencies and generated headers.
 
-The server calls `Setup`, `Preprocess`, and `GetKeyRequest`. The request
-includes compiled rotations, bootstrap requirements, and runtime-planned linear
-transforms. The helpers in `heir::cyclops` serialize requests (`writeRequest` /
-`readRequest`), evaluation keys (`writeKeys` / `readKeys`), and input/output
-aggregates (`writeValues` / `readValues<Aggregate>`). Value and key helpers take
-`context.param_` and a stream; request helpers need only a stream. They use
-Cyclops serialization without a HEIR envelope. Keys are serialized one at a
-time. The client retains its secret key.
+The client calls `Setup` and `KeyGen`; key generation derives the program's
+compiled rotations, bootstrap requirements, and linear-transform requirements
+locally. The server calls `Setup` and `Preprocess`. The helpers in
+`heir::cyclops` serialize evaluation keys (`writeKeys` / `readKeys`) and
+input/output aggregates (`writeValues` / `readValues<Aggregate>`). These helpers
+take `context.param_` and a stream and use Cyclops serialization without a HEIR
+envelope. Keys are serialized one at a time. The client retains its secret key.
 
 `Evaluate` takes a `DebugSink` pointer (pass `nullptr` for none). Its checkpoint
 contains borrowed ciphertext pointers valid during the callback. The caller
 handles serialization, transport, and client-side decryption; the GPU evaluator
 needs no secret key.
 
-This standalone coverage test builds the generated client and performs real
-ciphertext serialization and decryption. It needs no CUDA toolkit or GPU. Use
-the Cyclops revision pinned by Medusa:
-`34c04492b2d9667f91a28d1f02c0571ce6d9df56`.
+This standalone coverage test builds the generated client and checks ciphertext
+serialization and decryption without evaluating the model. It needs no CUDA
+toolkit or GPU. Use Cyclops revision `c4b4b0989ab878830dc461da3281da81c25cd54c`,
+which provides the CPU linear-transform and bootstrap key planners required by
+generated clients.
 
 ```sh
 CC=clang CXX=clang++ cmake -S tests/Examples/cyclops -B /tmp/heir-cyclops-client \

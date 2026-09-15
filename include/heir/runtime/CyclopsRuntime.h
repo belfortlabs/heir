@@ -1,14 +1,12 @@
 #ifndef INCLUDE_HEIR_RUNTIME_CYCLOPSRUNTIME_H_
 #define INCLUDE_HEIR_RUNTIME_CYCLOPSRUNTIME_H_
 
-#include <array>
 #include <cereal/archives/portable_binary.hpp>
 #include <cereal/types/string.hpp>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <initializer_list>
 #include <istream>
 #include <ostream>
 #include <span>
@@ -118,77 +116,6 @@ inline EvaluationKeys readKeys(const Parameter& parameter, std::istream& in) {
       result.insert_or_assign(index, std::move(value));
   }
   return result;
-}
-
-inline void writeRequest(const EvaluationKeyRequest& request,
-                         std::ostream& out) {
-  cereal::PortableBinaryOutputArchive ar(out);
-  auto write = [&](const auto& entries) {
-    ar(static_cast<std::uint32_t>(entries.size()));
-    for (const auto& [key, count] : entries) {
-      if constexpr (requires { key.rot_idx; }) ar(key.rot_idx);
-      ar(key.level, static_cast<std::int32_t>(key.key_mode),
-         key.required_num_aux, count);
-    }
-  };
-  write(request.AllRequests());
-  write(request.ConjugationRequests());
-  write(request.MultiplicationRequests());
-  write(request.RotatedMultiplicationRequests());
-}
-inline EvaluationKeyRequest readRequest(std::istream& in) {
-  cereal::PortableBinaryInputArchive ar(in);
-  EvaluationKeyRequest result;
-  for (int kind = 0; kind < 4; ++kind) {
-    std::uint32_t size;
-    ar(size);
-    for (std::uint32_t i = 0; i < size; ++i) {
-      std::int32_t rotation = 0, level, mode, aux, count;
-      if (kind == 0 || kind == 3) ar(rotation);
-      ar(level, mode, aux, count);
-      require(mode >= 0 && mode <= 2 && level >= 0 && aux >= -1 && count > 0,
-              "invalid evaluation-key request");
-      auto keyMode = static_cast<::cyclops::KeyMode>(mode);
-      for (int n = 0; n < count; ++n) {
-        if (kind == 0) result.AddRequest(rotation, level, keyMode, aux);
-        if (kind == 1) result.RequestConjugationKey(level, keyMode, aux);
-        if (kind == 2) result.RequestMultiplicationKey(level, keyMode, aux);
-        if (kind == 3)
-          result.RequestRotatedMultiplicationKey(rotation, level, keyMode, aux);
-      }
-    }
-  }
-  return result;
-}
-
-// Gather only prepared transforms. Other prepared fields are plaintexts.
-template <typename T>
-void addPreparedRequests(const T& value, EvaluationKeyRequest& request) {
-  forEachLeaf(value, [&](const auto& field) {
-    if constexpr (requires { field->AddRequiredRotations(request); }) {
-      require(bool(field), "uninitialized prepared transform");
-      field->AddRequiredRotations(request);
-    }
-  });
-}
-
-// The evaluation keys a compiled program needs: its own rotations, its
-// bootstrap's, and those of the runtime-planned transforms among `prepared`.
-template <typename Context, typename Prepared>
-EvaluationKeyRequest keyRequest(
-    Context& context, const Prepared& prepared,
-    std::initializer_list<std::array<int, 2>> rotations, int bootstrapSlots) {
-  EvaluationKeyRequest request;
-  for (const auto& [distance, level] : rotations)
-    request.AddRequest(distance, level);
-  // Only a BootContext knows its bootstrapping rotations.
-  if constexpr (requires { context.AddRequiredRotations(request, 0); }) {
-    if (bootstrapSlots > 0) context.AddRequiredRotations(request, bootstrapSlots);
-  } else {
-    require(bootstrapSlots == 0, "bootstrapping keys need a BootContext");
-  }
-  addPreparedRequests(prepared, request);
-  return request;
 }
 
 // Encrypted intermediate values for debugging. The evaluator passes them to
