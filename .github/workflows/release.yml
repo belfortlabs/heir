@@ -5,9 +5,7 @@ on:
     inputs:
       tag_name:
         description: 'Tag to build (e.g. v2026.04.01). If it does not exist, it will be created at the end. Leave empty for dev build.'
-        # Note: We do NOT pass this tag to actions/checkout. We checkout the
-        # branch selected in the UI (usually main), and this tag is created at
-        # the end of the workflow by the release step if it didn't exist.
+        # Existing tags select the source commit. New tags use the selected ref.
         required: false
         default: ''
   pull_request:
@@ -17,6 +15,9 @@ on:
 
   schedule:
     - cron: '0 0 1 * *'
+
+permissions:
+  contents: read
 
 jobs:
   setup-version:
@@ -29,9 +30,26 @@ jobs:
     outputs:
       version: ${{ steps.get-version.outputs.version }}
       should_publish: ${{ steps.get-version.outputs.should_publish }}
+      commit: ${{ steps.source.outputs.commit }}
     steps:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the release source
+        id: source
+        env:
+          RELEASE_TAG: ${{ inputs.tag_name }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then
+            git check-ref-format "refs/tags/$RELEASE_TAG"
+            if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+              git checkout --detach "refs/tags/$RELEASE_TAG"
+            fi
+          fi
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Install Python 3.12
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -66,6 +84,8 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          ref: ${{ needs.setup-version.outputs.commit }}
+          persist-credentials: false
       - name: Install Python 3.12
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
@@ -108,6 +128,8 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
+          ref: ${{ needs.setup-version.outputs.commit }}
+          persist-credentials: false
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         name: Install Python 3.12
@@ -119,7 +141,8 @@ jobs:
         uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55 # v4.1.0
         env:
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.setup-version.outputs.version }}
-          CIBW_ENVIRONMENT_PASS: SETUPTOOLS_SCM_PRETEND_VERSION
+          BELFORT_FORCE_SOURCE: "1"
+          CIBW_ENVIRONMENT_PASS: SETUPTOOLS_SCM_PRETEND_VERSION BELFORT_FORCE_SOURCE
 
       - name: Upload HEIR ${{ matrix.name }} wheels
         if: always()
@@ -138,6 +161,9 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.setup-version.outputs.commit }}
+          persist-credentials: false
 
       - name: Create Archive
         id: archive
@@ -165,11 +191,29 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.setup-version.outputs.commit }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.12"
+          enable-cache: false
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: dist
           pattern: dist-*
           merge-multiple: true
+
+      - name: Publish immutable source wheels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ needs.setup-version.outputs.commit }}
+        run: |
+          uv run --no-project --with setuptools --with wheel --with packaging python build_support/wheel_backend.py dist
+          gh release create "wheels-$SOURCE_COMMIT" dist/*.whl dist/*.json \
+            --target "$SOURCE_COMMIT" --title "Source wheels $SOURCE_COMMIT" \
+            --notes "Verified wheels for the recorded source commit." --prerelease
 
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -229,6 +273,7 @@ jobs:
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
         with:
           tag_name: ${{ steps.tag.outputs.tag_name }}
+          target_commitish: ${{ needs.setup-version.outputs.commit }}
           generate_release_notes: true
           files: |
             archive/*

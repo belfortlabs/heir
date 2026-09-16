@@ -15,7 +15,6 @@ from typing import Any
 import setuptools
 from setuptools.command import build_ext
 
-
 Path = pathlib.Path
 IS_WINDOWS = platform.system() == "Windows"
 IS_MAC = platform.system() == "Darwin"
@@ -29,6 +28,13 @@ options = {"bdist_wheel": {"py_limited_api": "cp310"}} if py_limited_api else {}
 
 def is_cibuildwheel() -> bool:
   return os.getenv("CIBUILDWHEEL") is not None
+
+
+def bazel_command() -> list[str]:
+  command = ["bazel"]
+  if bazelrc := os.environ.get("HEIR_BAZELRC"):
+    command.append(f"--bazelrc={Path(bazelrc).resolve()}")
+  return command
 
 
 @contextlib.contextmanager
@@ -136,7 +142,7 @@ class BuildBazelExtension(build_ext.build_ext):
     for ext in self.extensions:
       self.bazel_build(ext)
     # explicitly call `bazel shutdown` for graceful exit
-    self.spawn(["bazel", "shutdown"])
+    self.spawn(bazel_command() + ["shutdown"])
 
   def copy_extensions_to_source(self):
     """Copy generated extensions into the source tree.
@@ -177,10 +183,10 @@ class BuildBazelExtension(build_ext.build_ext):
     # look up the latest available patch version internally.
     python_version = "{}.{}".format(*sys.version_info[:2])
 
-    bazel_argv = [
-        "bazel",
-        "build",
-        ext.bazel_target,
+    # An explicit rc is read after the repository rc. This lets CI set its
+    # remote cache and credentials without editing the source checkout.
+    command = bazel_command()
+    build_options = [
         # make output suitable for CI
         "--curses=no",
         "--ui_event_filters=ERROR",
@@ -193,17 +199,17 @@ class BuildBazelExtension(build_ext.build_ext):
 
     if ext.aggressive_strip:
       if IS_LINUX:
-        bazel_argv.append("--stripopt=--strip-all")
+        build_options.append("--stripopt=--strip-all")
       elif IS_MAC:
-        bazel_argv.append("--stripopt=-S")
+        build_options.append("--stripopt=-S")
 
     if IS_WINDOWS:
       # Link with python*.lib.
       for library_dir in self.library_dirs:
-        bazel_argv.append("--linkopt=/LIBPATH:" + library_dir)
+        build_options.append("--linkopt=/LIBPATH:" + library_dir)
     elif IS_MAC:
       # C++17 needs macOS 10.14 at minimum
-      bazel_argv.append("--macos_minimum_os=10.15")
+      build_options.append("--macos_minimum_os=10.15")
 
       # Cross-compilation support: detect target arch from ARCHFLAGS (set by cibuildwheel).
       archflags = os.environ.get("ARCHFLAGS", "")
@@ -213,12 +219,13 @@ class BuildBazelExtension(build_ext.build_ext):
         target_arch = "arm64"
       else:
         target_arch = platform.machine()
-      bazel_argv.append(
+      build_options.append(
           f"--platforms=@build_bazel_apple_support//platforms:darwin_{target_arch}"
       )
 
     # Fetch external deps in a separate phase first
-    fetch_argv = ["bazel", "fetch", ext.bazel_target] + bazel_argv[3:]
+    fetch_argv = command + ["fetch", ext.bazel_target] + build_options
+    bazel_argv = command + ["build", ext.bazel_target] + build_options
 
     with _maybe_patch_toolchains():
       self.spawn(fetch_argv)
