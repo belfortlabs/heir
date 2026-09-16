@@ -10,9 +10,9 @@ package(
 )
 
 heir_opt(
-    name = "configure_smoke_emitc",
-    src = "configure_smoke.mlir",
-    generated_filename = "configure_smoke_emitc.mlir",
+    name = "configure_rotation_emitc",
+    src = "configure_rotation.mlir",
+    generated_filename = "configure_rotation_emitc.mlir",
     pass_flags = [
         "--cheddar-configure-crypto-context=entry-function=rotate",
         "--cheddar-to-emitc",
@@ -20,18 +20,18 @@ heir_opt(
 )
 
 heir_translate(
-    name = "configure_smoke_cpp_raw",
-    src = ":configure_smoke_emitc.mlir",
-    generated_filename = "configure_smoke_raw.cc",
+    name = "configure_rotation_cpp_raw",
+    src = ":configure_rotation_emitc.mlir",
+    generated_filename = "configure_rotation_raw.cc",
     pass_flags = ["--mlir-to-cpp"],
 )
 
 genrule(
-    name = "configure_smoke_lib_src",
-    srcs = [":configure_smoke_raw.cc"],
-    outs = ["configure_smoke_lib.cc"],
+    name = "configure_rotation_lib_src",
+    srcs = [":configure_rotation_raw.cc"],
+    outs = ["configure_rotation_lib.cc"],
     cmd = """cat > $@ <<'PRELUDE_EOF'
-// AUTO-GENERATED: do not edit. See tests/Examples/cheddar/configure_smoke/BUILD.
+// AUTO-GENERATED: do not edit. See tests/Examples/cheddar/configure_rotation/BUILD.
 #include <array>
 #include <complex>
 #include <cstddef>
@@ -47,21 +47,21 @@ using namespace cheddar;
 using word = uint64_t;
 using Complex = std::complex<double>;
 PRELUDE_EOF
-cat $(location :configure_smoke_raw.cc) >> $@
+cat $(location :configure_rotation_raw.cc) >> $@
 """,
 )
 
 cc_library(
-    name = "configure_smoke_lib",
-    srcs = [":configure_smoke_lib_src"],
+    name = "configure_rotation_lib",
+    srcs = [":configure_rotation_lib_src"],
     target_compatible_with = requires_cheddar(),
     deps = ["@cheddar"],
 )
 
 cc_test(
-    name = "configure_smoke_test",
+    name = "configure_rotation_test",
     timeout = "long",
-    srcs = ["configure_smoke_test.cpp"],
+    srcs = ["configure_rotation_test.cpp"],
     linkstatic = False,
     tags = [
         "exclusive",
@@ -69,7 +69,7 @@ cc_test(
     ],
     target_compatible_with = requires_cheddar(),
     deps = [
-        ":configure_smoke_lib",
+        ":configure_rotation_lib",
         "@cheddar",
         "@googletest//:gtest_main",
     ],

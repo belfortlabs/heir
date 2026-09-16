@@ -48,6 +48,12 @@ constexpr ::llvm::StringLiteral kBootstrapLogMessageRatioAttrName =
 constexpr ::llvm::StringLiteral kLinearTransformKeysAttrName =
     "cheddar.linear_transform_keys";
 
+// What cheddar-plan-evaluation-keys leaves in place of the attributes above:
+// the resolved key list, as flat (family, rot_idx, level, key_mode,
+// required_num_aux) tuples.
+constexpr ::llvm::StringLiteral kEvaluationKeysAttrName =
+    "cheddar.evaluation_keys";
+
 }  // namespace cheddar
 }  // namespace heir
 }  // namespace mlir

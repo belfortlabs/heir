@@ -10,8 +10,6 @@ package(
 )
 
 # Compile the trained LoLA MNIST CNN from the common high-level linalg input.
-# This is deliberately separate from the small kernel smoke tests: its embedded
-# dense-resource weights and convolution exercise realistic model scale.
 heir_opt(
     name = "lola_emitc",
     src = "@heir//tests/Examples/common:lola.mlir",

@@ -77,6 +77,29 @@ cc_library(
 )
 
 cc_library(
+    name = "PlanEvaluationKeys",
+    srcs = ["PlanEvaluationKeys.cpp"],
+    hdrs = ["PlanEvaluationKeys.h"],
+    copts = ["-fexceptions"],
+    linkopts = select({
+        "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
+        "//conditions:default": ["-Wl,-rpath,$$ORIGIN"],
+    }),
+    local_defines = ["CYCLOPS_PLANNER_BUILD"],
+    deps = [
+        ":plan_evaluation_keys_inc_gen",
+        "@cyclops//:planner",
+        "@heir//lib/Dialect:ModuleAttributes",
+        "@heir//lib/Dialect/Cheddar/IR:Dialect",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
     name = "FuseOps",
     srcs = ["FuseOps.cpp"],
     hdrs = ["FuseOps.h"],
@@ -104,6 +127,13 @@ add_heir_transforms(
     header_filename = "ConfigureCryptoContext.h.inc",
     pass_name = "CheddarConfigureCryptoContext",
     td_file = "ConfigureCryptoContext.td",
+)
+
+add_heir_transforms(
+    generated_target_name = "plan_evaluation_keys_inc_gen",
+    header_filename = "PlanEvaluationKeys.h.inc",
+    pass_name = "CheddarPlanEvaluationKeys",
+    td_file = "PlanEvaluationKeys.td",
 )
 
 add_heir_transforms(

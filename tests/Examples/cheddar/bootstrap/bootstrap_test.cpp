@@ -7,7 +7,6 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -34,16 +33,14 @@ void boot__configure(std::shared_ptr<cheddar::BootContext<word>>& boot_ctx,
                      std::unique_ptr<UI>& ui);
 void boot__encrypt__arg0(cheddar::Context<word>* ctx,
                          const cheddar::Encoder<word>& encoder, UI* ui,
-                         const Evk& evk, float a[8], UI* ui2,
-                         std::array<Ct, 1>& out);
+                         const Evk& evk, float a[8], UI* ui2, Ct out[1]);
 void boot(cheddar::BootContext<word>* ctx,
           const cheddar::Encoder<word>& encoder, UI* ui, const Evk& evk,
-          const EvkMap& evk_map, const std::array<Ct, 1>& in,
-          std::array<Ct, 1>& out);
+          const EvkMap& evk_map, const Ct in[1], Ct out[1]);
 void boot__decrypt__result0(cheddar::Context<word>* ctx,
                             const cheddar::Encoder<word>& encoder, UI* ui,
-                            const Evk& evk, const std::array<Ct, 1>& in,
-                            UI* ui2, float* out);
+                            const Evk& evk, const Ct in[1], UI* ui2,
+                            float* out);
 
 namespace {
 constexpr int kN = 8;
@@ -65,7 +62,7 @@ TEST(CheddarBootstrapE2E, GpuRun) {
   const EvkMap& evk_map = ui->GetEvkMap();
   const Evk& evk = ui->GetMultiplicationKey();
 
-  std::array<Ct, 1> cin, cout;
+  Ct cin[1], cout[1];
   boot__encrypt__arg0(boot_ctx.get(), boot_ctx->encoder_, ui.get(), evk, input,
                       ui.get(), cin);
   boot(boot_ctx.get(), boot_ctx->encoder_, ui.get(), evk, evk_map, cin, cout);

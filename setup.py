@@ -242,6 +242,22 @@ class BuildBazelExtension(build_ext.build_ext):
     print(f"Copying {srcdir_path} to {libdir_path}")
     shutil.copyfile(srcdir_path, libdir_path)
 
+    if ext.target_file == "heir-opt":
+      # The linked planner must travel with the compiler, including ordinary
+      # source installs that do not run auditwheel/delocate. Its dependency
+      # adds a loader-relative rpath for this installed layout.
+      planner_name = (
+          "libcyclops_planner.dylib" if IS_MAC else "libcyclops_planner.so"
+      )
+      planners = list(srcdir.glob(f"external/*/planner/lib/{planner_name}"))
+      if len(planners) != 1:
+        raise RuntimeError(
+            f"Expected one built Cyclops planner, found {planners}"
+        )
+      shutil.copyfile(planners[0], libdir / planner_name)
+      # bazel_build also copies heir-opt to the source root below.
+      shutil.copyfile(planners[0], Path(planner_name))
+
     # run chmod +x on is_binary = True
     if ext.is_binary:
       # set executable bit on the target file
