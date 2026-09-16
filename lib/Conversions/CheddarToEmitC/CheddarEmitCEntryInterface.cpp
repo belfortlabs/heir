@@ -506,11 +506,10 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
                                   "heir::getPointer", storage)
                  .getResult(0);
   if (split)
-    VerbatimOp::create(
-        builder, loc,
-        "{}.storage->PrepareRotationKey(GetKeyRequest(*{}), "
-        "{}->BootSecretId());",
-        ValueRange{keyPair, function.getArgument(0), function.getArgument(0)});
+    VerbatimOp::create(builder, loc,
+                       "{}.storage->PrepareRotationKey(GetKeyRequest(), "
+                       "{}->BootSecretId());",
+                       ValueRange{keyPair, function.getArgument(0)});
   for (StringRef field : {"secret_key", "public_key"}) {
     if (split && field == "public_key") continue;
     Type aliasType =
@@ -766,7 +765,9 @@ LogicalResult verifyKeyPlanningMetadata(func::FuncOp setup) {
   // now would silently produce a client that generates no keys.
   for (StringRef stale :
        {cheddar::kRotationKeysAttrName, cheddar::kLinearTransformKeysAttrName,
-        cheddar::kBootstrapSlotsAttrName})
+        cheddar::kBootstrapSlotsAttrName, cheddar::kBootstrapNumCtsAttrName,
+        cheddar::kBootstrapNumStcAttrName,
+        cheddar::kBootstrapLogMessageRatioAttrName})
     if (setup->hasAttr(stale))
       return setup.emitOpError()
              << "still carries " << stale
@@ -815,7 +816,6 @@ LogicalResult verifyKeyPlanningMetadata(func::FuncOp setup) {
   return success();
 }
 
-// GetKeyRequest(Context&) -> EvaluationKeyRequest
 // Emits the planned evaluation keys as a static table and a loop over it.
 void addKeyRequestDefinition(OpBuilder& builder, Location loc,
                              const EntryFunctions& functions) {
@@ -862,8 +862,7 @@ void addKeyRequestDefinition(OpBuilder& builder, Location loc,
   }
 
   auto function =
-      createEmitCFunction(builder, loc, "GetKeyRequest",
-                          {OpaqueType::get(ctx, "Context&")}, {request}, false);
+      createEmitCFunction(builder, loc, "GetKeyRequest", {}, {request}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   Value result = createLocal(builder, loc, "EvaluationKeyRequest");
   if (count != 0) {

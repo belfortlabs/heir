@@ -9,16 +9,14 @@
 // option; an option that disagrees is an error.
 // CONTRADICT: contradicts the recorded runtime 'cyclops'
 // SERVER-H: EncryptedOutputs Evaluate(Context&, const EvaluationKeys*, const PreparedInputs&, const EncryptedInputs&, const DebugSink*);
-// CLIENT-H: EvaluationKeyRequest GetKeyRequest(Context&);
+// CLIENT-H: EvaluationKeyRequest GetKeyRequest();
 
 // A helper both sides use is defined, with internal linkage, in both.
 // SHARED: static void shared_layout(
 // SHARED: shared_layout(
 // CHECK: static void shared_layout(
 // CHECK: shared_layout(
-// The key list is emitted as data and walked at run time, so the client needs
-// no planning code. --implicit-check-not=extension/ on the RUN lines is what
-// holds that.
+// The client constructs its key request from the compiler's table.
 // CHECK: struct KeyRequest { int family, rot_idx, level, key_mode, num_aux; };
 // CHECK: constexpr std::array<KeyRequest, 4> kEvaluationKeys
 // CHECK-SAME: {0, 5, 7, 2, 3}
@@ -29,7 +27,7 @@
 // CHECK: case 1: {{.*}}.RequestConjugationKey(key.level, mode, key.num_aux);
 // CHECK: case 2: {{.*}}.RequestMultiplicationKey(key.level, mode, key.num_aux);
 // CHECK: default: {{.*}}.RequestRotatedMultiplicationKey(
-// CHECK: PrepareRotationKey(GetKeyRequest(
+// CHECK: PrepareRotationKey(GetKeyRequest(),
 
 !ctx = !emitc.ptr<!emitc.opaque<"Context<word>">>
 !client_ctx = !emitc.ptr<!emitc.opaque<"ClientContext<word>">>

@@ -46,7 +46,43 @@ struct PlanEvaluationKeysPass
   void runOnOperation() override try {
     auto module = cast<ModuleOp>(getOperation());
     func::FuncOp setup = findClientSetup(module);
-    if (!setup || !setup->hasAttr(kRotationKeysAttrName)) return;
+    if (!setup) return;
+    const StringRef planningAttrs[] = {
+        kRotationKeysAttrName,    kLinearTransformKeysAttrName,
+        kBootstrapSlotsAttrName,  kBootstrapNumCtsAttrName,
+        kBootstrapNumStcAttrName, kBootstrapLogMessageRatioAttrName};
+    if (llvm::none_of(planningAttrs,
+                      [&](StringRef name) { return setup->hasAttr(name); }))
+      return;
+
+    auto rotationKeys =
+        setup->getAttrOfType<DenseI64ArrayAttr>(kRotationKeysAttrName);
+    if (!rotationKeys || rotationKeys.size() % 2 != 0) {
+      setup.emitOpError()
+          << kRotationKeysAttrName
+          << " must be a dense i64 array of (distance, level) pairs";
+      return signalPassFailure();
+    }
+    auto shapes = setup->getAttrOfType<ArrayAttr>(kLinearTransformKeysAttrName);
+    if (setup->hasAttr(kLinearTransformKeysAttrName) && !shapes) {
+      setup.emitOpError() << kLinearTransformKeysAttrName
+                          << " must be an array";
+      return signalPassFailure();
+    }
+    const StringRef bootstrapAttrs[] = {
+        kBootstrapSlotsAttrName, kBootstrapNumCtsAttrName,
+        kBootstrapNumStcAttrName, kBootstrapLogMessageRatioAttrName};
+    if (llvm::any_of(bootstrapAttrs,
+                     [&](StringRef name) { return setup->hasAttr(name); })) {
+      for (StringRef name : bootstrapAttrs) {
+        auto value = setup->getAttrOfType<IntegerAttr>(name);
+        if (!value || !value.getType().isInteger(64)) {
+          setup.emitOpError()
+              << name << " must be i64 when planning bootstrap keys";
+          return signalPassFailure();
+        }
+      }
+    }
 
     MakeParameterOp parameterOp;
     setup.walk([&](MakeParameterOp op) {
@@ -86,20 +122,11 @@ struct PlanEvaluationKeysPass
       params.SetSparseHammingWeight(weight.getInt());
 
     cyclops::EvkRequest request;
-    auto rotationKeys =
-        setup->getAttrOfType<DenseI64ArrayAttr>(kRotationKeysAttrName);
-    if (!rotationKeys || rotationKeys.size() % 2 != 0) {
-      setup.emitOpError() << kRotationKeysAttrName
-                          << " must be a dense i64 array of (distance, level) "
-                             "pairs";
-      return signalPassFailure();
-    }
     ArrayRef<int64_t> pairs = rotationKeys.asArrayRef();
     for (size_t i = 0; i + 1 < pairs.size(); i += 2)
       request.AddRequest(pairs[i], pairs[i + 1]);
 
-    if (auto shapes =
-            setup->getAttrOfType<ArrayAttr>(kLinearTransformKeysAttrName)) {
+    if (shapes) {
       for (auto [index, attr] : llvm::enumerate(shapes)) {
         auto shape = dyn_cast<DictionaryAttr>(attr);
         auto indices =
@@ -115,6 +142,14 @@ struct PlanEvaluationKeysPass
                  "first";
           return signalPassFailure();
         }
+        for (StringRef field : {"width", "level", "bs", "gs"}) {
+          if (!shape.getAs<IntegerAttr>(field).getType().isInteger(64)) {
+            setup.emitOpError()
+                << kLinearTransformKeysAttrName << " entry " << index
+                << " requires an i64 " << field << " field";
+            return signalPassFailure();
+          }
+        }
         auto diagonals = indices.asArrayRef();
         cyclops::AddLinearTransformRequiredKeys(
             request, params, width.getInt(),
@@ -129,12 +164,6 @@ struct PlanEvaluationKeysPass
       auto stc = setup->getAttrOfType<IntegerAttr>(kBootstrapNumStcAttrName);
       auto ratio =
           setup->getAttrOfType<IntegerAttr>(kBootstrapLogMessageRatioAttrName);
-      if (!cts || !stc || !ratio) {
-        setup.emitOpError(
-            "bootstrap key planning needs num_cts, num_stc and "
-            "log_message_ratio");
-        return signalPassFailure();
-      }
       // The emitter hard-codes the imaginary-removing variant.
       cyclops::BootParameter bootstrap(params.max_level_, cts.getInt(),
                                        stc.getInt(), ratio.getInt());
@@ -161,11 +190,7 @@ struct PlanEvaluationKeysPass
     OpBuilder builder(module.getContext());
     setup->setAttr(kEvaluationKeysAttrName,
                    builder.getDenseI64ArrayAttr(flattened));
-    for (StringRef name :
-         {kRotationKeysAttrName, kLinearTransformKeysAttrName,
-          kBootstrapSlotsAttrName, kBootstrapNumCtsAttrName,
-          kBootstrapNumStcAttrName, kBootstrapLogMessageRatioAttrName})
-      setup->removeAttr(name);
+    for (StringRef name : planningAttrs) setup->removeAttr(name);
   } catch (const std::exception& error) {
     getOperation()->emitError()
         << "Cyclops key planning failed: " << error.what();

@@ -7,6 +7,16 @@
 
 module attributes {cheddar.runtime = "cyclops"} {
   func.func @entry() attributes {heir.interface = {func_name = "entry", roles = ["entry", "server.evaluate"]}} { return }
+  // expected-error@+1 {{still carries cheddar.bootstrap_num_cts; run cheddar-plan-evaluation-keys before emitting the entry interface}}
+  func.func @orphaned_bootstrap_field() attributes {cheddar.bootstrap_num_cts = 3 : i64, heir.interface = {func_name = "entry", roles = ["client.setup"]}} { return }
+  func.func @keygen() attributes {heir.interface = {func_name = "entry", roles = ["client.keygen"]}} { return }
+  func.func @server_setup() attributes {heir.interface = {func_name = "entry", roles = ["server.setup"]}} { return }
+}
+
+// -----
+
+module attributes {cheddar.runtime = "cyclops"} {
+  func.func @entry() attributes {heir.interface = {func_name = "entry", roles = ["entry", "server.evaluate"]}} { return }
   // expected-error@+1 {{still carries cheddar.rotation_keys; run cheddar-plan-evaluation-keys before emitting the entry interface}}
   func.func @unplanned_rotations() attributes {cheddar.rotation_keys = array<i64: 1, 0>, heir.interface = {func_name = "entry", roles = ["client.setup"]}} { return }
   func.func @keygen() attributes {heir.interface = {func_name = "entry", roles = ["client.keygen"]}} { return }
