@@ -81,14 +81,15 @@ cc_library(
     srcs = ["PlanEvaluationKeys.cpp"],
     hdrs = ["PlanEvaluationKeys.h"],
     copts = ["-fexceptions"],
+    implementation_deps = ["@cyclops//:planner"],
     linkopts = select({
         "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
         "//conditions:default": ["-Wl,-rpath,$$ORIGIN"],
     }),
     local_defines = ["CYCLOPS_PLANNER_BUILD"],
+    tags = ["no-remote"],
     deps = [
         ":plan_evaluation_keys_inc_gen",
-        "@cyclops//:planner",
         "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/Cheddar/IR:Dialect",
         "@llvm-project//llvm:Support",
