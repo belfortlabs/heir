@@ -60,6 +60,16 @@ enum class InterfaceSide { Combined, Client, Server };
 // internal linkage, so a helper both sides share can be defined in both.
 constexpr StringLiteral kDetailNamespace = "heir::generated::detail";
 
+// Shape of cheddar.evaluation_keys, as cheddar-plan-evaluation-keys writes it:
+// flat (family, rotation, level, key mode, required aux count) tuples. The
+// bounds cover the four key families and Cyclops' three key modes.
+constexpr size_t kKeyRequestFields = 5;
+constexpr int64_t kMaxKeyFamily = 3;
+constexpr int64_t kMaxKeyMode = 2;
+
+// Name of the generated table holding the baked key list.
+constexpr StringLiteral kEvaluationKeysTable = "kEvaluationKeys";
+
 std::string sanitizeIdentifier(StringRef value) {
   std::string result;
   result.reserve(value.size());
@@ -496,11 +506,10 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
                                   "heir::getPointer", storage)
                  .getResult(0);
   if (split)
-    VerbatimOp::create(
-        builder, loc,
-        "{}.storage->PrepareRotationKey(GetKeyRequest(*{}), "
-        "{}->BootSecretId());",
-        ValueRange{keyPair, function.getArgument(0), function.getArgument(0)});
+    VerbatimOp::create(builder, loc,
+                       "{}.storage->PrepareRotationKey(GetKeyRequest(), "
+                       "{}->BootSecretId());",
+                       ValueRange{keyPair, function.getArgument(0)});
   for (StringRef field : {"secret_key", "public_key"}) {
     if (split && field == "public_key") continue;
     Type aliasType =
@@ -751,111 +760,139 @@ LogicalResult addDecryptDefinition(OpBuilder& builder, Location loc,
 }
 
 LogicalResult verifyKeyPlanningMetadata(func::FuncOp setup) {
-  if (Attribute attr = setup->getAttr(cheddar::kLinearTransformKeysAttrName)) {
-    auto shapes = dyn_cast<ArrayAttr>(attr);
-    if (!shapes)
+  // The planning attributes are inputs to cheddar-plan-evaluation-keys, which
+  // consumes them. Finding one here means that pass did not run, and emitting
+  // now would silently produce a client that generates no keys.
+  for (StringRef stale :
+       {cheddar::kRotationKeysAttrName, cheddar::kLinearTransformKeysAttrName,
+        cheddar::kBootstrapSlotsAttrName, cheddar::kBootstrapNumCtsAttrName,
+        cheddar::kBootstrapNumStcAttrName,
+        cheddar::kBootstrapLogMessageRatioAttrName})
+    if (setup->hasAttr(stale))
       return setup.emitOpError()
-             << cheddar::kLinearTransformKeysAttrName << " must be an array";
-    for (auto [index, attr] : llvm::enumerate(shapes)) {
-      auto shape = dyn_cast<DictionaryAttr>(attr);
-      if (!shape)
-        return setup.emitOpError()
-               << cheddar::kLinearTransformKeysAttrName << " entry " << index
-               << " must be a dictionary";
-      if (!shape.getAs<DenseI32ArrayAttr>("indices"))
-        return setup.emitOpError()
-               << cheddar::kLinearTransformKeysAttrName << " entry " << index
-               << " requires an indices field of type array<i32>";
-      for (StringRef field : {"width", "level", "bs", "gs"}) {
-        auto value = shape.getAs<IntegerAttr>(field);
-        if (!value || !value.getType().isInteger(64))
-          return setup.emitOpError()
-                 << cheddar::kLinearTransformKeysAttrName << " entry " << index
-                 << " requires an i64 " << field << " field";
-      }
-    }
+             << "still carries " << stale
+             << "; run cheddar-plan-evaluation-keys before emitting the entry "
+                "interface";
+
+  auto keys =
+      setup->getAttrOfType<DenseI64ArrayAttr>(cheddar::kEvaluationKeysAttrName);
+  if (!keys) {
+    // Absent is fine: the Cheddar runtime plans keys itself. Present but
+    // mistyped would emit an empty table and fail at key generation instead.
+    if (setup->hasAttr(cheddar::kEvaluationKeysAttrName))
+      return setup.emitOpError() << cheddar::kEvaluationKeysAttrName
+                                 << " must be a dense i64 array";
+    return success();
   }
-  const StringRef bootstrapAttrs[] = {
-      cheddar::kBootstrapSlotsAttrName, cheddar::kBootstrapNumCtsAttrName,
-      cheddar::kBootstrapNumStcAttrName,
-      cheddar::kBootstrapLogMessageRatioAttrName};
-  if (llvm::any_of(bootstrapAttrs,
-                   [&](StringRef name) { return setup->hasAttr(name); }))
-    for (StringRef name : bootstrapAttrs) {
-      auto value = setup->getAttrOfType<IntegerAttr>(name);
-      if (!value || !value.getType().isInteger(64))
-        return setup.emitOpError()
-               << "bootstrap key planning requires i64 attribute " << name;
-    }
+
+  ArrayRef<int64_t> values = keys.asArrayRef();
+  if (values.size() % kKeyRequestFields != 0)
+    return setup.emitOpError()
+           << cheddar::kEvaluationKeysAttrName << " must hold "
+           << kKeyRequestFields << "-tuples of (family, rotation, level, "
+           << "key mode, required aux count)";
+
+  for (size_t i = 0; i < values.size(); i += kKeyRequestFields) {
+    int64_t family = values[i];
+    int64_t keyMode = values[i + 3];
+    int64_t numAux = values[i + 4];
+    if (family < 0 || family > kMaxKeyFamily)
+      return setup.emitOpError()
+             << cheddar::kEvaluationKeysAttrName << " entry "
+             << (i / kKeyRequestFields) << " has key family " << family
+             << ", which is outside 0.." << kMaxKeyFamily;
+    if (keyMode < 0 || keyMode > kMaxKeyMode)
+      return setup.emitOpError()
+             << cheddar::kEvaluationKeysAttrName << " entry "
+             << (i / kKeyRequestFields) << " has key mode " << keyMode
+             << ", which is outside 0.." << kMaxKeyMode;
+    if (numAux < -1)
+      return setup.emitOpError()
+             << cheddar::kEvaluationKeysAttrName << " entry "
+             << (i / kKeyRequestFields) << " has a required aux count of "
+             << numAux << "; -1 means unconstrained and nothing below it is "
+             << "meaningful";
+  }
   return success();
 }
 
-// GetKeyRequest(Context&) -> EvaluationKeyRequest
+// Emits the planned evaluation keys as a static table and a loop over it.
 void addKeyRequestDefinition(OpBuilder& builder, Location loc,
                              const EntryFunctions& functions) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   Type request = OpaqueType::get(ctx, "EvaluationKeyRequest");
+
+  auto keys = functions.setup->getAttrOfType<DenseI64ArrayAttr>(
+      cheddar::kEvaluationKeysAttrName);
+  ArrayRef<int64_t> values = keys ? keys.asArrayRef() : ArrayRef<int64_t>{};
+  size_t count = values.size() / kKeyRequestFields;
+
+  // emitc.verbatim reads `{}` as an operand placeholder. Only `{` is special,
+  // and only in a verbatim that carries operands: there a literal `{` is
+  // written doubled, while `}` passes through untouched. A verbatim with no
+  // operands is emitted as-is, so the table below needs no escaping at all.
+  auto escapeBraces = [](StringRef text) {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char c : text) {
+      if (c == '{') escaped.push_back(c);
+      escaped.push_back(c);
+    }
+    return escaped;
+  };
+
+  // A file-scope table rather than statements, so the whole key set is one
+  // reviewable block of data and the compiler can put it in .rodata.
+  if (count != 0) {
+    std::string table =
+        "namespace {\nstruct KeyRequest { int family, rot_idx, level, "
+        "key_mode, num_aux; };\nconstexpr std::array<KeyRequest, " +
+        std::to_string(count) + "> " + kEvaluationKeysTable.str() + "{{";
+    for (size_t i = 0; i < values.size(); i += kKeyRequestFields) {
+      if (i) table += ", ";
+      table += "{" + std::to_string(values[i]) + ", " +
+               std::to_string(values[i + 1]) + ", " +
+               std::to_string(values[i + 2]) + ", " +
+               std::to_string(values[i + 3]) + ", " +
+               std::to_string(values[i + 4]) + "}";
+    }
+    table += "}};\n}  // namespace";
+    emitVerbatim(builder, loc, table);
+  }
+
   auto function =
-      createEmitCFunction(builder, loc, "GetKeyRequest",
-                          {OpaqueType::get(ctx, "Context&")}, {request}, false);
+      createEmitCFunction(builder, loc, "GetKeyRequest", {}, {request}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   Value result = createLocal(builder, loc, "EvaluationKeyRequest");
-  if (auto pairs = functions.setup->getAttrOfType<DenseI64ArrayAttr>(
-          cheddar::kRotationKeysAttrName)) {
-    auto values = pairs.asArrayRef();
-    for (size_t i = 0; i + 1 < values.size(); i += 2)
-      VerbatimOp::create(builder, loc,
-                         "{}.AddRequest(" + std::to_string(values[i]) + ", " +
-                             std::to_string(values[i + 1]) + ");",
-                         result);
-  }
-  if (auto shapes = functions.setup->getAttrOfType<ArrayAttr>(
-          cheddar::kLinearTransformKeysAttrName)) {
-    for (auto [shapeIndex, attr] : llvm::enumerate(shapes)) {
-      auto shape = cast<DictionaryAttr>(attr);
-      auto indices = shape.getAs<DenseI32ArrayAttr>("indices").asArrayRef();
-      std::string values;
-      for (auto [index, value] : llvm::enumerate(indices)) {
-        if (index) values += ", ";
-        values += std::to_string(value);
-      }
-      std::string name =
-          "linear_transform_indices_" + std::to_string(shapeIndex);
-      emitVerbatim(builder, loc,
-                   "constexpr std::array<int, " +
-                       std::to_string(indices.size()) + "> " + name + "{" +
-                       values + "};");
-      VerbatimOp::create(
-          builder, loc,
-          "::cyclops::AddLinearTransformRequiredKeys({}, {}.param_, " +
-              std::to_string(shape.getAs<IntegerAttr>("width").getInt()) +
-              ", " + name + ", " +
-              std::to_string(shape.getAs<IntegerAttr>("level").getInt()) +
-              ", " + std::to_string(shape.getAs<IntegerAttr>("bs").getInt()) +
-              ", " + std::to_string(shape.getAs<IntegerAttr>("gs").getInt()) +
-              ");",
-          ValueRange{result, function.getArgument(0)});
-    }
-  }
-  if (auto slots = functions.setup->getAttrOfType<IntegerAttr>(
-          cheddar::kBootstrapSlotsAttrName)) {
-    auto numCts = functions.setup->getAttrOfType<IntegerAttr>(
-        cheddar::kBootstrapNumCtsAttrName);
-    auto numStc = functions.setup->getAttrOfType<IntegerAttr>(
-        cheddar::kBootstrapNumStcAttrName);
-    auto ratio = functions.setup->getAttrOfType<IntegerAttr>(
-        cheddar::kBootstrapLogMessageRatioAttrName);
-    VerbatimOp::create(
-        builder, loc,
-        "::cyclops::AddBootstrapRequiredKeys({}, {}.param_, "
-        "::cyclops::BootParameter({}.param_.max_level_, " +
-            std::to_string(numCts.getInt()) + ", " +
-            std::to_string(numStc.getInt()) + ", " +
-            std::to_string(ratio.getInt()) + "), " +
-            std::to_string(slots.getInt()) +
-            ", ::cyclops::BootVariant::kImaginaryRemoving);",
-        ValueRange{result, function.getArgument(0), function.getArgument(0)});
+  if (count != 0) {
+    // One switch over the four key families. Cyclops spells each as a
+    // different method, and only two of them take a rotation index. The bare
+    // `{}` are the operand placeholders; everything else is escaped.
+    std::string loop =
+        escapeBraces(
+            "for (const KeyRequest& key : " + kEvaluationKeysTable.str() +
+            ") {\n  const auto mode = "
+            "static_cast<::cyclops::KeyMode>(key.key_mode);\n"
+            "  switch (key.family) {\n    case 0: ") +
+        "{}" +
+        escapeBraces(
+            ".AddRequest(key.rot_idx, key.level, mode, key.num_aux); "
+            "break;\n    case 1: ") +
+        "{}" +
+        escapeBraces(
+            ".RequestConjugationKey(key.level, mode, key.num_aux); "
+            "break;\n    case 2: ") +
+        "{}" +
+        escapeBraces(
+            ".RequestMultiplicationKey(key.level, mode, key.num_aux); "
+            "break;\n    default: ") +
+        "{}" +
+        escapeBraces(
+            ".RequestRotatedMultiplicationKey(key.rot_idx, key.level, "
+            "mode, key.num_aux); break;\n  }\n}");
+    VerbatimOp::create(builder, loc, loop,
+                       ValueRange{result, result, result, result});
   }
   ReturnOp::create(builder, loc,
                    moveValue(builder, loc, result, "EvaluationKeyRequest"));
@@ -951,15 +988,6 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   emitInclude(builder, loc, "core/Encode.h", false);
   emitInclude(builder, loc, "core/Parameter.h", false);
   if (split) emitInclude(builder, loc, "heir/runtime/CyclopsRuntime.h", false);
-  if (side == InterfaceSide::Client) {
-    if (functions.setup->hasAttr(cheddar::kBootstrapSlotsAttrName))
-      emitInclude(builder, loc, "extension/boot/BootKeyPlanner.h", false);
-    if (auto shapes = functions.setup->getAttrOfType<ArrayAttr>(
-            cheddar::kLinearTransformKeysAttrName);
-        shapes && !shapes.empty())
-      emitInclude(builder, loc, "extension/linalg/LinearTransformKeyPlanner.h",
-                  false);
-  }
   if (server)
     for (StringRef include : extensionIncludes)
       emitInclude(builder, loc, include, false);

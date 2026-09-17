@@ -1,11 +1,12 @@
 // RUN: heir-opt %s --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=4096 enable-split-preprocessing=true" --scheme-to-cheddar="entry-function=matvec runtime=cyclops" --cheddar-to-emitc --cheddar-emitc-entry-interface=runtime=cyclops > %t
-// RUN: heir-translate %t --mlir-to-cpp --file-id=client_source | FileCheck %s --check-prefix=CLIENT --implicit-check-not="LinearTransform<word>" --implicit-check-not=__constant_8x4xf32
+// RUN: heir-translate %t --mlir-to-cpp --file-id=client_source | FileCheck %s --check-prefix=CLIENT --implicit-check-not="LinearTransform<word>" --implicit-check-not=__constant_8x4xf32 --implicit-check-not=AddLinearTransformRequiredKeys
 // RUN: heir-translate %t --mlir-to-cpp --file-id=server_source | FileCheck %s --check-prefix=SERVER --implicit-check-not=UserInterface
 
 // CLIENT: ClientContext<word>::Create
-// CLIENT: AddLinearTransformRequiredKeys
-// CLIENT-SAME: , 4096, linear_transform_indices_0,
-// CLIENT-SAME: , 0, 0);
+// The transform's keys are planned at compile time and baked in as data, so
+// the client names no planning API.
+// CLIENT: constexpr std::array<KeyRequest, {{[0-9]+}}> kEvaluationKeys
+// CLIENT: GetKeyRequest
 // CLIENT: EncryptedInputs Encrypt
 // SERVER: LinearTransform<word>
 // SERVER: Preprocess

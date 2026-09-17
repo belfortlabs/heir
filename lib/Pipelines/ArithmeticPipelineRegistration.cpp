@@ -10,6 +10,7 @@
 #include "lib/Dialect/Cheddar/Transforms/CheddarBufferize.h"
 #include "lib/Dialect/Cheddar/Transforms/ConfigureCryptoContext.h"
 #include "lib/Dialect/Cheddar/Transforms/FuseOps.h"
+#include "lib/Dialect/Cheddar/Transforms/PlanEvaluationKeys.h"
 #include "lib/Dialect/Debug/Transforms/ValidateNames.h"
 #include "lib/Dialect/Kernel/Transforms/PrepareLinearTransforms.h"
 #include "lib/Dialect/LWE/Conversions/LWEToCheddar/LWEToCheddar.h"
@@ -770,6 +771,11 @@ CheddarBackendPipelineBuilder toCheddarPipelineBuilder() {
     configureOptions.prepareRotationKeysAtUseLevels = useCyclops;
     configureOptions.useCyclopsRuntime = useCyclops;
     pm.addPass(cheddar::createCheddarConfigureCryptoContext(configureOptions));
+    if (useCyclops) {
+      // Resolve the key requirements the pass above recorded into the concrete
+      // key list the emitter bakes into the client. Needs the planner library.
+      pm.addPass(cheddar::createCheddarPlanEvaluationKeys());
+    }
     cheddar::CheddarBuildEntryInterfaceOptions facadeOptions;
     facadeOptions.entryFunction = options.entryFunction;
     pm.addPass(cheddar::createCheddarBuildEntryInterface(facadeOptions));

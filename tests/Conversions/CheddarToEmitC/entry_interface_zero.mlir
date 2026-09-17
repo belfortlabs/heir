@@ -9,21 +9,25 @@
 // option; an option that disagrees is an error.
 // CONTRADICT: contradicts the recorded runtime 'cyclops'
 // SERVER-H: EncryptedOutputs Evaluate(Context&, const EvaluationKeys*, const PreparedInputs&, const EncryptedInputs&, const DebugSink*);
-// CLIENT-H: EvaluationKeyRequest GetKeyRequest(Context&);
+// CLIENT-H: EvaluationKeyRequest GetKeyRequest();
 
 // A helper both sides use is defined, with internal linkage, in both.
 // SHARED: static void shared_layout(
 // SHARED: shared_layout(
 // CHECK: static void shared_layout(
 // CHECK: shared_layout(
+// The client constructs its key request from the compiler's table.
+// CHECK: struct KeyRequest { int family, rot_idx, level, key_mode, num_aux; };
+// CHECK: constexpr std::array<KeyRequest, 4> kEvaluationKeys
+// CHECK-SAME: {0, 5, 7, 2, 3}
+// CHECK-SAME: {1, 0, 7, 1, -1}
 // CHECK: EvaluationKeyRequest GetKeyRequest(
-// CHECK: constexpr std::array<int, 3> linear_transform_indices_0{-2, 0, 5};
-// CHECK: AddLinearTransformRequiredKeys
-// CHECK-SAME: , 16, linear_transform_indices_0, 7, 2, 3);
-// CHECK: AddBootstrapRequiredKeys
-// CHECK-SAME: BootParameter({{.*}}.param_.max_level_, 4, 2, 8), 1024,
-// CHECK-SAME: BootVariant::kImaginaryRemoving
-// CHECK: PrepareRotationKey(GetKeyRequest(
+// CHECK: for (const KeyRequest& key : kEvaluationKeys) {
+// CHECK: case 0: {{.*}}.AddRequest(key.rot_idx, key.level, mode, key.num_aux);
+// CHECK: case 1: {{.*}}.RequestConjugationKey(key.level, mode, key.num_aux);
+// CHECK: case 2: {{.*}}.RequestMultiplicationKey(key.level, mode, key.num_aux);
+// CHECK: default: {{.*}}.RequestRotatedMultiplicationKey(
+// CHECK: PrepareRotationKey(GetKeyRequest(),
 
 !ctx = !emitc.ptr<!emitc.opaque<"Context<word>">>
 !client_ctx = !emitc.ptr<!emitc.opaque<"ClientContext<word>">>
@@ -45,12 +49,14 @@ func.func @prepare() attributes {heir.interface = {func_name = "entry", roles = 
 }
 func.func @entry__setup(%out: !ctx_owner {bufferize.result})
     attributes {
-      cheddar.bootstrap_log_message_ratio = 8 : i64,
-      cheddar.bootstrap_num_cts = 4 : i64,
-      cheddar.bootstrap_num_stc = 2 : i64,
-      cheddar.bootstrap_slots = 1024 : i64,
-      cheddar.linear_transform_keys = [{bs = 2 : i64, gs = 3 : i64,
-        indices = array<i32: -2, 0, 5>, level = 7 : i64, width = 16 : i64}],
+      // What cheddar-plan-evaluation-keys leaves behind: one key per line as
+      // (family, rotation, level, key mode, required aux count). Two rotations,
+      // one conjugation and one multiplication.
+      cheddar.evaluation_keys = array<i64:
+        0, 5, 7, 2, 3,
+        0, 11, 7, 2, 3,
+        1, 0, 7, 1, -1,
+        2, 0, 7, 1, -1>,
       heir.interface = {func_name = "entry", roles = ["client.setup"]}
     } { return }
 func.func @entry__server_setup(%out: !server_owner {bufferize.result})

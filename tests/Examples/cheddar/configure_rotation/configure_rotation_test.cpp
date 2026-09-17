@@ -18,9 +18,10 @@ using UI = cheddar::UserInterface<word>;
 
 void rotate__configure(std::shared_ptr<cheddar::Context<word>>& ctx,
                        std::unique_ptr<UI>& ui);
-void rotate(cheddar::Context<word>* ctx, UI* ui, const Ct& input, Ct& output);
+void rotate(cheddar::Context<word>* ctx, const cheddar::EvkMap<word>& evk_map,
+            const Ct& input, Ct& output);
 
-TEST(CheddarConfigureSmoke, GeneratedSetupAndRotationRun) {
+TEST(CheddarConfigureRotation, GeneratedSetupAndRotationRun) {
   std::shared_ptr<cheddar::Context<word>> ctx;
   std::unique_ptr<UI> ui;
   rotate__configure(ctx, ui);
@@ -43,11 +44,11 @@ TEST(CheddarConfigureSmoke, GeneratedSetupAndRotationRun) {
   ui->Encrypt(input, plaintext);
 
   Ct output;
-  rotate(ctx.get(), ui.get(), input, output);
+  rotate(ctx.get(), ui->GetEvkMap(), input, output);
 
   // Compare the emitted call sequence against the real scale-snu operations.
   // A nonconstant complex message makes rotation direction and distance
-  // observable, unlike the previous all-ones input.
+  // observable.
   Ct rotated_reference;
   ctx->HRot(rotated_reference, input, ui->GetRotationKey(7), 7);
   Ct reference;

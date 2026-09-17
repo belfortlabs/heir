@@ -21,7 +21,6 @@
 
 using word = uint64_t;
 using Ct = cheddar::Ciphertext<word>;
-using Evk = cheddar::EvaluationKey<word>;
 using EvkMap = cheddar::EvkMap<word>;
 using LinearTransform = cheddar::LinearTransform<word>;
 using Pt = cheddar::Plaintext<word>;
@@ -29,26 +28,22 @@ using UI = cheddar::UserInterface<word>;
 
 void mnist__configure(std::shared_ptr<cheddar::Context<word>>& ctx,
                       std::unique_ptr<UI>& ui);
-void mnist__encrypt__arg4(cheddar::Context<word>* ctx,
-                          const cheddar::Encoder<word>& encoder, const Evk& evk,
-                          float* input, UI* ui, std::array<Ct, 1>& out);
-void mnist__preprocessing(
-    cheddar::Context<word>* ctx, const cheddar::Encoder<word>& encoder,
-    float* second_bias, float* second_weight, float* first_bias,
-    float* first_weight,
-    std::array<std::shared_ptr<LinearTransform>, 2>& transforms,
-    std::array<Pt, 3>& plaintexts);
-void mnist__preprocessed(
-    cheddar::Context<word>* ctx, const cheddar::Encoder<word>& encoder, UI* ui,
-    const Evk& evk, const EvkMap& evk_map, float* first_weight,
-    float* first_bias, float* second_weight, float* second_bias,
-    const std::array<Ct, 1>& input,
-    const std::array<std::shared_ptr<LinearTransform>, 2>& transforms,
-    const std::array<Pt, 3>& plaintexts, std::array<Ct, 1>& out);
-void mnist__decrypt__result0(cheddar::Context<word>* ctx,
-                             const cheddar::Encoder<word>& encoder,
-                             const Evk& evk, const std::array<Ct, 1>& input,
-                             UI* ui, float* out);
+void mnist__encrypt__arg4(const cheddar::Encoder<word>& encoder, float* input,
+                          UI* ui, Ct out[1]);
+void mnist__preprocessing(cheddar::Context<word>* ctx,
+                          const cheddar::Encoder<word>& encoder,
+                          float* second_bias, float* second_weight,
+                          float* first_bias, float* first_weight,
+                          std::shared_ptr<LinearTransform> transforms[2],
+                          Pt plaintexts[3]);
+void mnist__preprocessed(cheddar::Context<word>* ctx, const EvkMap& evk_map,
+                         float* first_weight, float* first_bias,
+                         float* second_weight, float* second_bias,
+                         const Ct input[1],
+                         const std::shared_ptr<LinearTransform> transforms[2],
+                         const Pt plaintexts[3], Ct out[1]);
+void mnist__decrypt__result0(const cheddar::Encoder<word>& encoder,
+                             const Ct input[1], UI* ui, float* out);
 
 namespace {
 
@@ -183,15 +178,13 @@ TEST(CheddarHeirMlpE2E, MatchesDegreeFivePlaintextCircuit) {
   mnist__configure(ctx, ui);
   ASSERT_NE(ctx, nullptr);
   ASSERT_NE(ui, nullptr);
-  const Evk& evk = ui->GetMultiplicationKey();
   const EvkMap& evk_map = ui->GetEvkMap();
 
-  std::array<Ct, 1> encrypted;
-  mnist__encrypt__arg4(ctx.get(), ctx->encoder_, evk, &input[0][0], ui.get(),
-                       encrypted);
+  Ct encrypted[1];
+  mnist__encrypt__arg4(ctx->encoder_, &input[0][0], ui.get(), encrypted);
 
-  std::array<Pt, 3> plaintexts;
-  std::array<std::shared_ptr<LinearTransform>, 2> transforms;
+  Pt plaintexts[3];
+  std::shared_ptr<LinearTransform> transforms[2];
   auto preprocessing_start = std::chrono::steady_clock::now();
   mnist__preprocessing(ctx.get(), ctx->encoder_, second_bias.data(),
                        second_weight.data(), first_bias.data(),
@@ -204,12 +197,12 @@ TEST(CheddarHeirMlpE2E, MatchesDegreeFivePlaintextCircuit) {
   ASSERT_NE(transforms[0], nullptr);
   ASSERT_NE(transforms[1], nullptr);
 
-  std::array<Ct, 1> evaluated;
+  Ct evaluated[1];
   auto evaluation_start = std::chrono::steady_clock::now();
-  mnist__preprocessed(ctx.get(), ctx->encoder_, ui.get(), evk, evk_map,
-                      first_weight.data(), first_bias.data(),
-                      second_weight.data(), second_bias.data(), encrypted,
-                      transforms, plaintexts, evaluated);
+  mnist__preprocessed(ctx.get(), evk_map, first_weight.data(),
+                      first_bias.data(), second_weight.data(),
+                      second_bias.data(), encrypted, transforms, plaintexts,
+                      evaluated);
   std::cerr << "HeirMLP evaluation took "
             << std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                              evaluation_start)
@@ -218,15 +211,14 @@ TEST(CheddarHeirMlpE2E, MatchesDegreeFivePlaintextCircuit) {
   EXPECT_EQ(ctx->param_.NPToLevel(encrypted[0].GetNP()), 6);
   EXPECT_EQ(ctx->param_.NPToLevel(evaluated[0].GetNP()), 0);
 
-  std::array<Ct, 1> evaluated_again;
-  mnist__preprocessed(ctx.get(), ctx->encoder_, ui.get(), evk, evk_map,
-                      first_weight.data(), first_bias.data(),
-                      second_weight.data(), second_bias.data(), encrypted,
-                      transforms, plaintexts, evaluated_again);
+  Ct evaluated_again[1];
+  mnist__preprocessed(ctx.get(), evk_map, first_weight.data(),
+                      first_bias.data(), second_weight.data(),
+                      second_bias.data(), encrypted, transforms, plaintexts,
+                      evaluated_again);
 
   float actual[1][10];
-  mnist__decrypt__result0(ctx.get(), ctx->encoder_, evk, evaluated, ui.get(),
-                          &actual[0][0]);
+  mnist__decrypt__result0(ctx->encoder_, evaluated, ui.get(), &actual[0][0]);
   int predicted_class = 0;
   for (size_t i = 0; i < 10; ++i) {
     ASSERT_TRUE(std::isfinite(actual[0][i])) << "logit " << i;
@@ -236,8 +228,8 @@ TEST(CheddarHeirMlpE2E, MatchesDegreeFivePlaintextCircuit) {
   EXPECT_EQ(predicted_class, kExpectedClass);
 
   float repeated[1][10];
-  mnist__decrypt__result0(ctx.get(), ctx->encoder_, evk, evaluated_again,
-                          ui.get(), &repeated[0][0]);
+  mnist__decrypt__result0(ctx->encoder_, evaluated_again, ui.get(),
+                          &repeated[0][0]);
   for (size_t i = 0; i < 10; ++i) {
     ASSERT_TRUE(std::isfinite(repeated[0][i])) << "repeated logit " << i;
     EXPECT_NEAR(repeated[0][i], actual[0][i], kTolerance)

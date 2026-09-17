@@ -24,6 +24,7 @@
 #include "lib/Dialect/Cheddar/Transforms/CheddarBufferize.h"
 #include "lib/Dialect/Cheddar/Transforms/ConfigureCryptoContext.h"
 #include "lib/Dialect/Cheddar/Transforms/FuseOps.h"
+#include "lib/Dialect/Cheddar/Transforms/PlanEvaluationKeys.h"
 #include "lib/Dialect/Comb/IR/CombDialect.h"
 #include "lib/Dialect/Debug/IR/DebugDialect.h"
 #include "lib/Dialect/Debug/Transforms/Passes.h"
@@ -395,6 +396,7 @@ int main(int argc, char** argv) {
   cheddar::registerCheddarBuildEntryInterfacePasses();
   cheddar::registerCheddarConfigureCryptoContextPasses();
   cheddar::registerCheddarFuseOpsPasses();
+  cheddar::registerCheddarPlanEvaluationKeysPasses();
   cggi::registerCGGIPasses();
   debug::registerDebugPasses();
   ckks::registerCKKSPasses();

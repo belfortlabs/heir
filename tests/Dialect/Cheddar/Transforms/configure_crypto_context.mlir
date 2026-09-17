@@ -54,8 +54,8 @@ module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [3602879
 // CHECK: call @main__setup
 // CHECK: call @main__keygen
 
-// With the Cyclops runtime the server reports its evaluation-key request and
-// the client generates the keys from it, so keygen itself prepares none.
+// Cyclops key requirements are planned after configuration; this helper
+// does not yet generate evaluation keys.
 // CYCLOPS: func.func @main__keygen
 // CYCLOPS-NOT: cheddar.prepare_rot_key
 // CYCLOPS-NOT: cheddar.prepare_linear_transform_keys

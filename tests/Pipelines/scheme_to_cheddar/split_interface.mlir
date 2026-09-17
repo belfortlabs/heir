@@ -7,7 +7,7 @@
 // CLIENT-H: #include "core/ClientContext.h"
 // CLIENT-H: namespace heir::generated::split::client
 // CLIENT-H: using Context = ::cyclops::ClientContext<word>;
-// CLIENT-H: EvaluationKeyRequest GetKeyRequest(Context&)
+// CLIENT-H: EvaluationKeyRequest GetKeyRequest()
 // CLIENT-H: KeyGen(const std::shared_ptr<Context>&)
 // CLIENT-CPP: #include "split_client.h"
 // CLIENT-CPP: ClientContext<word>::Create

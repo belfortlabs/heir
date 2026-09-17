@@ -10,6 +10,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "UserInterface.h"
 #include "core/Context.h"
@@ -18,7 +19,6 @@
 
 using word = uint64_t;
 using Ct = cheddar::Ciphertext<word>;
-using Evk = cheddar::EvaluationKey<word>;
 using EvkMap = cheddar::EvkMap<word>;
 using LinearTransform = cheddar::LinearTransform<word>;
 using Pt = cheddar::Plaintext<word>;
@@ -26,22 +26,17 @@ using UI = cheddar::UserInterface<word>;
 
 void lola__configure(std::shared_ptr<cheddar::Context<word>>& ctx,
                      std::unique_ptr<UI>& ui);
-void lola__encrypt__arg0(cheddar::Context<word>* ctx,
-                         const cheddar::Encoder<word>& encoder, const Evk& evk,
-                         float* input, UI* ui, std::array<Ct, 1>& out);
-void lola__preprocessing(
-    cheddar::Context<word>* ctx, const cheddar::Encoder<word>& encoder,
-    std::array<std::shared_ptr<LinearTransform>, 3>& transforms,
-    std::array<Pt, 3>& plaintexts);
-void lola__preprocessed(
-    cheddar::Context<word>* ctx, const cheddar::Encoder<word>& encoder, UI* ui,
-    const Evk& evk, const EvkMap& evk_map, const std::array<Ct, 1>& input,
-    const std::array<std::shared_ptr<LinearTransform>, 3>& transforms,
-    const std::array<Pt, 3>& plaintexts, std::array<Ct, 1>& out);
-void lola__decrypt__result0(cheddar::Context<word>* ctx,
-                            const cheddar::Encoder<word>& encoder,
-                            const Evk& evk, const std::array<Ct, 1>& input,
-                            UI* ui, float* out);
+void lola__encrypt_inputs(cheddar::Context<word>* ctx, UI* ui, float* input,
+                          Ct out[1]);
+void lola__preprocess(cheddar::Context<word>* ctx, std::string_view resources,
+                      std::shared_ptr<LinearTransform> transforms[3],
+                      Pt plaintexts[3]);
+void lola__evaluate(cheddar::Context<word>* ctx, const EvkMap& evk_map,
+                    const Ct input[1],
+                    const std::shared_ptr<LinearTransform> transforms[3],
+                    const Pt plaintexts[3], Ct out[1]);
+void lola__decrypt_outputs(cheddar::Context<word>* ctx, UI* ui,
+                           const Ct input[1], float* out);
 
 namespace {
 
@@ -96,17 +91,15 @@ TEST(CheddarLoLaE2E, MatchesPlaintextMnistLogits) {
   lola__configure(ctx, ui);
   ASSERT_NE(ctx, nullptr);
   ASSERT_NE(ui, nullptr);
-  const Evk& evk = ui->GetMultiplicationKey();
   const EvkMap& evk_map = ui->GetEvkMap();
 
-  std::array<Ct, 1> encrypted;
-  lola__encrypt__arg0(ctx.get(), ctx->encoder_, evk, &input[0][0][0][0],
-                      ui.get(), encrypted);
+  Ct encrypted[1];
+  lola__encrypt_inputs(ctx.get(), ui.get(), &input[0][0][0][0], encrypted);
 
-  std::array<Pt, 3> plaintexts;
-  std::array<std::shared_ptr<LinearTransform>, 3> transforms;
+  Pt plaintexts[3];
+  std::shared_ptr<LinearTransform> transforms[3];
   auto preprocessing_start = std::chrono::steady_clock::now();
-  lola__preprocessing(ctx.get(), ctx->encoder_, transforms, plaintexts);
+  lola__preprocess(ctx.get(), "", transforms, plaintexts);
   std::cerr << "LoLA preprocessing took "
             << std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                              preprocessing_start)
@@ -116,10 +109,10 @@ TEST(CheddarLoLaE2E, MatchesPlaintextMnistLogits) {
   ASSERT_NE(transforms[1], nullptr);
   ASSERT_NE(transforms[2], nullptr);
 
-  std::array<Ct, 1> evaluated;
+  Ct evaluated[1];
   auto evaluation_start = std::chrono::steady_clock::now();
-  lola__preprocessed(ctx.get(), ctx->encoder_, ui.get(), evk, evk_map,
-                     encrypted, transforms, plaintexts, evaluated);
+  lola__evaluate(ctx.get(), evk_map, encrypted, transforms, plaintexts,
+                 evaluated);
   std::cerr << "LoLA evaluation took "
             << std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                              evaluation_start)
@@ -129,8 +122,7 @@ TEST(CheddarLoLaE2E, MatchesPlaintextMnistLogits) {
   EXPECT_EQ(ctx->param_.NPToLevel(evaluated[0].GetNP()), 0);
 
   float actual[1][10];
-  lola__decrypt__result0(ctx.get(), ctx->encoder_, evk, evaluated, ui.get(),
-                         &actual[0][0]);
+  lola__decrypt_outputs(ctx.get(), ui.get(), evaluated, &actual[0][0]);
   int predicted_class = 0;
   for (size_t i = 0; i < 10; ++i) {
     ASSERT_TRUE(std::isfinite(actual[0][i])) << "logit " << i;
