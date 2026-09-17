@@ -1,7 +1,7 @@
 module(name = "heir")
 
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
-bazel_dep(name = "rules_cc", version = "0.2.22")
+bazel_dep(name = "rules_cc", version = "0.2.25")
 bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 
 # The planner does not use pkg-config; avoid bootstrapping it and GNU Make.
@@ -49,7 +49,7 @@ single_version_override(
 )
 
 bazel_dep(name = "rules_go", version = "0.62.0")
-bazel_dep(name = "rules_python", version = "1.8.0")
+bazel_dep(name = "rules_python", version = "1.8.4")
 bazel_dep(name = "googletest", version = "1.17.0")
 bazel_dep(name = "fuzztest", version = "20250805.0")
 bazel_dep(name = "google_benchmark", version = "1.9.1")
