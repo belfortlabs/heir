@@ -1,23 +1,16 @@
-"""PEP 517 backend: reuse an exact source wheel, or delegate to setuptools.
-
-This file is shared by the HEIR and Cyclops repositories. It has no dependency
-on either native toolchain. Metadata preparation never compiles native code.
-"""
+"""Reuse verified native files from source wheels in setuptools build_ext."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import json
 import os
 import re
 import subprocess
-import tarfile
 import tempfile
 import warnings
-from functools import wraps
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zipfile import ZipFile
@@ -28,8 +21,7 @@ except ModuleNotFoundError:
   import tomli as tomllib
 from packaging.tags import sys_tags
 from packaging.utils import canonicalize_name, parse_wheel_filename
-from setuptools import build_meta as delegate
-from wheel.wheelfile import WheelFile
+from setuptools.command.sdist import sdist
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"][
@@ -72,32 +64,6 @@ def source() -> dict:
           "A Git checkout or build-source.json is required"
       ) from None
     return json.loads(path.read_text())
-
-
-def source_version(function):
-  """Keep source metadata stable when a release adds a tag to this commit."""
-
-  @wraps(function)
-  def wrapped(*args, **kwargs):
-    key = "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_" + CONFIG[
-        "distribution"
-    ].upper().replace("-", "_")
-    if (
-        not CONFIG.get("scm-version")
-        or key in os.environ
-        or "SETUPTOOLS_SCM_PRETEND_VERSION" in os.environ
-    ):
-      return function(*args, **kwargs)
-    info = source()
-    os.environ[key] = (
-        "0.0.0+g" + info["commit"] + (".dirty" if info["dirty"] else "")
-    )
-    try:
-      return function(*args, **kwargs)
-    finally:
-      del os.environ[key]
-
-  return wrapped
 
 
 def profile() -> dict:
@@ -226,124 +192,67 @@ def prebuilt(info: dict, directory: Path) -> Path | None:
   return path
 
 
-def rewrite(
-    wheel: Path, destination: Path, info: dict, metadata: Path | None = None
-) -> str:
-  """Keep the native payload and platform tags; regenerate RECORD and metadata."""
-  with ZipFile(wheel) as original:
-    old = next(
-        name.split("/")[0]
-        for name in original.namelist()
-        if name.endswith(".dist-info/METADATA")
-    )
-    new = metadata.name if metadata else old
-    # Source SCM versions may differ from published release versions.
-    # The metadata hook remains authoritative; a later release cannot
-    # change the version already recorded by uv in its lockfile.
-    filename = (
-        new.removesuffix(".dist-info")
-        + "-"
-        + "-".join(wheel.name.split("-")[-3:])
-    )
-    target = destination / filename
-    with WheelFile(target, "w") as output:
-      for member in original.infolist():
-        if member.filename.endswith((
-            ".dist-info/RECORD",
-            ".dist-info/RECORD.jws",
-            ".dist-info/RECORD.p7s",
-        )):
-          continue
-        if member.filename == f"{CONFIG['module']}/toolchain.json":
-          continue
-        if member.filename.startswith(old + "/"):
-          relative = member.filename[len(old) + 1 :]
-          if (
-              metadata
-              and relative != "WHEEL"
-              and (metadata / relative).is_file()
-          ):
-            continue
-          member.filename = new + "/" + relative
-        output.writestr(member, original.read(member.orig_filename))
-      if metadata:
-        for path in metadata.rglob("*"):
-          if path.is_file() and path.name not in {"RECORD", "WHEEL"}:
-            output.write(
-                path, new + "/" + path.relative_to(metadata).as_posix()
-            )
-      output.writestr(
-          f"{CONFIG['module']}/toolchain.json",
-          json.dumps({**info, "profile": profile()}, sort_keys=True),
-      )
-  return filename
-
-
-@source_version
-def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+def configure_git_version() -> None:
+  """Keep Git versions stable; let setuptools-scm read release PKG-INFO."""
+  key = "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_" + CONFIG[
+      "distribution"
+  ].upper().replace("-", "_")
+  if (
+      (ROOT / "PKG-INFO").is_file()
+      or key in os.environ
+      or "SETUPTOOLS_SCM_PRETEND_VERSION" in os.environ
+  ):
+    return
   info = source()
-  destination = Path(wheel_directory).resolve()
-  destination.mkdir(parents=True, exist_ok=True)
+  os.environ[key] = (
+      "0.0.0+g" + info["commit"] + (".dirty" if info["dirty"] else "")
+  )
+
+
+class SourceDistribution(sdist):
+
+  def make_release_tree(self, base_dir, files):
+    info = source()
+    super().make_release_tree(base_dir, files)
+    path = Path(base_dir) / "build-source.json"
+    # setuptools can hardlink source files into the release tree.
+    path.unlink(missing_ok=True)
+    path.write_text(json.dumps(info))
+
+
+def record_source(build_lib: Path, info: dict) -> None:
+  path = build_lib / CONFIG["module"] / "toolchain.json"
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text(json.dumps({**info, "profile": profile()}, sort_keys=True))
+
+
+def restore_native(build_lib: Path, info: dict) -> bool:
+  """Restore only native files; setuptools owns all Python package metadata."""
   with tempfile.TemporaryDirectory() as temporary:
-    temp = Path(temporary)
-    candidate = None if config_settings else prebuilt(info, temp)
-    if candidate:
-      if metadata_directory is None:
-        metadata_directory = temp / delegate.prepare_metadata_for_build_wheel(
-            str(temp), config_settings
+    candidate = prebuilt(info, Path(temporary))
+    if candidate is None:
+      if os.environ.get("BELFORT_REQUIRE_WHEEL") == "1":
+        raise RuntimeError(
+            "No verified wheel matches the source commit and build profile"
         )
-      metadata = Path(metadata_directory)
-      if not metadata.name.endswith(".dist-info"):
-        metadata = next(metadata.glob("*.dist-info"))
-      return rewrite(candidate, destination, info, metadata)
-    if os.environ.get("BELFORT_REQUIRE_WHEEL") == "1":
-      raise RuntimeError(
-          "No verified wheel matches the source commit and build profile"
-      )
-    built = delegate.build_wheel(str(temp), config_settings, metadata_directory)
-    return rewrite(temp / built, destination, info)
-
-
-@source_version
-def build_sdist(sdist_directory, config_settings=None):
-  info = source()
-  with tempfile.TemporaryDirectory() as temporary:
-    filename = delegate.build_sdist(temporary, config_settings)
-    with tarfile.open(Path(temporary) / filename, "r:gz") as original:
-      with tarfile.open(
-          Path(sdist_directory) / filename, "w:gz", format=tarfile.PAX_FORMAT
-      ) as output:
-        for member in original.getmembers():
-          if not member.name.endswith("/build-source.json"):
-            output.addfile(
-                member,
-                original.extractfile(member) if member.isfile() else None,
-            )
-        payload = json.dumps(info).encode()
-        member = tarfile.TarInfo(
-            filename.removesuffix(".tar.gz") + "/build-source.json"
-        )
-        member.size = len(payload)
-        output.addfile(member, io.BytesIO(payload))
-  return filename
-
-
-get_requires_for_build_wheel = source_version(
-    delegate.get_requires_for_build_wheel
-)
-get_requires_for_build_sdist = source_version(
-    delegate.get_requires_for_build_sdist
-)
-prepare_metadata_for_build_wheel = source_version(
-    delegate.prepare_metadata_for_build_wheel
-)
-get_requires_for_build_editable = source_version(
-    delegate.get_requires_for_build_editable
-)
-prepare_metadata_for_build_editable = source_version(
-    delegate.prepare_metadata_for_build_editable
-)
-build_editable = source_version(delegate.build_editable)
+      return False
+    with ZipFile(candidate) as wheel:
+      for member in wheel.infolist():
+        name = PurePosixPath(member.filename)
+        if name.is_absolute() or ".." in name.parts or "\\" in member.filename:
+          raise ValueError(f"Unsafe wheel member: {member.filename}")
+        if member.is_dir() or not any(
+            member.filename == prefix
+            or member.filename.startswith(prefix + "/")
+            for prefix in CONFIG["payload"]
+        ):
+          continue
+        target = build_lib / member.filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(wheel.read(member))
+        target.chmod((member.external_attr >> 16) & 0o777 or 0o644)
+    record_source(build_lib, info)
+    return True
 
 
 def write_manifest(directory: Path) -> Path:

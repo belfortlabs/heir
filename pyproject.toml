@@ -1,12 +1,11 @@
 [build-system]
 requires = ["setuptools", "setuptools-scm", "packaging>=24", "wheel", "tomli; python_version < '3.11'"]
-build-backend = "wheel_backend"
-backend-path = ["build_support"]
+build-backend = "setuptools.build_meta"
 
 [tool.source-wheel]
 distribution = "belfort-heir"
 module = "heir"
-scm-version = true
+payload = ["heir/heir-opt", "heir/heir-translate", "heir/abc_bin", "heir/include", "heir/techmaps", "heir/.dylibs", "belfort_heir.libs"]
 repository = "belfortlabs/heir"
 profile = { compiler = "opt-cxx20", runtime = "cpu" }
 

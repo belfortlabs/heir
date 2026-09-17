@@ -210,7 +210,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_COMMIT: ${{ needs.setup-version.outputs.commit }}
         run: |
-          uv run --no-project --with setuptools --with wheel --with packaging python build_support/wheel_backend.py dist
+          uv run --no-project --with setuptools --with wheel --with packaging python build_support/source_wheels.py dist
           gh release create "wheels-$SOURCE_COMMIT" dist/*.whl dist/*.json \
             --target "$SOURCE_COMMIT" --title "Source wheels $SOURCE_COMMIT" \
             --notes "Verified wheels for the recorded source commit." --prerelease

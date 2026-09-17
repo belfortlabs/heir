@@ -15,6 +15,9 @@ from typing import Any
 import setuptools
 from setuptools.command import build_ext
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from build_support import source_wheels
+
 Path = pathlib.Path
 IS_WINDOWS = platform.system() == "Windows"
 IS_MAC = platform.system() == "Darwin"
@@ -137,12 +140,16 @@ class BuildBazelExtension(build_ext.build_ext):
       # place and use the development config to find the binaries, etc.
       return
 
+    info = source_wheels.source()
+    if source_wheels.restore_native(Path(self.build_lib), info):
+      return
     self.copy_yosys_techmaps()
     self.copy_runtime_headers()
     for ext in self.extensions:
       self.bazel_build(ext)
     # explicitly call `bazel shutdown` for graceful exit
     self.spawn(bazel_command() + ["shutdown"])
+    source_wheels.record_source(Path(self.build_lib), info)
 
   def copy_extensions_to_source(self):
     """Copy generated extensions into the source tree.
@@ -279,9 +286,12 @@ class BuildBazelExtension(build_ext.build_ext):
       )
 
 
+source_wheels.configure_git_version()
+
 setuptools.setup(
     cmdclass={
         "build_ext": BuildBazelExtension,
+        "sdist": source_wheels.SourceDistribution,
     },
     package_data={
         "heir": [

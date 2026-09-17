@@ -1,19 +1,17 @@
-The source wheel backend keeps a Git dependency at its pinned commit. It reuses a wheel only after commit, checksum, platform, and build profile checks.
+Setuptools handles package metadata, wheel files, and source archives. The native `build_ext` command reuses a verified binary payload before it invokes Bazel or CMake.
 
-Use `BELFORT_WHEEL_DIR` to supply a local directory of wheels and manifests. Otherwise, the backend checks the GitHub release `wheels-<full-commit>`. Set `TOOLCHAIN_GITHUB_TOKEN` for private release access.
+The helper accepts a wheel only when its commit, checksum, platform, and build profile match. The helper copies only the configured native files. The current source supplies all Python files and package metadata.
 
-Each wheel contains `<module>/toolchain.json`. Run `uv run --no-project --with setuptools --with wheel --with packaging python build_support/wheel_backend.py dist` to create the manifest.
+Set `BELFORT_WHEEL_DIR` to a local directory of wheels and manifests. Otherwise, the helper checks the GitHub release `wheels-<full-commit>`. Set `TOOLCHAIN_GITHUB_TOKEN` for private release access.
 
-Set `BELFORT_FORCE_SOURCE=1` for a release build or a custom native configuration. Set `BELFORT_REQUIRE_WHEEL=1` on CI consumers to prohibit native compilation. Use a fresh uv cache when you test either option. An existing uv cache entry can bypass the build backend.
+Each wheel contains `<module>/toolchain.json`. Run `uv run --no-project --with setuptools --with packaging python build_support/source_wheels.py dist` to create the manifest. Run this command after each build in a shared artifact directory.
 
-The metadata hook delegates to setuptools without a native build. Wheel reuse preserves the source metadata and the downloaded native payload. This permits a source SCM version to differ from a release version. The backend regenerates the wheel RECORD file after that change.
+Set `BELFORT_FORCE_SOURCE=1` for a release build or a custom native configuration. Set `BELFORT_REQUIRE_WHEEL=1` to prohibit native compilation. Custom build settings require `BELFORT_FORCE_SOURCE=1` because setuptools owns the PEP 517 settings.
 
-The source distribution contains `build-source.json` so a wheel build can retain its source identity without Git. Dirty checkouts bypass wheel reuse. Publication rejects wheels from dirty checkouts.
+An existing uv cache entry can bypass the native build command. Use separate uv caches for different native profiles. Reinstall the package when a profile changes. A force-source check also requires a fresh uv cache and package reinstallation.
 
-HEIR accepts `HEIR_BAZELRC` as an absolute path to a private Bazel configuration file. The file applies to both fetch and build commands. Use it for BuildBuddy credentials and executor configuration.
+The source archive contains `build-source.json` to retain the source identity without Git. Dirty checkouts bypass wheel reuse. Publication rejects wheels from dirty checkouts.
 
-Cyclops accepts `CYCLOPS_CUDA_VERSION`, `CYCLOPS_CUDA_ARCHITECTURES`, and `CYCLOPS_BUILD_JOBS`. Its default profile uses CUDA 13.0 with architectures 86 and 89. The wheel requires Linux x86-64, the declared CUDA runtime, libtommath, libquadmath, libgomp, and the system C++ runtime. It does not include a GPU driver. Its metadata preparation does not require CUDA.
+HEIR accepts `HEIR_BAZELRC` as an absolute path to a private Bazel configuration file. This file applies to fetch, build, and shutdown. HEIR Git builds use `0.0.0+g<full-commit>` as the package version. Explicit setuptools-scm overrides control release versions. Setuptools-scm retains the published version from an unpacked release archive.
 
-The wheel tag describes the Python and platform compatibility. The manifest also records the CUDA profile. Keep separate uv caches when you change the native build profile.
-
-Source builds use `0.0.0+g<full-commit>` as the package version. A new Git tag does not change the source dependency metadata. An explicit setuptools-scm version override still controls release versions.
+Cyclops accepts `CYCLOPS_CUDA_VERSION`, `CYCLOPS_CUDA_ARCHITECTURES`, and `CYCLOPS_BUILD_JOBS`. Its default profile uses CUDA 13.0 with architectures 86 and 89. The wheel requires Linux x86-64, the declared CUDA runtime, libtommath, libquadmath, libgomp, and the system C++ runtime. It does not include a GPU driver.
