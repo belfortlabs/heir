@@ -68,8 +68,8 @@ struct SecretId {
 enum class KeyMode { kInherit };
 #endif
 
-// Minimal parameter stub: the EvalPoly emitter reads the level/q-product via
-// NPToLevel / GetRescalePrimeProd (mirroring EvalMod).
+// Minimal parameter stub: the EvalPoly emitter reads the level and the
+// canonical per-level scale via NPToLevel / GetScale (mirroring EvalMod).
 template <typename word>
 struct Parameter {
   double GetScale(int level) const;

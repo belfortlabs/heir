@@ -278,15 +278,15 @@ func.func @boot(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map) -
 }
 
 // eval_poly uses CHEDDAR's EvalPoly<word> class the way EvalMod does: level and
-// scale are read off the input ciphertext, target_scale follows the rescale
-// recurrence, all inside a `{ }` block.
+// input scale are read off the input ciphertext, target_scale is the canonical
+// scale of the level the evaluation lands on, all inside a `{ }` block.
 // CHECK: func.func @eval_poly
 // CHECK-SAME: !emitc.opaque<"const Ciphertext<word>&">
 // CHECK: emitc.verbatim "{"
 // CHECK: emitc.verbatim "ConstContextPtr<word> _ep_cp(ConstContextPtr<word>(), {}
 // CHECK: emitc.verbatim "int _ep_lvl = {}->param_.NPToLevel({}.GetNP());"
 // CHECK: emitc.verbatim "double _ep_is = {}.GetScale();"
-// CHECK: emitc.verbatim "_ep_ts = _ep_ts * _ep_ts / {}->param_.GetRescalePrimeProd
+// CHECK: emitc.verbatim "double _ep_ts = {}->param_.GetScale(_ep_lvl - 2);"
 // CHECK: emitc.verbatim "EvalPoly<word> _ep(std::vector<double>{1, 2, 3}, _ep_lvl, _ep_is, _ep_ts, true);"
 // CHECK: emitc.verbatim "_ep.Compile(_ep_cp);"
 // CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());"
