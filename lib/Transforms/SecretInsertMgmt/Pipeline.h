@@ -14,6 +14,7 @@ struct InsertMgmtPipelineOptions {
   bool modReduceBeforeMulIncludeFirstMul;
   std::optional<int64_t> bootstrapWaterline;
   int64_t levelBudget;
+  bool levelZeroEncryption = false;
 };
 
 // Run the secret-insert-mgmt pipeline.
@@ -27,6 +28,12 @@ LogicalResult runInsertMgmtPipeline(Operation* top,
                                     const InsertMgmtPipelineOptions& options);
 
 void insertMgmtInitForPlaintexts(Operation* top, bool includeFloats);
+
+/// Marks the entry function's ciphertext arguments as encrypted at level zero
+/// and bootstraps each one at the top of the computation. The client then
+/// encrypts and transmits a single RNS limb, and the server pays a bootstrap
+/// to lift the ciphertext to the level the program needs.
+void encryptAtLevelZero(Operation* top);
 
 void insertModReduceBeforeOrAfterMult(Operation* top, bool afterMul,
                                       bool beforeMulIncludeFirstMul,

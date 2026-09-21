@@ -47,6 +47,11 @@ namespace heir {
 /// from the type and would otherwise assume the argument is fresh.
 constexpr StringRef kEntryLevelDepthAttrName = "lwe.entry_level_depth";
 
+/// Marks a ciphertext function argument that the client encrypts at the bottom
+/// of the modulus chain. The server bootstraps such an argument before its
+/// first use, so it enters the analysis exhausted rather than fresh.
+constexpr StringRef kLevelZeroArgAttrName = "mgmt.level_zero_arg";
+
 constexpr int kDefaultLevelBudget = 40;
 
 // A sentinel for the maximum allowable level before it is determined exactly
@@ -208,13 +213,27 @@ class LevelAnalysis
   friend class SecretnessAnalysisDependent<LevelAnalysis>;
 
   void setToEntryState(LevelLattice* lattice) override {
-    // A function argument is not necessarily fresh: a client may hand the
-    // entry point a ciphertext that has already consumed levels. Assuming
-    // depth 0 makes every value derived from such an argument look shallower
-    // than it is, which later reads as "this buffer still has levels left".
-    propagateIfChanged(
-        lattice,
-        lattice->join(LevelState(getEntryLevelDepth(lattice->getAnchor()))));
+    propagateIfChanged(lattice,
+                       lattice->join(getEntryLevel(lattice->getAnchor())));
+  }
+
+  /// The level `value` has on entry. A function argument is not necessarily
+  /// fresh: a client may hand the entry point a ciphertext that has already
+  /// consumed levels. Assuming depth 0 makes every value derived from such an
+  /// argument look shallower than it is, which later reads as "this buffer
+  /// still has levels left". Backend lowering records a concrete depth once
+  /// the modulus chain is known, so that is preferred; before then, an
+  /// argument encrypted at level zero is exhausted, which in this analysis'
+  /// 0-to-L convention is the MaxLevel sentinel.
+  static LevelState getEntryLevel(Value value) {
+    if (succeeded(
+            findAttributeAssociatedWith(value, kEntryLevelDepthAttrName))) {
+      return LevelState(getEntryLevelDepth(value));
+    }
+    if (succeeded(findAttributeAssociatedWith(value, kLevelZeroArgAttrName))) {
+      return LevelState(MaxLevel{});
+    }
+    return LevelState(0);
   }
 
   /// Levels already consumed by `value` on entry, from the attribute the
