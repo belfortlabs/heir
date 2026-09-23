@@ -1012,10 +1012,10 @@ struct ConvertApplyPreparedLinearTransform
 };
 
 // cheddar.eval_poly -> CHEDDAR's EvalPoly<word> class, used like EvalMod does:
-// the level/scale come from the input ciphertext and target_scale follows the
-// square/divide recurrence over GetRescalePrimeProd. Emitted as verbatim
-// statements (member calls on lvalue receivers, `ctx->param_`) in a `{ }` block
-// so the EvalPoly and its GPU power basis die right after Evaluate.
+// the level and the input scale come from the input ciphertext, and the target
+// scale is the canonical scale of the level the evaluation lands on. Emitted as
+// verbatim statements (member calls on lvalue receivers, `ctx->param_`) in a
+// `{ }` block so the EvalPoly and its GPU power basis die right after Evaluate.
 struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
@@ -1040,14 +1040,10 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
     // level + input scale taken from the actual input ciphertext.
     emit("int _ep_lvl = {}->param_.NPToLevel({}.GetNP());", {ctxV, in});
     emit("double _ep_is = {}.GetScale();", {in});
-    // target_scale recurrence: ts <- ts*ts / GetRescalePrimeProd(lvl - i).
-    emit("double _ep_ts = _ep_is;", {});
-    for (int64_t i = 0; i < levelConsumption; ++i)
-      emit(
-          "_ep_ts = _ep_ts * _ep_ts / {}->param_.GetRescalePrimeProd(_ep_lvl "
-          "- " +
-              Twine(i) + ");",
-          {ctxV});
+    // target scale: the canonical scale of the level the evaluation lands on.
+    emit("double _ep_ts = {}->param_.GetScale(_ep_lvl - " +
+             Twine(levelConsumption) + ");",
+         {ctxV});
     // Construct (no operands -> the coefficient brace-list is emitted
     // verbatim).
     std::string parity =
