@@ -379,6 +379,15 @@ void mlirToRLWEPipeline(OpPassManager& pm,
         secretImportExecutionResultOptions));
   }
 
+  if (options.levelZeroEncryption &&
+      (scheme != RLWEScheme::ckksScheme ||
+       options.ciphertextManagementStyle ==
+           CiphertextManagementStyle::orbitIlp)) {
+    llvm::errs() << "level-zero-encryption requires the CKKS scheme with "
+                    "greedy ciphertext management\n";
+    exit(EXIT_FAILURE);
+  }
+
   // place mgmt.op and MgmtAttr for BGV/CKKS
   // which is required for secret-to-<scheme> lowering
   switch (scheme) {
@@ -438,6 +447,8 @@ void mlirToRLWEPipeline(OpPassManager& pm,
         secretInsertMgmtCKKSOptions.bootstrapWaterline =
             options.greedyBootstrapWaterline;
         secretInsertMgmtCKKSOptions.levelBudget = options.greedyLevelBudget;
+        secretInsertMgmtCKKSOptions.levelZeroEncryption =
+            options.levelZeroEncryption;
         pm.addPass(createSecretInsertMgmtCKKS(secretInsertMgmtCKKSOptions));
       }
       break;
@@ -862,6 +873,7 @@ void torchLinalgToCkksBuilder(OpPassManager& manager,
   suboptions.annotateNoiseBound = options.annotateNoiseBound;
   suboptions.bfvModBits = options.bfvModBits;
   suboptions.greedyLevelBudget = options.greedyLevelBudget;
+  suboptions.levelZeroEncryption = options.levelZeroEncryption;
   suboptions.plaintextExecutionResultFileName =
       options.plaintextExecutionResultFileName;
   suboptions.codegenStrategy = options.codegenStrategy;

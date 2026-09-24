@@ -29,6 +29,7 @@
 #include "mlir/include/mlir/Analysis/DataFlowFramework.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Affine/IR/AffineOps.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"    // from @llvm-project
+#include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"   // from @llvm-project
 #include "mlir/include/mlir/Dialect/SCF/IR/SCF.h"        // from @llvm-project
 #include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"               // from @llvm-project
@@ -102,6 +103,14 @@ LogicalResult runInsertMgmtPipeline(Operation* top,
   LDBG(2) << "Starting insert-mgmt pipeline";
   peelPlaintextIterations(top);
   LLVM_DEBUG(top->dump());
+
+  // Runs before any level is assigned, so the rest of the pipeline sees the
+  // entry bootstraps as the start of the modulus chain.
+  if (options.levelZeroEncryption) {
+    LDBG(2) << "Bootstrapping level-zero entry arguments";
+    encryptAtLevelZero(top);
+    LLVM_DEBUG(top->dump());
+  }
 
   insertMgmtInitForPlaintexts(top, options.includeFloats);
   LLVM_DEBUG(top->dump());
@@ -224,6 +233,38 @@ LogicalResult runInsertMgmtPipeline(Operation* top,
   DataFlowSolver finalSolver;
   makeAndRunSolver(top, finalSolver, budget);
   return validateLevelAnalysis(finalSolver, top);
+}
+
+void encryptAtLevelZero(Operation* top) {
+  OpBuilder builder(top->getContext());
+  top->walk([&](func::FuncOp funcOp) {
+    // A client helper takes the cleartext and produces the ciphertext being
+    // described here; its own arguments are not ciphertexts to bootstrap.
+    if (funcOp.isDeclaration() || isClientHelper(funcOp)) return;
+
+    for (BlockArgument arg : funcOp.getArguments()) {
+      if (!isa<secret::SecretType>(arg.getType())) continue;
+      funcOp.setArgAttr(arg.getArgNumber(), kLevelZeroArgAttrName,
+                        builder.getUnitAttr());
+
+      // The computation reads the argument through the body of a
+      // secret.generic, which is where mgmt ops live. Any other use sees the
+      // level-zero ciphertext itself, which is what the client sent.
+      SmallVector<BlockArgument> bodyArgs;
+      for (OpOperand& use : arg.getUses()) {
+        if (auto genericOp = dyn_cast<secret::GenericOp>(use.getOwner())) {
+          bodyArgs.push_back(
+              genericOp.getBody()->getArgument(use.getOperandNumber()));
+        }
+      }
+      for (BlockArgument bodyArg : bodyArgs) {
+        builder.setInsertionPointToStart(bodyArg.getOwner());
+        auto bootstrapOp = mgmt::BootstrapOp::create(
+            builder, bodyArg.getLoc(), bodyArg.getType(), bodyArg);
+        bodyArg.replaceAllUsesExcept(bootstrapOp.getResult(), bootstrapOp);
+      }
+    }
+  });
 }
 
 void insertMgmtInitForPlaintexts(Operation* top, bool includeFloats) {

@@ -343,11 +343,14 @@ std::optional<int> getMaxLevel(Operation* root) {
       return;
     }
 
-    for (BlockArgument arg : funcOp.getArguments()) {
-      if (isa<secret::SecretType>(arg.getType())) {
-        maxLevel = std::max(maxLevel, (int)getLevelFromMgmtAttr(arg).getInt());
+    // Entry arguments are usually the deepest values in the program, but not
+    // when the client encrypts at level zero: there the chain starts at the
+    // bootstrap, so every value has to be considered.
+    walkValues(funcOp, [&](Value value) {
+      if (auto mgmtAttr = mgmt::findMgmtAttrAssociatedWith(value)) {
+        maxLevel = std::max(maxLevel, (int)mgmtAttr.getLevel());
       }
-    }
+    });
   });
   return maxLevel;
 }

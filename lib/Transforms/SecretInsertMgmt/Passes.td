@@ -91,6 +91,12 @@ def SecretInsertMgmtCKKS : Pass<"secret-insert-mgmt-ckks", "ModuleOp"> {
     The max level available after bootstrap is controlled by the option
     `bootstrap-waterline`.
 
+    With `level-zero-encryption`, the entry function's ciphertext arguments are
+    placed at level 0 and bootstrapped at the top of the computation. The
+    client then encrypts and transmits a single RNS limb per input, and the
+    server pays one bootstrap per ciphertext argument to lift it to the level
+    the program needs.
+
     Number of bootstrap consumed level is not shown here, which is
     handled by further lowering.
     TODO(#1207): handle it here so parameter selection can depend on it.
@@ -116,6 +122,9 @@ def SecretInsertMgmtCKKS : Pass<"secret-insert-mgmt-ckks", "ModuleOp"> {
            /*default=*/"0", "The number of remaining levels a ciphertext must have to initiate a bootstrap (relative headroom)">,
     Option<"levelBudget", "level-budget", "int", /*default=*/"-1",
            "An optional maximum level budget for the pipeline to assume">,
+    Option<"levelZeroEncryption", "level-zero-encryption", "bool",
+           /*default=*/"false",
+           "Have the client encrypt entry arguments at level zero and bootstrap them server-side before the computation">,
   ];
 }
 

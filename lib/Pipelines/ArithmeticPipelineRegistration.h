@@ -145,6 +145,12 @@ struct MlirToRLWEPipelineOptions : public LoopOptions {
       llvm::cl::desc("The number of remaining levels a ciphertext must have to "
                      "initiate a bootstrap (relative headroom)"),
       llvm::cl::init(0)};
+  PassOptions::Option<bool> levelZeroEncryption{
+      *this, "level-zero-encryption",
+      llvm::cl::desc("Encrypt entry arguments at the bottom of the modulus "
+                     "chain and bootstrap them server-side before the "
+                     "computation, so the client sends one RNS limb"),
+      llvm::cl::init(false)};
 
   // Orbit-ILP-specific options
   PassOptions::Option<int> orbitBootstrapWaterline{
