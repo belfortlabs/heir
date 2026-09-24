@@ -379,6 +379,15 @@ void mlirToRLWEPipeline(OpPassManager& pm,
         secretImportExecutionResultOptions));
   }
 
+  if (options.levelZeroEncryption &&
+      (scheme != RLWEScheme::ckksScheme ||
+       options.ciphertextManagementStyle ==
+           CiphertextManagementStyle::orbitIlp)) {
+    llvm::errs() << "level-zero-encryption requires the CKKS scheme with "
+                    "greedy ciphertext management\n";
+    exit(EXIT_FAILURE);
+  }
+
   // place mgmt.op and MgmtAttr for BGV/CKKS
   // which is required for secret-to-<scheme> lowering
   switch (scheme) {
