@@ -43,6 +43,7 @@ struct SecretInsertMgmtCKKS
     options.modReduceAfterMul = afterMul || !canEmitAdjustScale;
     options.modReduceBeforeMulIncludeFirstMul = beforeMulIncludeFirstMul;
     options.bootstrapWaterline = bootstrapWaterline;
+    options.levelZeroEncryption = levelZeroEncryption;
     LogicalResult result = runInsertMgmtPipeline(getOperation(), options);
 
     if (failed(result)) {
