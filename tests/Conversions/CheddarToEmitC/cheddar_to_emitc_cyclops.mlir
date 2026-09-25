@@ -14,7 +14,7 @@ module attributes {cheddar.runtime = "cyclops"} {
   }
 
   // CHECK: func.func @hrot
-  // CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey(5, {}->BootSecretId(), {}->param_, 4, KeyMode::kInherit), 5);"
+  // CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey(5, {}->NativeSecretId(), {}->param_, 4, KeyMode::kInherit), 5);"
   func.func @hrot(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
     %dest = tensor.empty() : tensor<!ciphertext>
     %result = cheddar.hrot %ctx, %evk, %ct, %dest {level = 4 : i64, static_distance = 5 : i64} : (!context, !evk_map, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
@@ -22,7 +22,7 @@ module attributes {cheddar.runtime = "cyclops"} {
   }
 
   // CHECK: func.func @hconj_add
-  // CHECK: emitc.verbatim "{}->HConjAdd({}, {}, {}, {}.GetConjugationKey({}->BootSecretId()));"
+  // CHECK: emitc.verbatim "{}->HConjAdd({}, {}, {}, {}.GetConjugationKey({}->NativeSecretId()));"
   func.func @hconj_add(%ctx: !context, %evk: !evk_map, %lhs: tensor<!ciphertext>, %rhs: tensor<!ciphertext>) -> tensor<!ciphertext> {
     %dest = tensor.empty() : tensor<!ciphertext>
     %result = cheddar.hconj_add %ctx, %evk, %lhs, %rhs, %dest : (!context, !evk_map, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>

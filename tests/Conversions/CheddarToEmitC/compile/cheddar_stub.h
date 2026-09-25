@@ -256,7 +256,7 @@ class Context {
   Parameter<word> param_;
   Encoder<word> encoder_;
 #ifdef HEIR_CYCLOPS_STUB
-  SecretId BootSecretId() const;
+  SecretId NativeSecretId() const;
   Plaintext<word> NewPlaintext() const;
 #endif
 };

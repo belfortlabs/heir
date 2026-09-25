@@ -213,7 +213,7 @@ def Cheddar_PrepareBootstrapOp : Cheddar_ReadWriteDpsOp<
     `useCyclopsRuntime` selects Cyclops' two spellings of that sequence: it
     names the homomorphic DFT preparation `PrepareHomomorphicDFT`, and the last
     call names the secret the keys belong to
-    (`ui->PrepareRotationKey(req, ctx->BootSecretId())`); see `prepare_rot_key`.
+    (`ui->PrepareRotationKey(req, ctx->NativeSecretId())`); see `prepare_rot_key`.
   }];
   let arguments = (ins
     Cheddar_BootContextLike:$ctx,
@@ -268,7 +268,7 @@ def Cheddar_PrepareRotKeyOp : Cheddar_ReadWriteDpsOp<
 
     Cyclops indexes every evaluation key by the secret it must match, so its
     `PrepareRotationKey` takes that handle and has no two-argument overload.
-    The optional `$ctx` operand supplies it (`ctx->BootSecretId()`), and its
+    The optional `$ctx` operand supplies it (`ctx->NativeSecretId()`), and its
     presence is what selects the Cyclops form.
   }];
   let arguments = (ins
@@ -362,7 +362,7 @@ def Cheddar_EncodeOp : Cheddar_DpsOp<"encode", [PlaintextEncodeOpInterface]> {
     Cyclops containers start untagged and every operation that needs a secret
     rejects an untagged one, so a plaintext that will be encrypted must be
     tagged first. The optional `$ctx` operand names that secret
-    (`pt.SetSecretId(ctx->BootSecretId())`, the same tag
+    (`pt.SetSecretId(ctx->NativeSecretId())`, the same tag
     `UserInterface::EncryptMessage` applies), and its presence is what emits
     the tag.
   }];

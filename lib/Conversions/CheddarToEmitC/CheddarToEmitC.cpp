@@ -471,7 +471,7 @@ struct ConvertPrepareRotKey
       VerbatimOp::create(
           rewriter, op.getLoc(),
           "{}->PrepareRotationKey(" + intLit(op.getDistanceAttr()) +
-              ", {}->BootSecretId(), " + intLit(op.getMaxLevelAttr()) + ");",
+              ", {}->NativeSecretId(), " + intLit(op.getMaxLevelAttr()) + ");",
           ValueRange{adaptor.getUi(), ctx});
       rewriter.eraseOp(op);
       return success();
@@ -521,9 +521,10 @@ struct ConvertPrepareLinearTransformKeys
     VerbatimOp::create(rewriter, loc, "EvkRequest _ltk_req;", ValueRange{});
     VerbatimOp::create(rewriter, loc, "_ltk.AddRequiredRotations(_ltk_req);",
                        ValueRange{});
-    VerbatimOp::create(rewriter, loc,
-                       "{}->PrepareRotationKey(_ltk_req, {}->BootSecretId());",
-                       ValueRange{adaptor.getUi(), ctx});
+    VerbatimOp::create(
+        rewriter, loc,
+        "{}->PrepareRotationKey(_ltk_req, {}->NativeSecretId());",
+        ValueRange{adaptor.getUi(), ctx});
     VerbatimOp::create(rewriter, loc, "}", ValueRange{});
     rewriter.eraseOp(op);
     return success();
@@ -577,7 +578,7 @@ struct ConvertPrepareBootstrap
     if (cyclops) {
       VerbatimOp::create(
           rewriter, op.getLoc(),
-          "{}->PrepareRotationKey(boot_evk_req, {}->BootSecretId());",
+          "{}->PrepareRotationKey(boot_evk_req, {}->NativeSecretId());",
           ValueRange{adaptor.getUi(), context});
     } else {
       VerbatimOp::create(rewriter, op.getLoc(),
@@ -645,7 +646,7 @@ struct ConvertEncode : public OpConversionPattern<cheddar::EncodeOp> {
                          "{}.MatchRing({}->NewPlaintext());",
                          ValueRange{out, ctx});
       VerbatimOp::create(rewriter, op.getLoc(),
-                         "{}.SetSecretId({}->BootSecretId());",
+                         "{}.SetSecretId({}->NativeSecretId());",
                          ValueRange{out, ctx});
     }
     // TODO(#2364): Use scale from op once HEIR can do precise scale tracking.
@@ -744,7 +745,7 @@ struct ConvertHRot : public OpConversionPattern<cheddar::HRotOp> {
       std::string code = "{}->HRot({}, {}, {}.GetRotationKey(" + d;
       SmallVector<Value> operands{ctx, out, in, evk};
       if (useCyclopsRuntime(op)) {
-        code += ", {}->BootSecretId(), {}->param_, " + level +
+        code += ", {}->NativeSecretId(), {}->param_, " + level +
                 ", KeyMode::kInherit";
         operands.append({ctx, ctx});
       }
@@ -756,7 +757,7 @@ struct ConvertHRot : public OpConversionPattern<cheddar::HRotOp> {
       std::string code = "{}->HRot({}, {}, {}.GetRotationKey({}";
       SmallVector<Value> operands{ctx, out, in, evk, dyn};
       if (useCyclopsRuntime(op)) {
-        code += ", {}->BootSecretId(), {}->param_, " + level +
+        code += ", {}->NativeSecretId(), {}->param_, " + level +
                 ", KeyMode::kInherit";
         operands.append({ctx, ctx});
       }
@@ -783,8 +784,8 @@ struct ConvertHRotAdd : public OpConversionPattern<cheddar::HRotAddOp> {
     SmallVector<Value> operands{ctx, adaptor.getOutput(), adaptor.getInput(),
                                 adaptor.getAddend(), evk};
     if (useCyclopsRuntime(op)) {
-      code +=
-          ", {}->BootSecretId(), {}->param_, " + level + ", KeyMode::kInherit";
+      code += ", {}->NativeSecretId(), {}->param_, " + level +
+              ", KeyMode::kInherit";
       operands.append({ctx, ctx});
     }
     code += "), " + d + ");";
@@ -806,7 +807,7 @@ struct ConvertHConj : public OpConversionPattern<cheddar::HConjOp> {
     SmallVector<Value> operands{ctx, adaptor.getOutput(), adaptor.getInput(),
                                 evk};
     if (useCyclopsRuntime(op)) {
-      code += "{}->BootSecretId()";
+      code += "{}->NativeSecretId()";
       operands.push_back(ctx);
     }
     code += "));";
@@ -828,7 +829,7 @@ struct ConvertHConjAdd : public OpConversionPattern<cheddar::HConjAddOp> {
     SmallVector<Value> operands{ctx, adaptor.getOutput(), adaptor.getInput(),
                                 adaptor.getAddend(), evk};
     if (useCyclopsRuntime(op)) {
-      code += "{}->BootSecretId()";
+      code += "{}->NativeSecretId()";
       operands.push_back(ctx);
     }
     code += "));";
