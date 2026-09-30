@@ -18,8 +18,11 @@ namespace mlir {
 namespace heir {
 namespace cheddar {
 
-// The bootstrap split a bootstrapping program's key planning needs,
-// recorded by cheddar-configure-crypto-context on the Cyclops client setup.
+// Module attributes generate-param-ckks records when the modulus chain comes
+// from a CHEDDAR parameter file rather than from HEIR's own prime generation:
+// the runtime parameter set and, for programs that bootstrap, the bootstrap
+// split. cheddar-configure-crypto-context consumes both.
+constexpr ::llvm::StringLiteral kParameterSetAttrName = "cheddar.parameter_set";
 constexpr ::llvm::StringLiteral kBootstrapConfigAttrName =
     "cheddar.bootstrap_config";
 

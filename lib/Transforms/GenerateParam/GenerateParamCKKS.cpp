@@ -2,6 +2,8 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "lib/Analysis/LevelAnalysis/LevelAnalysis.h"
 #include "lib/Analysis/RangeAnalysis/RangeAnalysis.h"
@@ -9,13 +11,20 @@
 #include "lib/Dialect/CKKS/IR/CKKSAttributes.h"
 #include "lib/Dialect/CKKS/IR/CKKSDialect.h"
 #include "lib/Dialect/CKKS/IR/CKKSEnums.h"
+#include "lib/Dialect/Cheddar/IR/CheddarAttributes.h"
 #include "lib/Dialect/HEIRInterfaces.h"
 #include "lib/Dialect/Mgmt/IR/MgmtAttributes.h"
+#include "lib/Dialect/Mgmt/IR/MgmtDialect.h"
+#include "lib/Dialect/Mgmt/Transforms/AnnotateMgmt.h"
 #include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Parameters/CKKS/Params.h"
+#include "lib/Parameters/Cheddar/ParameterFile.h"
+#include "lib/Parameters/RLWEParams.h"
 #include "lib/Utils/LogArithmetic.h"
+#include "llvm/include/llvm/ADT/SmallVector.h"             // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"               // from @llvm-project
 #include "llvm/include/llvm/Support/DebugLog.h"            // from @llvm-project
+#include "llvm/include/llvm/Support/Error.h"               // from @llvm-project
 #include "mlir/include/mlir/Analysis/DataFlow/Utils.h"     // from @llvm-project
 #include "mlir/include/mlir/Analysis/DataFlowFramework.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"                 // from @llvm-project
@@ -24,6 +33,7 @@
 #include "mlir/include/mlir/IR/Diagnostics.h"              // from @llvm-project
 #include "mlir/include/mlir/IR/Operation.h"                // from @llvm-project
 #include "mlir/include/mlir/IR/Value.h"                    // from @llvm-project
+#include "mlir/include/mlir/Pass/PassManager.h"            // from @llvm-project
 #include "mlir/include/mlir/Support/LLVM.h"                // from @llvm-project
 #include "mlir/include/mlir/Support/WalkResult.h"          // from @llvm-project
 
@@ -64,6 +74,22 @@ constexpr int kCheddarBootArithmeticLevels =
 constexpr int kCheddarBootModBits = 50;
 constexpr int kCheddarBootOverhead =
     kCheddarBootNumCts + kCheddarBootNumStc + kCheddarBootEvalModLevels;
+
+constexpr int kDefaultScalingModBits = 45;
+
+// The bootstrap message ratio for a parameter file that does not state one:
+// log2(q0 / scale) less two bits. A smaller ratio puts large messages at the
+// edge of EvalMod's approximation domain, a larger one leaves too little
+// room above the noise floor; two bits below the headroom balanced the two
+// on scale-snu chains.
+constexpr double kLogMessageRatioMargin = 2.0;
+
+DenseI64ArrayAttr primesAttr(MLIRContext* context,
+                             const std::vector<uint64_t>& primes) {
+  SmallVector<int64_t> values(primes.begin(), primes.end());
+  return DenseI64ArrayAttr::get(context, values);
+}
+
 }  // namespace
 
 struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
@@ -114,8 +140,200 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
     return level0ModBits;
   }
 
+  // Takes the modulus chain from a CHEDDAR parameter file. The mid-end keeps
+  // its one-modulus-per-level model: each level's model prime has the bit
+  // size of the file's modulus growth at that level (its level-0 modulus for
+  // level 0), which is all the scale bookkeeping reads. The file's own primes
+  // and level layout are recorded for the backend, which is where they are
+  // consumed.
+  LogicalResult importCheddarParameters(int computeMaxLevel,
+                                        bool hasBootstrap) {
+    Operation* module = getOperation();
+    MLIRContext* context = &getContext();
+    if (!moduleIsCheddar(module))
+      return module->emitError(
+          "cheddar-parameter-file requires a Cheddar backend module "
+          "(annotate-module backend=cheddar)");
+    llvm::Expected<cheddar::ParameterFile> file =
+        cheddar::ParameterFile::load(cheddarParameterFile);
+    if (!file) return module->emitError() << llvm::toString(file.takeError());
+    if (scalingModBits != 0 && scalingModBits != file->logDefaultScale)
+      return module->emitError()
+             << "scaling-mod-bits=" << static_cast<int>(scalingModBits)
+             << " conflicts with the " << file->logDefaultScale
+             << "-bit scale of " << cheddarParameterFile;
+
+    int minLogDegree = 0;
+    while ((int64_t{1} << minLogDegree) <
+           2 * static_cast<int64_t>(minSlotCount))
+      ++minLogDegree;
+    const cheddar::RingProfile* profile =
+        file->selectProfile(minLogDegree, computeMaxLevel, hasBootstrap);
+    if (!profile) {
+      InFlightDiagnostic diagnostic = module->emitError();
+      diagnostic << "no ring profile in " << cheddarParameterFile << " holds "
+                 << computeMaxLevel << " levels"
+                 << (hasBootstrap ? " plus the bootstrap chain" : "")
+                 << " at logN >= " << minLogDegree << "; the file offers";
+      for (const cheddar::RingProfile& candidate : file->profiles) {
+        diagnostic << " logN " << candidate.logDegree << ": "
+                   << candidate.defaultEncryptionLevel << " levels";
+        if (file->hasBootstrap(candidate))
+          diagnostic << " (" << file->topLevel(candidate, true)
+                     << " with bootstrapping)";
+        diagnostic << ",";
+      }
+      return diagnostic;
+    }
+    // A bootstrap lands at a fixed level of the file's chain, and HEIR's
+    // level model puts bootstrap outputs at the program's top level. A
+    // program whose deepest stretch between bootstraps is shorter than the
+    // residual chain is placed at the top of the chain so its bootstraps land
+    // where the runtime's do, and its lowest levels go unused. Without a
+    // bootstrap the program computes on the chain's lowest levels, up to its
+    // own depth. Either way the top is pinned so that later level annotation
+    // keeps the program where the chain was sized.
+    if (hasBootstrap) computeMaxLevel = file->topLevel(*profile, true);
+    OpBuilder builder(context);
+    module->setAttr(mgmt::MgmtDialect::kTopLevelAttrName,
+                    builder.getI64IntegerAttr(computeMaxLevel));
+    OpPassManager annotate("builtin.module");
+    annotate.addPass(mgmt::createAnnotateMgmt());
+    if (failed(runPipeline(annotate, module))) return failure();
+    // CHEDDAR's Parameter requires its top level to hold every prime of the
+    // pools, so the file's chain is used whole.
+    std::vector<cheddar::LevelLayout> layout = file->levels;
+    int64_t defaultEncryptionLevel =
+        hasBootstrap ? profile->defaultEncryptionLevel : computeMaxLevel;
+    LDBG() << "Selected ring profile logN=" << profile->logDegree << " with "
+           << layout.size() << " levels";
+
+    // The file fixes the level-0 headroom; report when the program's values
+    // at level 0 are known to need more, the way an explicit first-mod-bits
+    // choice is checked.
+    double headroom = file->log2Modulus(layout[0]) - file->logDefaultScale;
+    if (std::optional<int> extraBits = getExtraBitsForLevel0();
+        extraBits && *extraBits > headroom)
+      module->emitWarning()
+          << "Range analysis indicates that level 0 must be larger than the "
+             "scaling modulus by at least "
+          << *extraBits << " bits, but " << cheddarParameterFile << " leaves "
+          << headroom << " bits";
+
+    int ringDim = 1 << profile->logDegree;
+    std::vector<int64_t> existing;
+    std::vector<int64_t> qi;
+    std::vector<int64_t> pi;
+    std::vector<double> logqi;
+    std::vector<double> logpi;
+    for (size_t level = 0; level < layout.size(); ++level) {
+      int bits = std::llround(file->log2ModulusGrowth(layout, level));
+      int64_t prime = findPrime(bits, ringDim, existing);
+      existing.push_back(prime);
+      qi.push_back(prime);
+      logqi.push_back(std::log2(prime));
+    }
+    for (uint64_t aux : file->auxPrimes) {
+      int bits = std::llround(std::log2(static_cast<double>(aux)));
+      int64_t prime = findPrime(bits, ringDim, existing);
+      existing.push_back(prime);
+      pi.push_back(prime);
+      logpi.push_back(std::log2(prime));
+    }
+    int dnum =
+        static_cast<int>(std::ceil(static_cast<double>(qi.size()) / pi.size()));
+    ckks::SchemeParam schemeParam(
+        RLWESchemeParam(ringDim, layout.size() - 1, logqi, qi, dnum, logpi, pi,
+                        usePublicKey, /*encryptionTechniqueExtended=*/true),
+        file->logDefaultScale);
+    LDBG() << "Scheme Param (model chain):\n" << schemeParam;
+
+    module->setAttr(kRequestedSlotCountAttrName,
+                    builder.getI64IntegerAttr(minSlotCount));
+    module->setAttr(kActualSlotCountAttrName,
+                    builder.getI64IntegerAttr(ringDim / 2));
+    module->setAttr(ckks::CKKSDialect::kSchemeParamAttrName,
+                    ckks::SchemeParamAttr::get(
+                        context, profile->logDegree,
+                        DenseI64ArrayAttr::get(context, ArrayRef(qi)),
+                        DenseI64ArrayAttr::get(context, ArrayRef(pi)),
+                        file->logDefaultScale,
+                        usePublicKey ? ckks::CKKSEncryptionType::pk
+                                     : ckks::CKKSEncryptionType::sk,
+                        ckks::CKKSEncryptionTechnique::extended));
+
+    SmallVector<int64_t> levelConfig;
+    for (const cheddar::LevelLayout& level : layout) {
+      levelConfig.push_back(level.numMain);
+      levelConfig.push_back(level.numTerminal);
+    }
+    DenseI64ArrayAttr additionalBase;
+    if (file->additionalBase != cheddar::LevelLayout{})
+      additionalBase = builder.getDenseI64ArrayAttr(
+          {file->additionalBase.numMain, file->additionalBase.numTerminal});
+    // Rings that do not bootstrap keep a single secret: the sparse companion
+    // takes the dense weight.
+    int64_t sparseHammingWeight =
+        hasBootstrap ? file->boot->sparseHammingWeight : profile->hammingWeight;
+    module->setAttr(
+        cheddar::kParameterSetAttrName,
+        cheddar::ParameterSetAttr::get(
+            context, profile->logDegree, file->logDefaultScale,
+            primesAttr(context, file->mainPrimes),
+            primesAttr(context, file->auxPrimes),
+            file->terminalPrimes.empty()
+                ? DenseI64ArrayAttr()
+                : primesAttr(context, file->terminalPrimes),
+            builder.getDenseI64ArrayAttr(levelConfig), file->wordBits(),
+            defaultEncryptionLevel, additionalBase, profile->hammingWeight,
+            sparseHammingWeight));
+    if (!hasBootstrap) return success();
+
+    const cheddar::BootstrapConfig& boot = *file->boot;
+    int64_t logMessageRatio = boot.logMessageRatio;
+    if (logMessageRatio <= 0) {
+      logMessageRatio =
+          static_cast<int64_t>(std::floor(headroom - kLogMessageRatioMargin));
+      if (logMessageRatio <= 0)
+        return module->emitError()
+               << cheddarParameterFile << " leaves " << headroom
+               << " bits between q0 and the scale, too few for a bootstrap";
+    }
+    module->setAttr(cheddar::kBootstrapConfigAttrName,
+                    cheddar::BootstrapConfigAttr::get(
+                        context, boot.numCtsLevels, boot.numStcLevels,
+                        boot.numEvalModLevels, logMessageRatio));
+    return success();
+  }
+
   void runOnOperation() override {
     LDBG() << "Starting generate-param-ckks pass";
+
+    std::optional<int> maxLevel = getMaxLevel(getOperation());
+    LDBG() << "Max level identified as " << maxLevel;
+
+    if (auto schemeParamAttr =
+            getOperation()->getAttrOfType<ckks::SchemeParamAttr>(
+                ckks::CKKSDialect::kSchemeParamAttrName)) {
+      // TODO: put this in validate-noise once CKKS noise model is in
+      auto schemeParam = ckks::getSchemeParamFromAttr(schemeParamAttr);
+      if (schemeParam.getLevel() < maxLevel.value_or(0)) {
+        getOperation()->emitOpError()
+            << "The level in the scheme param is smaller than the max level.\n";
+        signalPassFailure();
+        return;
+      }
+      return;
+    }
+
+    bool hasBootstrap = containsBootstrap(getOperation());
+    if (!cheddarParameterFile.empty()) {
+      if (failed(importCheddarParameters(maxLevel.value_or(0), hasBootstrap)))
+        signalPassFailure();
+      return;
+    }
+
+    if (scalingModBits == 0) scalingModBits = kDefaultScalingModBits;
 
     if (firstModBits == 0 || validateFirstModBits) {
       auto extraBits = getExtraBitsForLevel0();
@@ -141,30 +359,12 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
     }
     LDBG() << "First modulus finalized as having " << firstModBits << " bits";
 
-    std::optional<int> maxLevel = getMaxLevel(getOperation());
-    LDBG() << "Max level identified as " << maxLevel;
-
-    if (auto schemeParamAttr =
-            getOperation()->getAttrOfType<ckks::SchemeParamAttr>(
-                ckks::CKKSDialect::kSchemeParamAttrName)) {
-      // TODO: put this in validate-noise once CKKS noise model is in
-      auto schemeParam = ckks::getSchemeParamFromAttr(schemeParamAttr);
-      if (schemeParam.getLevel() < maxLevel.value_or(0)) {
-        getOperation()->emitOpError()
-            << "The level in the scheme param is smaller than the max level.\n";
-        signalPassFailure();
-        return;
-      }
-      return;
-    }
-
     // The data occupies minSlotCount slots regardless of how large the ring
     // has to be, so the layouts' packing width is recorded before any bump
     // below. Widening it would desync the packed layouts from the ciphertexts.
     int64_t requestedSlotCount = minSlotCount;
 
     bool cheddarTarget = moduleIsCheddar(getOperation());
-    bool hasBootstrap = containsBootstrap(getOperation());
 
     // Lattigo and scale-snu/cheddar use the extended-encryption CKKS
     // parameter path.

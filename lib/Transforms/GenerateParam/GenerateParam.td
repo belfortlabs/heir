@@ -162,6 +162,7 @@ def GenerateParamCKKS : Pass<"generate-param-ckks"> {
 
   let dependentDialects = [
     "mlir::heir::ckks::CKKSDialect",
+    "mlir::heir::cheddar::CheddarDialect",
   ];
 
   let options = [
@@ -171,8 +172,10 @@ def GenerateParamCKKS : Pass<"generate-param-ckks"> {
            /*default=*/"55", "Default number of bits of the first prime "
            "coefficient modulus to use for the ciphertext space.">,
     Option<"scalingModBits", "scaling-mod-bits", "int",
-           /*default=*/"45", "Default number of bits of the scaling prime "
-           "coefficient modulus to use for the ciphertext space.">,
+           /*default=*/"0", "Number of bits of the scaling prime coefficient "
+           "modulus to use for the ciphertext space. 0 selects 45 bits, or the "
+           "scale of the cheddar-parameter-file, which any other value must "
+           "equal.">,
     Option<"validateFirstModBits", "validate-first-mod-bits", "bool",
            /*default=*/"false", "Add extra validation on the choice of first-mod-bits">,
     Option<"usePublicKey", "use-public-key", "bool", /*default=*/"true",
@@ -185,6 +188,20 @@ def GenerateParamCKKS : Pass<"generate-param-ckks"> {
     Option<"reducedError", "reduced-error", "bool",
            /*default=*/"false", "If true, uses the prime selection logic in Reduced Error paper "
            "(https://eprint.iacr.org/2020/1118).">,
+    Option<"cheddarParameterFile", "cheddar-parameter-file", "std::string",
+           /*default=*/"\"\"", "Take the modulus chain from this CHEDDAR parameter "
+           "file (a scale-snu/cheddar-fhe bootparam JSON) instead of "
+           "generating primes: the "
+           "smallest ring that holds the program is chosen, the scheme "
+           "parameters model its per-level modulus growth, and the file's "
+           "runtime parameter set (primes, level layout, bootstrap split) is "
+           "recorded for the Cheddar backend as `cheddar.parameter_set` / "
+           "`cheddar.bootstrap_config`. Cheddar backend modules only. Known "
+           "issue: scale-snu CHEDDAR's hoisted BSGS linear transform (the "
+           "non-min-KS path) gives wrong results when the auxiliary primes "
+           "cover the transform's level (a single key-switching digit), which "
+           "CHEDDAR's files, with 7 or 12 auxiliary primes, reach at low "
+           "levels; the Cyclops runtime is not affected.">,
   ];
 }
 

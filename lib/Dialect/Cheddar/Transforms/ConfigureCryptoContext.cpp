@@ -346,6 +346,61 @@ struct CheddarConfigureCryptoContext
                                  denseHammingWeight, sparseHammingWeight);
   }
 
+  // The runtime parameters of a module whose chain was imported from a
+  // CHEDDAR parameter file (see generate-param-ckks): the file's layout is
+  // taken as is; only the message headroom may be overridden by the option.
+  FailureOr<ParameterSetAttr> parameterSetFromModule(
+      func::FuncOp entry, ParameterSetAttr parameterSet, bool bootstraps,
+      BootstrapConfigAttr& bootstrap) {
+    // The Cyclops runtime header is written for 64-bit words.
+    if (useCyclopsRuntime && parameterSet.getWordBitsOrDefault() != 64) {
+      entry.emitOpError(
+          "the Cyclops runtime supports 64-bit words only, but the parameter "
+          "set is for 32-bit words");
+      return failure();
+    }
+    if (!bootstraps) {
+      bootstrap = nullptr;
+      return parameterSet;
+    }
+    if (!bootstrap) {
+      entry.emitOpError(
+          "program bootstraps, but the parameter set carries no bootstrap "
+          "chain");
+      return failure();
+    }
+    if (!useCyclopsRuntime &&
+        bootstrap.getNumEvalModLevels() != kBootstrapEvalModLevels) {
+      entry.emitOpError() << "scale-snu CHEDDAR's EvalMod consumes "
+                          << kBootstrapEvalModLevels
+                          << " levels, but the parameter set reserves "
+                          << bootstrap.getNumEvalModLevels();
+      return failure();
+    }
+    // The bootstrap lands SlotToCoeff's levels below where SlotToCoeff
+    // starts. scale-snu's BootContext requires the default encryption level
+    // to be that start; Cyclops' accepts any level in between.
+    int64_t stcStart = parameterSet.getMaxLevel() -
+                       bootstrap.getNumCtsLevels() -
+                       bootstrap.getNumEvalModLevels();
+    int64_t endLevel = stcStart - bootstrap.getNumStcLevels();
+    int64_t defaultLevel = parameterSet.getDefaultEncryptionLevelOrDefault();
+    if (useCyclopsRuntime ? (defaultLevel < endLevel || defaultLevel > stcStart)
+                          : defaultLevel != stcStart) {
+      entry.emitOpError() << "the default encryption level " << defaultLevel
+                          << " does not fit the bootstrap, whose SlotToCoeff "
+                             "runs from level "
+                          << stcStart << " down to level " << endLevel;
+      return failure();
+    }
+    if (logMessageRatio >= 0)
+      bootstrap = BootstrapConfigAttr::get(
+          &getContext(), bootstrap.getNumCtsLevels(),
+          bootstrap.getNumStcLevels(), bootstrap.getNumEvalModLevels(),
+          logMessageRatio);
+    return parameterSet;
+  }
+
   void runOnOperation() override {
     auto moduleOp = cast<ModuleOp>(getOperation());
     MLIRContext* ctx = &getContext();
@@ -363,7 +418,9 @@ struct CheddarConfigureCryptoContext
 
     auto schemeParamAttr = moduleOp->getAttrOfType<ckks::SchemeParamAttr>(
         ckks::CKKSDialect::kSchemeParamAttrName);
-    if (!schemeParamAttr) return;
+    auto importedParameterSet =
+        moduleOp->getAttrOfType<ParameterSetAttr>(kParameterSetAttrName);
+    if (!schemeParamAttr && !importedParameterSet) return;
 
     auto entry = detectEntryFunction(moduleOp, entryFunction);
     if (!entry) {
@@ -405,9 +462,14 @@ struct CheddarConfigureCryptoContext
       bootstrapNumSlots = std::max(slotsAttr.getInt(), kMinBootstrapSlots);
     }
 
-    BootstrapConfigAttr bootstrap;
-    FailureOr<ParameterSetAttr> parameterSet = parameterSetFromSchemeParam(
-        entry, schemeParamAttr, bootstraps, bootstrap);
+    BootstrapConfigAttr bootstrap =
+        moduleOp->getAttrOfType<BootstrapConfigAttr>(kBootstrapConfigAttrName);
+    FailureOr<ParameterSetAttr> parameterSet =
+        importedParameterSet
+            ? parameterSetFromModule(entry, importedParameterSet, bootstraps,
+                                     bootstrap)
+            : parameterSetFromSchemeParam(entry, schemeParamAttr, bootstraps,
+                                          bootstrap);
     if (failed(parameterSet)) {
       signalPassFailure();
       return;
@@ -454,8 +516,10 @@ struct CheddarConfigureCryptoContext
                       i64Attr(parameterSet->getLogScale()));
     moduleOp->setAttr(kWordBitsAttrName,
                       i64Attr(parameterSet->getWordBitsOrDefault()));
-    moduleOp->setAttr("cheddar.Q", schemeParamAttr.getQ());
-    moduleOp->setAttr("cheddar.P", schemeParamAttr.getP());
+    if (schemeParamAttr) {
+      moduleOp->setAttr("cheddar.Q", schemeParamAttr.getQ());
+      moduleOp->setAttr("cheddar.P", schemeParamAttr.getP());
+    }
     buildConfigureFuncs(moduleOp, entry, *parameterSet, rotationKeys, bootstrap,
                         bootstrapNumSlots, useCyclopsRuntime,
                         collectLinearTransformKeyShapes(moduleOp));
@@ -469,6 +533,8 @@ struct CheddarConfigureCryptoContext
 
     moduleOp->removeAttr(ckks::CKKSDialect::kSchemeParamAttrName);
     moduleOp->removeAttr("scheme.ckks");
+    moduleOp->removeAttr(kParameterSetAttrName);
+    moduleOp->removeAttr(kBootstrapConfigAttrName);
   }
 };
 
