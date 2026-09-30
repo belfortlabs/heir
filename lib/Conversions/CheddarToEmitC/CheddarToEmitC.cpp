@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 
+#include "lib/Dialect/Cheddar/IR/CheddarAttributes.h"
 #include "lib/Dialect/Cheddar/IR/CheddarDialect.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
@@ -18,6 +19,7 @@
 #include "llvm/include/llvm/ADT/SmallVector.h"      // from @llvm-project
 #include "llvm/include/llvm/ADT/StringMap.h"        // from @llvm-project
 #include "llvm/include/llvm/ADT/StringSet.h"        // from @llvm-project
+#include "llvm/include/llvm/ADT/Twine.h"            // from @llvm-project
 #include "llvm/include/llvm/Support/raw_ostream.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/ConvertToEmitC/ToEmitCInterface.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/MemRefToEmitC/MemRefToEmitC.h"  // from @llvm-project
@@ -410,47 +412,64 @@ struct ConvertMakeParameter
       cheddar::MakeParameterOp op, OpAdaptor /*adaptor*/,
       ConversionPatternRewriter& rewriter) const override {
     Type resultType = typeConverter->convertType(op.getResult().getType());
-    ArrayRef<int64_t> mainPrimes = op.getMainPrimes();
-    int64_t defaultLevel = op.getDefaultEncryptionLevel()
-                               ? op.getDefaultEncryptionLevelAttr().getInt()
-                               : static_cast<int64_t>(mainPrimes.size()) - 1;
+    cheddar::ParameterSetAttr set = op.getParameterSet();
 
     std::string levels = "std::vector<std::pair<int, int>>{";
-    for (size_t i = 0; i < mainPrimes.size(); ++i) {
-      if (i) levels += ", ";
-      levels += "{" + std::to_string(i + 1) + ", 0}";
+    for (auto [index, level] : llvm::enumerate(set.getLevelPairs())) {
+      if (index) levels += ", ";
+      levels += "{" + std::to_string(level.first) + ", " +
+                std::to_string(level.second) + "}";
     }
     levels += "}";
-    auto primes = [](ArrayRef<int64_t> values) {
+    auto primes = [](DenseI64ArrayAttr values) {
       std::string result = "std::vector<word>{";
-      for (size_t i = 0; i < values.size(); ++i) {
-        if (i) result += ", ";
-        result += std::to_string(static_cast<uint64_t>(values[i])) + "ULL";
+      if (values) {
+        for (auto [index, value] : llvm::enumerate(values.asArrayRef())) {
+          if (index) result += ", ";
+          result += std::to_string(static_cast<uint64_t>(value)) + "ULL";
+        }
       }
       return result + "}";
     };
-    std::string scale = "static_cast<double>(static_cast<word>(1) << " +
-                        std::to_string(op.getLogScale().getInt()) + ")";
-    std::string args = std::to_string(op.getLogN().getInt()) + ", " + scale +
-                       ", " + std::to_string(defaultLevel) + ", " + levels +
-                       ", " + primes(mainPrimes) + ", " +
-                       primes(op.getAuxPrimes());
+    // The scale is a power of two below 2^64 whatever the word width is.
+    std::string scale = "static_cast<double>(UINT64_C(1) << " +
+                        std::to_string(set.getLogScale()) + ")";
+    // The runtime's trailing constructor arguments (terminal primes, the
+    // additional base) default to what a HEIR-generated chain uses; they are
+    // spelled out only from the first one that differs.
+    SmallVector<std::string> arguments = {
+        std::to_string(set.getLogN()),
+        scale,
+        std::to_string(set.getDefaultEncryptionLevelOrDefault()),
+        levels,
+        primes(set.getMainPrimes()),
+        primes(set.getAuxPrimes()),
+        primes(set.getTerminalPrimes()),
+        "std::pair<int, int>{" +
+            std::to_string(set.getAdditionalBasePair().first) + ", " +
+            std::to_string(set.getAdditionalBasePair().second) + "}"};
+    size_t count = arguments.size();
+    if (set.getAdditionalBasePair() == std::pair<int64_t, int64_t>{0, 0}) {
+      --count;
+      if (!set.getTerminalPrimes() || set.getTerminalPrimes().empty()) --count;
+    }
+    std::string args;
+    for (size_t i = 0; i < count; ++i) {
+      if (i) args += ", ";
+      args += arguments[i];
+    }
 
     StringRef name = "cheddar_param";
-    VerbatimOp::create(
-        rewriter, op.getLoc(),
-        ("static Parameter<word> " + name + "(" + args + ");").str(),
-        ValueRange{});
-    if (auto weight = op.getDenseHammingWeightAttr())
-      VerbatimOp::create(
-          rewriter, op.getLoc(),
-          (name + ".SetDenseHammingWeight(" + intLit(weight) + ");").str(),
-          ValueRange{});
-    if (auto weight = op.getSparseHammingWeightAttr())
-      VerbatimOp::create(
-          rewriter, op.getLoc(),
-          (name + ".SetSparseHammingWeight(" + intLit(weight) + ");").str(),
-          ValueRange{});
+    auto statement = [&](const Twine& text) {
+      VerbatimOp::create(rewriter, op.getLoc(), text.str(), ValueRange{});
+    };
+    statement("static Parameter<word> " + name + "(" + args + ");");
+    // Setters in the runtime's own order: the dense weight first, since the
+    // sparse one must stay below it.
+    if (auto weight = set.getDenseHammingWeight())
+      statement(name + ".SetDenseHammingWeight(" + Twine(*weight) + ");");
+    if (auto weight = set.getSparseHammingWeight())
+      statement(name + ".SetSparseHammingWeight(" + Twine(*weight) + ");");
     auto literal =
         emitc::LiteralOp::create(rewriter, op.getLoc(), resultType, name);
     rewriter.replaceOp(op, literal.getResult());
@@ -537,13 +556,15 @@ struct ConvertCreateBootContext
   LogicalResult matchAndRewrite(
       cheddar::CreateBootContextOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
-    std::string ratio;
-    if (auto attr = op.getLogMessageRatioAttr()) ratio = ", " + intLit(attr);
+    cheddar::BootstrapConfigAttr config = op.getConfig();
+    std::string arguments = "{}.max_level_, " +
+                            std::to_string(config.getNumCtsLevels()) + ", " +
+                            std::to_string(config.getNumStcLevels());
+    if (auto ratio = config.getLogMessageRatio())
+      arguments += ", " + std::to_string(*ratio);
     VerbatimOp::create(
         rewriter, op.getLoc(),
-        "{} = BootContext<word>::Create({}, BootParameter({}.max_level_, " +
-            std::to_string(op.getNumCtsLevels().getInt()) + ", " +
-            std::to_string(op.getNumStcLevels().getInt()) + ratio + "));",
+        "{} = BootContext<word>::Create({}, BootParameter(" + arguments + "));",
         ValueRange{adaptor.getOutput(), adaptor.getParams(),
                    adaptor.getParams()});
     rewriter.eraseOp(op);

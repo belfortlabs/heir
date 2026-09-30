@@ -8,10 +8,26 @@
 
 // CHECK: @test_make_parameter
 func.func @test_make_parameter() -> !cheddar.parameter {
-  // CHECK: cheddar.make_parameter
-  // CHECK-SAME: logN = 14
-  %p = cheddar.make_parameter {logN = 14 : i64, logScale = 45 : i64, mainPrimes = array<i64: 1, 2, 3>, auxPrimes = array<i64: 4, 5>} : !cheddar.parameter
+  // CHECK: cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 14, logScale = 45, mainPrimes = [1, 2, 3], auxPrimes = [4, 5]>
+  %p = cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 14, logScale = 45, mainPrimes = [1, 2, 3], auxPrimes = [4, 5]>} : !cheddar.parameter
   return %p : !cheddar.parameter
+}
+
+// A 32-bit word chain: two or three primes per level, terminal primes moving
+// in and out, and the secret-key hamming weights.
+// CHECK: @test_make_parameter_layout
+func.func @test_make_parameter_layout() -> !cheddar.parameter {
+  // CHECK: cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 13, logScale = 35, mainPrimes = [969146369, 1172439041, 958136321, 1070727169], auxPrimes = [964558849, 974258177], terminalPrimes = [30539777, 32899073], levelConfig = [0, 2, 2, 1, 4, 0], wordBits = 32, defaultEncryptionLevel = 1, additionalBase = [0, 1], denseHammingWeight = 128, sparseHammingWeight = 32>
+  %p = cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 13, logScale = 35, mainPrimes = [969146369, 1172439041, 958136321, 1070727169], auxPrimes = [964558849, 974258177], terminalPrimes = [30539777, 32899073], levelConfig = [0, 2, 2, 1, 4, 0], wordBits = 32, defaultEncryptionLevel = 1, additionalBase = [0, 1], denseHammingWeight = 128, sparseHammingWeight = 32>} : !cheddar.parameter
+  return %p : !cheddar.parameter
+}
+
+// CHECK: @test_create_boot_context
+func.func @test_create_boot_context(%params: !cheddar.parameter, %init: tensor<!cheddar.boot_context>) -> tensor<!cheddar.boot_context> {
+  // CHECK: cheddar.create_boot_context
+  // CHECK-SAME: config = #cheddar.bootstrap_config<numCtsLevels = 5, numStcLevels = 3, numEvalModLevels = 8, logMessageRatio = 7>
+  %ctx = cheddar.create_boot_context %params, %init {config = #cheddar.bootstrap_config<numCtsLevels = 5, numStcLevels = 3, numEvalModLevels = 8, logMessageRatio = 7>} : (!cheddar.parameter, tensor<!cheddar.boot_context>) -> tensor<!cheddar.boot_context>
+  return %ctx : tensor<!cheddar.boot_context>
 }
 
 // CHECK: @test_create_context

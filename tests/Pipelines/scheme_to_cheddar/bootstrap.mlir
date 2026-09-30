@@ -15,9 +15,7 @@
 // CHECK: cheddar.make_parameter
 // CHECK-SAME: defaultEncryptionLevel =
 // CHECK: cheddar.create_boot_context
-// CHECK-SAME: logMessageRatio = 1
-// CHECK-SAME: numCtsLevels = 4
-// CHECK-SAME: numStcLevels = 2
+// CHECK-SAME: config = #cheddar.bootstrap_config<numCtsLevels = 4, numStcLevels = 2, numEvalModLevels = 8, logMessageRatio = 1>
 // CHECK: func.func @bootstrap__keygen
 // CHECK: cheddar.prepare_bootstrap
 // CHECK: func.func @bootstrap__configure

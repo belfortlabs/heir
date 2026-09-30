@@ -35,16 +35,12 @@ constexpr ::llvm::StringLiteral kEntryInputArgAttrName = "cheddar.entry_input";
 constexpr ::llvm::StringLiteral kPreparedArgAttrName = "cheddar.prepared";
 
 // Attributes cheddar-configure-crypto-context records on the Cyclops client
-// setup function for the compiled evaluation-key request.
+// setup function for the compiled evaluation-key request. A bootstrapping
+// program also carries its `#cheddar.bootstrap_config` there, under
+// kBootstrapConfigAttrName (see CheddarAttributes.h).
 constexpr ::llvm::StringLiteral kRotationKeysAttrName = "cheddar.rotation_keys";
 constexpr ::llvm::StringLiteral kBootstrapSlotsAttrName =
     "cheddar.bootstrap_slots";
-constexpr ::llvm::StringLiteral kBootstrapNumCtsAttrName =
-    "cheddar.bootstrap_num_cts";
-constexpr ::llvm::StringLiteral kBootstrapNumStcAttrName =
-    "cheddar.bootstrap_num_stc";
-constexpr ::llvm::StringLiteral kBootstrapLogMessageRatioAttrName =
-    "cheddar.bootstrap_log_message_ratio";
 constexpr ::llvm::StringLiteral kLinearTransformKeysAttrName =
     "cheddar.linear_transform_keys";
 

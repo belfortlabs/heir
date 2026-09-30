@@ -1,6 +1,7 @@
 #ifndef LIB_DIALECT_CHEDDAR_IR_CHEDDAROPS_TD_
 #define LIB_DIALECT_CHEDDAR_IR_CHEDDAROPS_TD_
 
+include "CheddarAttributes.td"
 include "CheddarDialect.td"
 include "CheddarTypes.td"
 include "mlir/IR/OpBase.td"
@@ -169,26 +170,17 @@ def Cheddar_CreateBootContextOp : Cheddar_DpsOp<"create_boot_context"> {
   let summary = "Create a CHEDDAR bootstrapping context from parameters";
   let description = [{
     Creates a `BootContext<word>` from a Parameter object (DPS), for programs
-    that bootstrap. Bootstrapping is parameterized by the CoeffToSlot (CtS) and
-    SlotToCoeff (StC) level budgets -- a depth/rotation trade-off that mirrors
-    OpenFHE's `levelBudgetEncode`/`levelBudgetDecode` -- carried here as the
-    `numCtsLevels`/`numStcLevels` attributes. `$output` is the destination
-    buffer hint; after bufferization the result becomes a
-    `memref<!cheddar.boot_context>` re-typed to `std::shared_ptr<BootContext<word>>&`
-    at the emitc boundary:
-    `ctx_out = BootContext<word>::Create(params, BootParameter(params.max_level_, numCtsLevels, numStcLevels, logMessageRatio))`.
-
-    `logMessageRatio` ~ log2(q0 / scale): the headroom between the bottom modulus
-    and the message scale that CHEDDAR's EvalMod assumes. It governs bootstrap
-    precision -- too small and large messages hit the sine-approximation domain
-    edge, too large and the absolute noise floor (~ q0/scale) dominates small
-    messages. When omitted, the emitter falls back to CHEDDAR's default.
+    that bootstrap. `config` carries the inputs of the runtime's
+    `BootParameter`: the CoeffToSlot/SlotToCoeff level budgets, the EvalMod
+    depth, the message headroom and the EvalMod approximation (see
+    `#cheddar.bootstrap_config`). `$output` is the destination buffer hint;
+    after bufferization the result becomes a `memref<!cheddar.boot_context>`
+    re-typed to `std::shared_ptr<BootContext<word>>&` at the emitc boundary:
+    `ctx_out = BootContext<word>::Create(params, BootParameter(params.max_level_, numCtsLevels, numStcLevels, logMessageRatio[, evalMod]))`.
   }];
   let arguments = (ins
     Cheddar_Parameter:$params,
-    Builtin_IntegerAttr:$numCtsLevels,
-    Builtin_IntegerAttr:$numStcLevels,
-    OptionalAttr<Builtin_IntegerAttr>:$logMessageRatio,
+    Cheddar_BootstrapConfigAttr:$config,
     Cheddar_BootContextLike:$output
   );
   let results = (outs Cheddar_BootContextResult:$result);
@@ -315,33 +307,19 @@ def Cheddar_PrepareLinearTransformKeysOp : Cheddar_ReadWriteDpsOp<
 }
 
 def Cheddar_MakeParameterOp : Cheddar_Op<"make_parameter", [Pure]> {
-  let summary = "Construct a CHEDDAR Parameter from CKKS scheme parameters";
+  let summary = "Construct a CHEDDAR Parameter from a parameter set";
   let description = [{
-    Builds a `cheddar::Parameter<word>` from the CKKS modulus chain. The main
-    primes are the CKKS `Q` limbs and the aux primes are the `P` limbs; the
-    canonical level config is one-main-prime-per-level (`{{1, 0}, {2, 0}, ...}`)
-    and the default encryption level is `#mainPrimes - 1`, both derived from
-    `mainPrimes` by the emitter. `logScale` is the log2 of the default CKKS
-    scale. This is the single setup op that produces the `!cheddar.parameter`
-    consumed by `cheddar.create_context`, so a generated `__configure` is
-    self-contained.
-
-    Bootstrapping programs override the defaults: `defaultEncryptionLevel`
-    pins the encryption level below the chain top (the boot-circuit primes sit
-    above it), and `denseHammingWeight`/`sparseHammingWeight` set the secret-key
-    hamming weights CHEDDAR's BootContext requires. Each is omitted (and the
-    emitter falls back to `#mainPrimes - 1` / not emitting a SetHammingWeight
-    call) for non-bootstrapping programs.
+    Builds a `cheddar::Parameter<word>` from a `#cheddar.parameter_set`: the
+    ring, the base scale, the main/terminal/aux prime pools and the level
+    layout, plus the optional key-switching policy and hamming weights the
+    runtime exposes as setters. The attribute is the single description of the
+    runtime parameters: the emitter prints its constructor call from it and
+    `cheddar-plan-evaluation-keys` builds the identical object at compile time
+    to plan the evaluation keys. This is the single setup op that produces the
+    `!cheddar.parameter` consumed by `cheddar.create_context`, so a generated
+    `__configure` is self-contained.
   }];
-  let arguments = (ins
-    Builtin_IntegerAttr:$logN,
-    Builtin_IntegerAttr:$logScale,
-    DenseI64ArrayAttr:$mainPrimes,
-    DenseI64ArrayAttr:$auxPrimes,
-    OptionalAttr<Builtin_IntegerAttr>:$defaultEncryptionLevel,
-    OptionalAttr<Builtin_IntegerAttr>:$denseHammingWeight,
-    OptionalAttr<Builtin_IntegerAttr>:$sparseHammingWeight
-  );
+  let arguments = (ins Cheddar_ParameterSetAttr:$parameterSet);
   let results = (outs Cheddar_Parameter:$params);
   let assemblyFormat = "attr-dict `:` type($params)";
 }

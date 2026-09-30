@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "lib/Conversions/CheddarToEmitC/CheddarToEmitC.h"
+#include "lib/Dialect/Cheddar/IR/CheddarAttributes.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Utils/EntryInterfaceUtils.h"
@@ -765,9 +766,7 @@ LogicalResult verifyKeyPlanningMetadata(func::FuncOp setup) {
   // now would silently produce a client that generates no keys.
   for (StringRef stale :
        {cheddar::kRotationKeysAttrName, cheddar::kLinearTransformKeysAttrName,
-        cheddar::kBootstrapSlotsAttrName, cheddar::kBootstrapNumCtsAttrName,
-        cheddar::kBootstrapNumStcAttrName,
-        cheddar::kBootstrapLogMessageRatioAttrName})
+        cheddar::kBootstrapSlotsAttrName, cheddar::kBootstrapConfigAttrName})
     if (setup->hasAttr(stale))
       return setup.emitOpError()
              << "still carries " << stale
@@ -903,7 +902,7 @@ void addKeyRequestDefinition(OpBuilder& builder, Location loc,
 //===----------------------------------------------------------------------===//
 
 LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
-                             StringRef runtimeNamespace,
+                             StringRef runtimeNamespace, StringRef wordType,
                              ArrayRef<StringRef> extensionIncludes,
                              InterfaceSide side = InterfaceSide::Combined) {
   Location loc = functions.setup.getLoc();
@@ -997,7 +996,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   if (split) namespaceName += client ? "::client" : "::server";
   std::string detailNamespace = kDetailNamespace.str();
   emitVerbatim(builder, loc, "namespace " + namespaceName + " {");
-  emitVerbatim(builder, loc, "using word = std::uint64_t;");
+  emitVerbatim(builder, loc, "using word = " + wordType.str() + ";");
   emitVerbatim(builder, loc, "using Complex = std::complex<double>;");
   emitVerbatim(builder, loc, "using namespace ::" + runtimeNamespaceName + ";");
   emitVerbatim(
@@ -1059,7 +1058,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   emitInclude(builder, loc, "heir/runtime/CheddarRuntime.h", false);
   emitVerbatim(builder, loc, "namespace " + detailNamespace + " {");
   emitVerbatim(builder, loc, "using namespace ::" + runtimeNamespaceName + ";");
-  emitVerbatim(builder, loc, "using word = std::uint64_t;");
+  emitVerbatim(builder, loc, "using word = " + wordType.str() + ";");
   emitVerbatim(builder, loc, "using Complex = std::complex<double>;");
 
   // This side's source holds what its public functions reach: the facades,
@@ -1162,6 +1161,19 @@ struct CheddarEmitCEntryInterfacePass
       return signalPassFailure();
     }
     module->removeAttr(kCheddarRuntimeAttrName);
+    // The word width the parameter set was chosen for (see
+    // cheddar-configure-crypto-context); HEIR-generated chains use 64 bits.
+    std::string wordType = "std::uint64_t";
+    if (auto wordBits =
+            module->getAttrOfType<IntegerAttr>(cheddar::kWordBitsAttrName)) {
+      if (wordBits.getInt() == 32) {
+        wordType = "std::uint32_t";
+      } else if (wordBits.getInt() != 64) {
+        module.emitError() << cheddar::kWordBitsAttrName << " must be 32 or 64";
+        return signalPassFailure();
+      }
+      module->removeAttr(cheddar::kWordBitsAttrName);
+    }
     FailureOr<EntryFunctions> functions =
         findEntryFunctions(module, entryFunction);
     if (failed(functions)) return signalPassFailure();
@@ -1196,8 +1208,8 @@ struct CheddarEmitCEntryInterfacePass
                            "extension/linalg/LinearTransform.h"};
     }
     for (InterfaceSide side : sides)
-      if (failed(buildInterface(module, *functions, runtime, extensionIncludes,
-                                side)))
+      if (failed(buildInterface(module, *functions, runtime, wordType,
+                                extensionIncludes, side)))
         return signalPassFailure();
     // Only the files remain; whatever no public function reaches is dropped.
     for (Operation& op :

@@ -29,9 +29,7 @@ module attributes {
 // CONFIG-SAME: denseHammingWeight = 32768
 // CONFIG-SAME: sparseHammingWeight = 32
 // CONFIG: cheddar.create_boot_context
-// CONFIG-SAME: logMessageRatio = 8
-// CONFIG-SAME: numCtsLevels = 4
-// CONFIG-SAME: numStcLevels = 3
+// CONFIG-SAME: config = #cheddar.bootstrap_config<numCtsLevels = 4, numStcLevels = 3, numEvalModLevels = 8, logMessageRatio = 8>
 // CONFIG: func.func @main__keygen
 // CONFIG: cheddar.create_user_interface
 // CONFIG: cheddar.prepare_rot_key
