@@ -78,6 +78,34 @@ SmallVector<LinearTransformKeyShape> collectLinearTransformKeyShapes(
   return shapes;
 }
 
+// The levels the program relinearizes at, for the Cyclops client's key
+// request: the ops keyed by the evaluation-key map and the levels a polynomial
+// evaluation descends through.
+SmallVector<int64_t> collectMultiplicationKeyLevels(ModuleOp moduleOp) {
+  llvm::SmallDenseSet<int64_t> levels;
+  auto record = [&](IntegerAttr level) {
+    if (level) levels.insert(level.getInt());
+  };
+  moduleOp->walk([&](Operation* op) {
+    if (auto relin = dyn_cast<RelinearizeOp>(op)) {
+      record(relin.getLevelAttr());
+    } else if (auto relin = dyn_cast<RelinearizeRescaleOp>(op)) {
+      record(relin.getLevelAttr());
+    } else if (auto mult = dyn_cast<HMultOp>(op)) {
+      record(mult.getLevelAttr());
+    } else if (auto poly = dyn_cast<EvalPolyOp>(op)) {
+      if (IntegerAttr top = poly.getLevelAttr())
+        for (int64_t level =
+                 top.getInt() - poly.getLevelConsumption().getInt() + 1;
+             level <= top.getInt(); ++level)
+          if (level >= 0) levels.insert(level);
+    }
+  });
+  SmallVector<int64_t> sorted(levels.begin(), levels.end());
+  llvm::sort(sorted);
+  return sorted;
+}
+
 // Build setup and key-generation functions in destination-passing tensor form:
 //   %p   = cheddar.make_parameter ...
 //   %ctx = cheddar.create_context %p, %ctx_init
@@ -175,6 +203,9 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry,
     }
     clientSetup->setAttr(kRotationKeysAttrName,
                          builder.getDenseI64ArrayAttr(requests));
+    clientSetup->setAttr(
+        kMultiplicationKeysAttrName,
+        builder.getDenseI64ArrayAttr(collectMultiplicationKeyLevels(moduleOp)));
     SmallVector<Attribute> shapes;
     for (const LinearTransformKeyShape& shape : transformShapes) {
       shapes.push_back(builder.getDictionaryAttr({

@@ -5,13 +5,15 @@
 // multiplications need three levels, which the logN 13 ring of the file
 // provides; the client is generated for 32-bit words with the file's own
 // primes, level layout and key-switching policy, and the evaluation keys are
-// planned against that very parameter set (the program rotates nothing and
-// does not bootstrap, so it requests no keys beyond the default ones).
+// planned against that very parameter set: the two multiplications
+// relinearize at levels 2 and 1, so the client requests a multiplication key
+// for each (default-preferred, family 2, mode 1), which a ring without a
+// default key turns into level-specific keys.
 
 // CHECK: module attributes
 // CHECK-SAME: cheddar.word_bits = 32 : i64
 // CHECK: func.func @main__setup
-// CHECK-SAME: cheddar.evaluation_keys = array<i64>
+// CHECK-SAME: cheddar.evaluation_keys = array<i64: 2, 0, {{[12]}}, 1, -1, 2, 0, {{[12]}}, 1, -1>
 // CHECK: cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 13, logScale = 35
 // CHECK-SAME: terminalPrimes = [30539777, 32899073, 29884417, 31326209, 36175873]
 // CHECK-SAME: levelConfig = [0, 2, 2, 1, 4, 0]

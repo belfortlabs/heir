@@ -765,8 +765,9 @@ LogicalResult verifyKeyPlanningMetadata(func::FuncOp setup) {
   // consumes them. Finding one here means that pass did not run, and emitting
   // now would silently produce a client that generates no keys.
   for (StringRef stale :
-       {cheddar::kRotationKeysAttrName, cheddar::kLinearTransformKeysAttrName,
-        cheddar::kBootstrapSlotsAttrName, cheddar::kBootstrapConfigAttrName})
+       {cheddar::kRotationKeysAttrName, cheddar::kMultiplicationKeysAttrName,
+        cheddar::kLinearTransformKeysAttrName, cheddar::kBootstrapSlotsAttrName,
+        cheddar::kBootstrapConfigAttrName})
     if (setup->hasAttr(stale))
       return setup.emitOpError()
              << "still carries " << stale

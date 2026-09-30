@@ -33,7 +33,8 @@ struct FuseMultRelinRescale : public OpRewritePattern<RescaleOp> {
     auto fused = HMultOp::create(
         rewriter, rescaleOp.getLoc(), rescaleOp->getResultTypes(),
         multOp.getCtx(), multOp.getLhs(), multOp.getRhs(), relinOp.getMultKey(),
-        rescaleOp.getOutput(), rewriter.getBoolAttr(true));
+        rescaleOp.getOutput(), rewriter.getBoolAttr(true),
+        relinOp.getLevelAttr());
     rewriter.replaceOp(rescaleOp, fused);
     rewriter.eraseOp(relinOp);
     rewriter.eraseOp(multOp);
@@ -54,10 +55,11 @@ struct FuseMultRelin : public OpRewritePattern<RelinearizeOp> {
         multOp.getCtx() != relinOp.getCtx())
       return failure();
 
-    auto fused = HMultOp::create(
-        rewriter, relinOp.getLoc(), relinOp->getResultTypes(), multOp.getCtx(),
-        multOp.getLhs(), multOp.getRhs(), relinOp.getMultKey(),
-        relinOp.getOutput(), rewriter.getBoolAttr(false));
+    auto fused =
+        HMultOp::create(rewriter, relinOp.getLoc(), relinOp->getResultTypes(),
+                        multOp.getCtx(), multOp.getLhs(), multOp.getRhs(),
+                        relinOp.getMultKey(), relinOp.getOutput(),
+                        rewriter.getBoolAttr(false), relinOp.getLevelAttr());
     rewriter.replaceOp(relinOp, fused);
     rewriter.eraseOp(multOp);
     return success();
@@ -79,7 +81,7 @@ struct FuseMultRelinRescaleFused
         rewriter, relinRescaleOp.getLoc(), relinRescaleOp->getResultTypes(),
         multOp.getCtx(), multOp.getLhs(), multOp.getRhs(),
         relinRescaleOp.getMultKey(), relinRescaleOp.getOutput(),
-        rewriter.getBoolAttr(true));
+        rewriter.getBoolAttr(true), relinRescaleOp.getLevelAttr());
     rewriter.replaceOp(relinRescaleOp, fused);
     rewriter.eraseOp(multOp);
     return success();
@@ -171,7 +173,8 @@ struct HoistRelinBeforePlainOp : public OpRewritePattern<RelinearizeOp> {
                                                  tensorType.getElementType());
     auto newRelin = RelinearizeOp::create(
         rewriter, relinOp.getLoc(), relinOp->getResultTypes(), multOp.getCtx(),
-        multOp->getResult(0), relinOp.getMultKey(), newRelinDest);
+        multOp->getResult(0), relinOp.getMultKey(), newRelinDest,
+        relinOp.getLevelAttr());
 
     rewriter.setInsertionPoint(relinOp);
     auto newPlain = PlainOp::create(

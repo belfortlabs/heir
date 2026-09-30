@@ -304,24 +304,47 @@ struct ConvertNegateOp : public OpConversionPattern<SourceOp> {
 using ConvertCKKSNegateOp = ConvertNegateOp<ckks::NegateOp>;
 using ConvertRNegateOp = ConvertNegateOp<lwe::RNegateOp>;
 
+// scale-snu CHEDDAR relinearizes with its one default multiplication key.
+// Cyclops resolves the key from the evaluation-key map at the input's level:
+// a ring whose key-switching budget holds no default key (32-bit chains) has
+// one key per level, and the level is what the key planner requests.
 struct ConvertCKKSRelinOp : public OpConversionPattern<ckks::RelinearizeOp> {
-  using OpConversionPattern::OpConversionPattern;
+  ConvertCKKSRelinOp(const TypeConverter& converter, MLIRContext* context,
+                     bool useCyclopsRuntime)
+      : OpConversionPattern(converter, context),
+        useCyclopsRuntime(useCyclopsRuntime) {}
+
   LogicalResult matchAndRewrite(
       ckks::RelinearizeOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     auto ctx = getContextualContext(op.getOperation());
     if (failed(ctx)) return ctx;
-    auto multKey = getContextualArg<cheddar::EvalKeyType>(op.getOperation());
+    FailureOr<Value> multKey =
+        useCyclopsRuntime
+            ? getContextualArg<cheddar::EvkMapType>(op.getOperation())
+            : getContextualArg<cheddar::EvalKeyType>(op.getOperation());
     if (failed(multKey)) return multKey;
+    IntegerAttr level;
+    if (useCyclopsRuntime) {
+      auto ctType = dyn_cast<lwe::LWECiphertextType>(
+          getElementTypeOrSelf(op.getInput().getType()));
+      if (!ctType || !ctType.getModulusChain())
+        return op.emitOpError(
+            "cannot determine the ciphertext level for relinearization");
+      level = rewriter.getI64IntegerAttr(ctType.getModulusChain().getCurrent());
+    }
     Type resultTy = typeConverter->convertType(op.getOutput().getType());
     Value dest =
         makeReusableDest(rewriter, op.getLoc(), resultTy, adaptor.getInput());
     auto result = cheddar::RelinearizeOp::create(
         rewriter, op.getLoc(), resultTy, ctx.value(), adaptor.getInput(),
-        multKey.value(), dest);
+        multKey.value(), dest, level);
     rewriter.replaceOp(op, result);
     return success();
   }
+
+ private:
+  bool useCyclopsRuntime;
 };
 
 struct ConvertCKKSRescaleOp : public OpConversionPattern<ckks::RescaleOp> {
@@ -843,6 +866,16 @@ struct ConvertKernelEvalChebyshevOp
       return op.emitOpError(
           "scale-snu CHEDDAR EvalPoly requires an effective degree of at "
           "least two");
+    // The input level places the evaluation's relinearizations, which the
+    // Cyclops key planner covers with multiplication keys.
+    IntegerAttr level;
+    if (auto ctType = dyn_cast<lwe::LWECiphertextType>(
+            getElementTypeOrSelf(op.getInput().getType()));
+        ctType && ctType.getModulusChain())
+      level = rewriter.getI64IntegerAttr(ctType.getModulusChain().getCurrent());
+    if (useCyclopsRuntime && !level)
+      return op.emitOpError(
+          "cannot determine the input level for Cyclops key planning");
     Type resultType = typeConverter->convertType(op.getOutput().getType());
     Value dest =
         makeReusableDest(rewriter, op.getLoc(), resultType, adaptor.getInput());
@@ -850,7 +883,7 @@ struct ConvertKernelEvalChebyshevOp
         rewriter, op.getLoc(), resultType, ctx.value(), adaptor.getInput(),
         evkMap.value(), dest, op.getCoefficientsAttr(),
         rewriter.getI64IntegerAttr(requiredLevels),
-        useCyclopsRuntime ? rewriter.getUnitAttr() : UnitAttr{});
+        useCyclopsRuntime ? rewriter.getUnitAttr() : UnitAttr{}, level);
     rewriter.replaceOp(op, result.getResult());
     return success();
   }
@@ -1007,7 +1040,9 @@ SmallVector<Type> getDirectSupportTypes(func::FuncOp function,
     if (isa<ckks::BootstrapOp>(op)) add(bootType);
     if (isa<lwe::RLWEEncodeOp, lwe::RLWEDecodeOp>(op)) add(encoderType);
     if (isa<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp>(op)) add(uiType);
-    if (isa<ckks::RelinearizeOp>(op)) add(keyType);
+    // Cyclops resolves multiplication keys per level from the map.
+    if (isa<ckks::RelinearizeOp>(op))
+      add(useCyclopsRuntime ? mapType : keyType);
     if (isa<ckks::RotateOp, ckks::BootstrapOp, kernel::LinearTransformOp,
             kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>(op))
       add(mapType);
@@ -1348,10 +1383,11 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
 
     patterns.add<ConvertCKKSAddOp, ConvertCKKSSubOp, ConvertCKKSMulOp,
                  ConvertCKKSAddPlainOp, ConvertCKKSSubPlainOp,
-                 ConvertCKKSMulPlainOp, ConvertCKKSNegateOp, ConvertCKKSRelinOp,
+                 ConvertCKKSMulPlainOp, ConvertCKKSNegateOp,
                  ConvertCKKSRescaleOp, ConvertCKKSRotateOp,
                  ConvertCKKSLevelReduceOp, ConvertCKKSBootstrapOp>(
         typeConverter, context);
+    patterns.add<ConvertCKKSRelinOp>(typeConverter, context, useCyclopsRuntime);
     patterns.add<ConvertRAddOp, ConvertRSubOp, ConvertRMulOp, ConvertRNegateOp,
                  ConvertRAddPlainOp, ConvertRSubPlainOp, ConvertRMulPlainOp>(
         typeConverter, context);

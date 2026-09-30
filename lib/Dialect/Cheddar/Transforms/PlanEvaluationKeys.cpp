@@ -91,7 +91,8 @@ struct PlanEvaluationKeysPass
   // with a Parameter built exactly as the emitted client constructs it.
   template <typename Word>
   LogicalResult plan(func::FuncOp setup, ParameterSetAttr parameterSet,
-                     DenseI64ArrayAttr rotationKeys, ArrayAttr shapes,
+                     DenseI64ArrayAttr rotationKeys,
+                     DenseI64ArrayAttr multiplicationKeys, ArrayAttr shapes,
                      IntegerAttr bootstrapSlots,
                      BootstrapConfigAttr bootstrapConfig) {
     std::vector<std::pair<int, int>> levels;
@@ -123,6 +124,12 @@ struct PlanEvaluationKeysPass
     ArrayRef<int64_t> pairs = rotationKeys.asArrayRef();
     for (size_t i = 0; i + 1 < pairs.size(); i += 2)
       request.AddRequest(pairs[i], pairs[i + 1]);
+    // Default-preferred: the client satisfies these with the default
+    // multiplication key where the ring's budget holds one, and builds a key
+    // for the level otherwise.
+    if (multiplicationKeys)
+      for (int64_t level : multiplicationKeys.asArrayRef())
+        request.RequestMultiplicationKey(level, ::cyclops::KeyMode::kDefault);
 
     if (shapes) {
       for (auto [index, attr] : llvm::enumerate(shapes)) {
@@ -201,8 +208,9 @@ struct PlanEvaluationKeysPass
     func::FuncOp setup = findClientSetup(module);
     if (!setup) return;
     const StringRef planningAttrs[] = {
-        kRotationKeysAttrName, kLinearTransformKeysAttrName,
-        kBootstrapSlotsAttrName, kBootstrapConfigAttrName};
+        kRotationKeysAttrName, kMultiplicationKeysAttrName,
+        kLinearTransformKeysAttrName, kBootstrapSlotsAttrName,
+        kBootstrapConfigAttrName};
     if (llvm::none_of(planningAttrs,
                       [&](StringRef name) { return setup->hasAttr(name); }))
       return;
@@ -213,6 +221,13 @@ struct PlanEvaluationKeysPass
       setup.emitOpError()
           << kRotationKeysAttrName
           << " must be a dense i64 array of (distance, level) pairs";
+      return signalPassFailure();
+    }
+    auto multiplicationKeys =
+        setup->getAttrOfType<DenseI64ArrayAttr>(kMultiplicationKeysAttrName);
+    if (setup->hasAttr(kMultiplicationKeysAttrName) && !multiplicationKeys) {
+      setup.emitOpError() << kMultiplicationKeysAttrName
+                          << " must be a dense i64 array of levels";
       return signalPassFailure();
     }
     auto shapes = setup->getAttrOfType<ArrayAttr>(kLinearTransformKeysAttrName);
@@ -260,10 +275,12 @@ struct PlanEvaluationKeysPass
 
     LogicalResult planned =
         parameterSet.getWordBitsOrDefault() == 32
-            ? plan<uint32_t>(setup, parameterSet, rotationKeys, shapes,
-                             bootstrapSlots, bootstrapConfig)
-            : plan<uint64_t>(setup, parameterSet, rotationKeys, shapes,
-                             bootstrapSlots, bootstrapConfig);
+            ? plan<uint32_t>(setup, parameterSet, rotationKeys,
+                             multiplicationKeys, shapes, bootstrapSlots,
+                             bootstrapConfig)
+            : plan<uint64_t>(setup, parameterSet, rotationKeys,
+                             multiplicationKeys, shapes, bootstrapSlots,
+                             bootstrapConfig);
     if (failed(planned)) return signalPassFailure();
     for (StringRef name : planningAttrs) setup->removeAttr(name);
   } catch (const std::exception& error) {

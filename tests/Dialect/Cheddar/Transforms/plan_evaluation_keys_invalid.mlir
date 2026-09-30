@@ -10,6 +10,11 @@ func.func @ragged_rotations() attributes {cheddar.rotation_keys = array<i64: 1>,
 
 // -----
 
+// expected-error@+1 {{cheddar.multiplication_keys must be a dense i64 array of levels}}
+func.func @mistyped_multiplication_keys() attributes {cheddar.rotation_keys = array<i64>, cheddar.multiplication_keys = [1], heir.interface = {roles = ["client.setup"]}} { return }
+
+// -----
+
 // expected-error@+1 {{cheddar.linear_transform_keys must be an array}}
 func.func @mistyped_transforms() attributes {cheddar.rotation_keys = array<i64>, cheddar.linear_transform_keys = 1 : i64, heir.interface = {roles = ["client.setup"]}} { return }
 

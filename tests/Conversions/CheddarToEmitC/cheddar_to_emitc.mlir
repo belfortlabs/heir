@@ -297,7 +297,7 @@ func.func @eval_poly(%ctx: !context, %enc: !encoder, %ct: tensor<!ciphertext>, %
 
 // CHECK: func.func @eval_poly_level_key
 // CHECK: emitc.verbatim "EvalPoly<word> _ep(std::vector<double>{1, 2, 3}, PolynomialParity::kFull, _ep_lvl, _ep_is, _ep_ts, true);"
-// CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
+// CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}, KeyMode::kDefault));"
 func.func @eval_poly_level_key(%ctx: !context, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
   %r = cheddar.eval_poly %ctx, %ct, %evk, %d0 {coefficients = [1.0 : f64, 2.0 : f64, 3.0 : f64], levelConsumption = 2 : i64, selectMultKeyAtUseLevel} : (!context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>

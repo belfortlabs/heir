@@ -813,6 +813,46 @@ struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
   }
 };
 
+// Relinearize/RelinearizeRescale/HMult keyed by an evaluation-key map (the
+// Cyclops runtime): the multiplication key is looked up for the op's level,
+// the default key where the ring's key-switching budget holds one and the
+// level-specific key otherwise, which is what the planner requested.
+template <typename Op>
+struct ConvertMapKeyedRelinearize : public OpConversionPattern<Op> {
+  ConvertMapKeyedRelinearize(const TypeConverter& tc, MLIRContext* ctx,
+                             StringRef method)
+      : OpConversionPattern<Op>(tc, ctx, /*benefit=*/2), method(method.str()) {}
+
+  LogicalResult matchAndRewrite(
+      Op op, typename Op::Adaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    if (!isa<cheddar::EvkMapType>(op.getMultKey().getType()))
+      return rewriter.notifyMatchFailure(op, "keyed by a fixed key");
+    Value ctx = adaptor.getCtx();
+    std::string code = "{}->" + method + "({}, ";
+    SmallVector<Value> operands{ctx, adaptor.getOutput()};
+    if constexpr (std::is_same_v<Op, cheddar::HMultOp>) {
+      code += "{}, {}, ";
+      operands.append({adaptor.getLhs(), adaptor.getRhs()});
+    } else {
+      code += "{}, ";
+      operands.push_back(adaptor.getInput());
+    }
+    code += "{}.GetMultiplicationKey({}->NativeSecretId(), {}->param_, " +
+            intLit(op.getLevelAttr()) + ", KeyMode::kDefault)";
+    operands.append({adaptor.getMultKey(), ctx, ctx});
+    if constexpr (std::is_same_v<Op, cheddar::HMultOp>)
+      code += op.getRescale() ? ", true" : ", false";
+    code += ");";
+    markDestination(VerbatimOp::create(rewriter, op.getLoc(), code, operands),
+                    1);
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  std::string method;
+};
+
 // HRot/HRotAdd/HConj/HConjAdd: look up the rotation/conjugation key inline on
 // the EvkMap operand. Rotations pass the op's `level` so the best-fit key
 // prepared for that level is used.
@@ -1140,9 +1180,13 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
              "_ep_lvl, _ep_is, _ep_ts, true);",
          {});
     emit("_ep.Compile(_ep_cp);", {});
+    // Cyclops resolves the multiplication key at each level the evaluation
+    // relinearizes at: the default key where the ring holds one, the
+    // level-specific key otherwise.
     StringRef evaluate =
         op.getSelectMultKeyAtUseLevel()
-            ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
+            ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}, "
+              "KeyMode::kDefault));"
             : "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
     markDestination(
         VerbatimOp::create(rewriter, loc, rewriter.getStringAttr(evaluate),
@@ -1860,6 +1904,12 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
         ConvertPrepareLinearTransform, ConvertApplyPreparedLinearTransform,
         ConvertEvalPoly, ConvertPrepareLinearTransformKeys, ConvertGetEvkMap>(
         typeConverter, ctx);
+    patterns.add<ConvertMapKeyedRelinearize<cheddar::RelinearizeOp>>(
+        typeConverter, ctx, "Relinearize");
+    patterns.add<ConvertMapKeyedRelinearize<cheddar::RelinearizeRescaleOp>>(
+        typeConverter, ctx, "RelinearizeRescale");
+    patterns.add<ConvertMapKeyedRelinearize<cheddar::HMultOp>>(typeConverter,
+                                                               ctx, "HMult");
     patterns.add<ConvertRuntimeAccessor<cheddar::GetEncoderOp>>(
         typeConverter, ctx, "heir::getEncoder");
     patterns.add<ConvertRuntimeAccessor<cheddar::GetMultKeyOp>>(

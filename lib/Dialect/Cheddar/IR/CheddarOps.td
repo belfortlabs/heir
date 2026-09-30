@@ -556,33 +556,46 @@ def Cheddar_LevelDownOp : Cheddar_DpsOp<"level_down"> {
 // Key-switching operations
 //===----------------------------------------------------------------------===//
 
+// Where a relinearization takes its multiplication key from: the runtime's
+// one default key (`!cheddar.eval_key`, scale-snu CHEDDAR), or the
+// evaluation-key map the Cyclops runtime resolves the key from at the op's
+// `level` (a ring whose key-switching budget holds no default key has one key
+// per level instead).
+def Cheddar_MultKeySource : AnyTypeOf<[Cheddar_EvalKey, Cheddar_EvkMap]>;
+
 def Cheddar_RelinearizeOp : Cheddar_DpsOp<"relinearize"> {
   let summary = "Relinearize a ciphertext (without rescale)";
   let description = [{
-    Calls context->Relinearize(res, a, mult_key).
+    Calls context->Relinearize(res, a, mult_key). With an evaluation-key map
+    as `multKey`, the key is looked up for the input's `level`.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
     Cheddar_CtLike:$input,
-    Cheddar_EvalKey:$multKey,
-    Cheddar_CtLike:$output
+    Cheddar_MultKeySource:$multKey,
+    Cheddar_CtLike:$output,
+    OptionalAttr<Builtin_IntegerAttr>:$level
   );
   let results = (outs Cheddar_CtResult:$result);
+  let hasVerifier = 1;
 }
 
 def Cheddar_RelinearizeRescaleOp : Cheddar_DpsOp<"relinearize_rescale"> {
   let summary = "Fused relinearize + rescale";
   let description = [{
     Calls context->RelinearizeRescale(res, a, mult_key). Faster than
-    separate Relinearize + Rescale.
+    separate Relinearize + Rescale. With an evaluation-key map as `multKey`,
+    the key is looked up for the input's `level`.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
     Cheddar_CtLike:$input,
-    Cheddar_EvalKey:$multKey,
-    Cheddar_CtLike:$output
+    Cheddar_MultKeySource:$multKey,
+    Cheddar_CtLike:$output,
+    OptionalAttr<Builtin_IntegerAttr>:$level
   );
   let results = (outs Cheddar_CtResult:$result);
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -594,17 +607,20 @@ def Cheddar_HMultOp : Cheddar_DpsOp<"hmult", [IncreasesMulDepthOpInterface]> {
   let description = [{
     Calls context->HMult(res, a, b, mult_key, rescale).
     Single fused GPU kernel launch. The `rescale` attribute controls whether
-    rescaling is included (default: true).
+    rescaling is included (default: true). With an evaluation-key map as
+    `multKey`, the key is looked up for the operands' `level`.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
     Cheddar_CtLike:$lhs,
     Cheddar_CtLike:$rhs,
-    Cheddar_EvalKey:$multKey,
+    Cheddar_MultKeySource:$multKey,
     Cheddar_CtLike:$output,
-    DefaultValuedAttr<BoolAttr, "true">:$rescale
+    DefaultValuedAttr<BoolAttr, "true">:$rescale,
+    OptionalAttr<Builtin_IntegerAttr>:$level
   );
   let results = (outs Cheddar_CtResult:$result);
+  let hasVerifier = 1;
 }
 
 def Cheddar_HRotOp : Cheddar_DpsOp<"hrot", [
@@ -834,7 +850,9 @@ def Cheddar_EvalPolyOp : Cheddar_DpsOp<"eval_poly"> {
     input using CHEDDAR's EvalPoly extension.
     `levelConsumption` is copied from the upstream
     `kernel.eval_chebyshev` level interface and drives CHEDDAR's target-scale
-    recurrence.
+    recurrence. `level` is the input's level: the evaluation relinearizes at
+    the `levelConsumption` levels below it, which is where the Cyclops runtime
+    needs multiplication keys.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
@@ -843,7 +861,8 @@ def Cheddar_EvalPolyOp : Cheddar_DpsOp<"eval_poly"> {
     Cheddar_CtLike:$output,
     F64ArrayAttr:$coefficients,
     Builtin_IntegerAttr:$levelConsumption,
-    OptionalAttr<UnitAttr>:$selectMultKeyAtUseLevel
+    OptionalAttr<UnitAttr>:$selectMultKeyAtUseLevel,
+    OptionalAttr<Builtin_IntegerAttr>:$level
   );
   let results = (outs Cheddar_CtResult:$result);
   let hasVerifier = 1;

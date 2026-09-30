@@ -39,6 +39,11 @@ constexpr ::llvm::StringLiteral kPreparedArgAttrName = "cheddar.prepared";
 // program also carries its `#cheddar.bootstrap_config` there, under
 // kBootstrapConfigAttrName (see CheddarAttributes.h).
 constexpr ::llvm::StringLiteral kRotationKeysAttrName = "cheddar.rotation_keys";
+// The levels the program relinearizes at; the Cyclops client resolves each
+// to the default multiplication key when the ring holds one, and to a
+// level-specific key otherwise.
+constexpr ::llvm::StringLiteral kMultiplicationKeysAttrName =
+    "cheddar.multiplication_keys";
 constexpr ::llvm::StringLiteral kBootstrapSlotsAttrName =
     "cheddar.bootstrap_slots";
 constexpr ::llvm::StringLiteral kLinearTransformKeysAttrName =

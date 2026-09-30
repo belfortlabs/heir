@@ -22,6 +22,19 @@ func.func @test_make_parameter_layout() -> !cheddar.parameter {
   return %p : !cheddar.parameter
 }
 
+// A relinearization keyed by the evaluation-key map names the level the key
+// is resolved for.
+// CHECK: @test_relinearize_from_map
+func.func @test_relinearize_from_map(%ctx: !cheddar.context, %evk: !cheddar.evk_map, %a: tensor<!cheddar.ciphertext>, %b: tensor<!cheddar.ciphertext>, %out: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
+  // CHECK: cheddar.hmult
+  // CHECK-SAME: level = 2
+  %0 = cheddar.hmult %ctx, %a, %b, %evk, %out {level = 2 : i64, rescale = true} : (!cheddar.context, tensor<!cheddar.ciphertext>, tensor<!cheddar.ciphertext>, !cheddar.evk_map, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
+  // CHECK: cheddar.relinearize
+  // CHECK-SAME: level = 1
+  %1 = cheddar.relinearize %ctx, %0, %evk, %out {level = 1 : i64} : (!cheddar.context, tensor<!cheddar.ciphertext>, !cheddar.evk_map, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
+  return %1 : tensor<!cheddar.ciphertext>
+}
+
 // CHECK: @test_create_boot_context
 func.func @test_create_boot_context(%params: !cheddar.parameter, %init: tensor<!cheddar.boot_context>) -> tensor<!cheddar.boot_context> {
   // CHECK: cheddar.create_boot_context
