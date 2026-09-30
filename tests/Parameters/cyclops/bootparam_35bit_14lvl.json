@@ -260,7 +260,7 @@
           },
           {
             "log_degree": 15,
-            "default_encryption_level": 13,
+            "default_encryption_level": 14,
             "hamming_weight": 512,
             "max_log_pq": 865
           },
