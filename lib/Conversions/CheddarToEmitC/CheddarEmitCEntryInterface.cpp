@@ -1044,7 +1044,8 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
                  "using EvaluationKeyRequest = ::cyclops::EvkRequest;");
     emitVerbatim(builder, loc,
                  "using EvaluationKeys = ::cyclops::EvkMap<word>;");
-    emitVerbatim(builder, loc, "using DebugSink = ::heir::cyclops::DebugSink;");
+    emitVerbatim(builder, loc,
+                 "using DebugSink = ::heir::cyclops::DebugSink<word>;");
   }
   auto headerEnd = VerbatimOp::create(
       builder, loc, "}  // namespace " + namespaceName, ValueRange{});

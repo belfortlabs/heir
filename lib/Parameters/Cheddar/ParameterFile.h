@@ -10,10 +10,14 @@
 #include "llvm/include/llvm/ADT/StringRef.h"  // from @llvm-project
 #include "llvm/include/llvm/Support/Error.h"  // from @llvm-project
 
-// A CHEDDAR parameter file: the modulus chain a CHEDDAR runtime is built
-// from, in the format of CHEDDAR's bootstrapping parameters
-// (`parameters/*.json` in scale-snu/cheddar-fhe, read by its unit-test
-// Testbed).
+// A CHEDDAR parameter file: the modulus chain a CHEDDAR-family runtime is
+// built from. Two formats are read:
+//
+//  - CHEDDAR's single-ring bootstrapping parameters (`parameters/*.json` in
+//    scale-snu/cheddar-fhe, read by its unit-test Testbed), and
+//  - Cyclops' multi-profile parameter sets (schema
+//    `cyclops.multi_profile_parameter_set`, written by primegen32.py), which
+//    offer one chain for several ring degrees.
 //
 // The modulus chain is a list of levels, each built from a count of main
 // primes and a count of terminal primes, so consecutive levels need not be
@@ -35,6 +39,20 @@ struct LevelLayout {
   bool operator==(const LevelLayout&) const = default;
 };
 
+// A Cyclops `boot.eval_mod` block: the homomorphic x mod 1 a bootstrap
+// evaluates. An unset field (-1 or empty) keeps Cyclops' default for that
+// field.
+struct EvalModConfig {
+  bool present = false;
+  std::string type;
+  int degree = -1;
+  int interval = -1;
+  int logIntervalReduction = -1;
+  int invDegree = -1;
+  std::string invType;
+  double invInterval = -1.0;
+};
+
 // How the bootstrap circuit uses the levels at the top of the largest ring's
 // chain: CoeffToSlot from the top, then EvalMod, then SlotToCoeff, landing at
 // `endLevel`.
@@ -49,6 +67,7 @@ struct BootstrapConfig {
   // log2(q0 / scale) the EvalMod approximation is set up for; -1 when the
   // file does not say.
   int logMessageRatio = -1;
+  EvalModConfig evalMod;
 };
 
 // One ring the chain can be used in.
@@ -56,15 +75,18 @@ struct RingProfile {
   int logDegree = 0;
   // The runtime Parameter's default encryption level: the highest level a
   // program that does not bootstrap may use. For the bootstrapping ring,
-  // CHEDDAR's files put it at the start of SlotToCoeff.
+  // CHEDDAR's files put it at the start of SlotToCoeff and Cyclops' at the
+  // bootstrap's end level.
   int defaultEncryptionLevel = 0;
   int hammingWeight = 0;
+  // Cyclops only: the key-switching modulus budget; 0 when not given.
+  double maxLogPq = 0.0;
 };
 
 class ParameterFile {
  public:
-  // Parses the JSON text of a parameter file. `//` line comments are
-  // allowed.
+  // Parses the JSON text of a parameter file. `//` line comments, which
+  // primegen32's files start with, are allowed.
   static llvm::Expected<ParameterFile> parse(llvm::StringRef json,
                                              llvm::StringRef name = "<json>");
   static llvm::Expected<ParameterFile> load(llvm::StringRef path);
@@ -81,6 +103,16 @@ class ParameterFile {
   std::optional<BootstrapConfig> boot;
   // Ascending log degrees.
   std::vector<RingProfile> profiles;
+
+  // Whether a program may run on a prefix of the chain. CHEDDAR's Parameter
+  // requires its top level to hold every prime of the pools, so its files'
+  // chains are used whole; Cyclops' Parameter accepts a prefix.
+  bool prefixChains = false;
+
+  // Cyclops' key-switching policy; unset (-1) in CHEDDAR's files.
+  int defaultNumAux = -1;
+  std::optional<bool> levelSpecificKs;
+  int maxKeySwitchAux = -1;
 
   // The narrowest word the primes fit in: 32 when every prime is below 2^31,
   // otherwise 64 (the runtimes keep one spare bit).

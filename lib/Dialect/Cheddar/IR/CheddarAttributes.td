@@ -10,15 +10,40 @@ class Cheddar_Attribute<string name, string attrMnemonic>
   let assemblyFormat = "`<` struct(params) `>`";
 }
 
+def Cheddar_EvalModAttr : Cheddar_Attribute<"EvalMod", "eval_mod"> {
+  let summary = "The homomorphic x mod 1 approximation a bootstrap evaluates";
+  let description = [{
+    The fields of Cyclops' `Mod1ParametersLiteral` a parameter file may set
+    (its `boot.eval_mod` block). A field that is not set keeps the value of
+    Cyclops' default approximation (`BootParameter::DefaultMod1`), so an
+    attribute only names what it changes, exactly like the file does.
+
+    `type` is one of `cos_hk`, `cos_hk_even`, `cos_cheby`, `sin_cheby` and
+    `exp_complex`; `invType` one of `taylor` and `cheby`. `invDegree` is the
+    degree of the arcsine correction (0 for none; odd otherwise).
+  }];
+  let parameters = (ins
+    OptionalParameter<"StringAttr">:$type,
+    OptionalParameter<"std::optional<int64_t>">:$degree,
+    OptionalParameter<"std::optional<int64_t>">:$interval,
+    OptionalParameter<"std::optional<int64_t>">:$logIntervalReduction,
+    OptionalParameter<"std::optional<int64_t>">:$invDegree,
+    OptionalParameter<"StringAttr">:$invType,
+    OptionalParameter<"FloatAttr">:$invInterval
+  );
+  let genVerifyDecl = 1;
+}
+
 def Cheddar_BootstrapConfigAttr
     : Cheddar_Attribute<"BootstrapConfig", "bootstrap_config"> {
   let summary = "How the bootstrap circuit splits the levels above the chain";
   let description = [{
-    The inputs of the runtime's `BootParameter`: the CoeffToSlot and
-    SlotToCoeff level budgets (a depth/rotation trade-off, cf. OpenFHE's
-    level-budget-encode/decode), the number of EvalMod levels the
-    approximation consumes, and the message headroom `logMessageRatio`
-    (~ log2(q0 / scale); the runtime's default when omitted).
+    The inputs of Cyclops' `BootParameter`: the CoeffToSlot and SlotToCoeff
+    level budgets (a depth/rotation trade-off, cf. OpenFHE's
+    level-budget-encode/decode), the number of EvalMod levels the chosen
+    approximation consumes, the message headroom `logMessageRatio`
+    (~ log2(q0 / scale); Cyclops' default when omitted) and the approximation
+    itself (`evalMod`; Cyclops' default when omitted).
 
     The bootstrap starts at the top of the modulus chain and lands
     `numCtsLevels + numEvalModLevels + numStcLevels` levels lower, at the
@@ -28,14 +53,15 @@ def Cheddar_BootstrapConfigAttr
     "int64_t":$numCtsLevels,
     "int64_t":$numStcLevels,
     "int64_t":$numEvalModLevels,
-    OptionalParameter<"std::optional<int64_t>">:$logMessageRatio
+    OptionalParameter<"std::optional<int64_t>">:$logMessageRatio,
+    OptionalParameter<"EvalModAttr">:$evalMod
   );
   let genVerifyDecl = 1;
 }
 
 def Cheddar_ParameterSetAttr
     : Cheddar_Attribute<"ParameterSet", "parameter_set"> {
-  let summary = "The inputs of a CHEDDAR Parameter object";
+  let summary = "The inputs of a CHEDDAR/Cyclops Parameter object";
   let description = [{
     Everything the runtime's `Parameter<word>` is built from, in the runtime's
     own terms: the ring (`logN`), the base scale (`logScale`), the prime pools
@@ -49,7 +75,8 @@ def Cheddar_ParameterSetAttr
     defaults to what HEIR's generated 64-bit chains use: one main prime per
     level (`levelConfig = (1,0), (2,0), ...`), no terminal primes, 64-bit words,
     fresh encryption at the top level, and the runtime's own defaults for the
-    secret-key hamming weights.
+    key-switching policy (`defaultNumAux`, `levelSpecificKs`, `maxKeySwitchAux`,
+    `maxLogPq`) and the secret-key hamming weights.
 
     `defaultEncryptionLevel` is the level fresh ciphertexts and bootstrap
     outputs sit at; the levels above it (if any) belong to the bootstrap
@@ -65,6 +92,10 @@ def Cheddar_ParameterSetAttr
     OptionalParameter<"std::optional<int64_t>">:$wordBits,
     OptionalParameter<"std::optional<int64_t>">:$defaultEncryptionLevel,
     OptionalParameter<"DenseI64ArrayAttr">:$additionalBase,
+    OptionalParameter<"std::optional<int64_t>">:$defaultNumAux,
+    OptionalParameter<"BoolAttr">:$levelSpecificKs,
+    OptionalParameter<"std::optional<int64_t>">:$maxKeySwitchAux,
+    OptionalParameter<"FloatAttr">:$maxLogPq,
     OptionalParameter<"std::optional<int64_t>">:$denseHammingWeight,
     OptionalParameter<"std::optional<int64_t>">:$sparseHammingWeight
   );

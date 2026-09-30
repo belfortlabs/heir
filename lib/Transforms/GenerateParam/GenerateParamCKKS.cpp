@@ -90,6 +90,11 @@ DenseI64ArrayAttr primesAttr(MLIRContext* context,
   return DenseI64ArrayAttr::get(context, values);
 }
 
+std::optional<int64_t> optionalField(int value) {
+  if (value < 0) return std::nullopt;
+  return value;
+}
+
 }  // namespace
 
 struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
@@ -200,9 +205,10 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
     OpPassManager annotate("builtin.module");
     annotate.addPass(mgmt::createAnnotateMgmt());
     if (failed(runPipeline(annotate, module))) return failure();
-    // CHEDDAR's Parameter requires its top level to hold every prime of the
-    // pools, so the file's chain is used whole.
+    // A program that does not bootstrap is given the levels it uses where the
+    // runtime accepts a prefix of the chain (see ParameterFile::prefixChains).
     std::vector<cheddar::LevelLayout> layout = file->levels;
+    if (!hasBootstrap && file->prefixChains) layout.resize(computeMaxLevel + 1);
     int64_t defaultEncryptionLevel =
         hasBootstrap ? profile->defaultEncryptionLevel : computeMaxLevel;
     LDBG() << "Selected ring profile logN=" << profile->logDegree << " with "
@@ -285,8 +291,14 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
                 ? DenseI64ArrayAttr()
                 : primesAttr(context, file->terminalPrimes),
             builder.getDenseI64ArrayAttr(levelConfig), file->wordBits(),
-            defaultEncryptionLevel, additionalBase, profile->hammingWeight,
-            sparseHammingWeight));
+            defaultEncryptionLevel, additionalBase,
+            optionalField(file->defaultNumAux),
+            file->levelSpecificKs ? builder.getBoolAttr(*file->levelSpecificKs)
+                                  : BoolAttr(),
+            optionalField(file->maxKeySwitchAux),
+            profile->maxLogPq > 0.0 ? builder.getF64FloatAttr(profile->maxLogPq)
+                                    : FloatAttr(),
+            profile->hammingWeight, sparseHammingWeight));
     if (!hasBootstrap) return success();
 
     const cheddar::BootstrapConfig& boot = *file->boot;
@@ -299,10 +311,26 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
                << cheddarParameterFile << " leaves " << headroom
                << " bits between q0 and the scale, too few for a bootstrap";
     }
+    cheddar::EvalModAttr evalMod;
+    if (boot.evalMod.present) {
+      const cheddar::EvalModConfig& config = boot.evalMod;
+      evalMod = cheddar::EvalModAttr::get(
+          context,
+          config.type.empty() ? StringAttr()
+                              : builder.getStringAttr(config.type),
+          optionalField(config.degree), optionalField(config.interval),
+          optionalField(config.logIntervalReduction),
+          optionalField(config.invDegree),
+          config.invType.empty() ? StringAttr()
+                                 : builder.getStringAttr(config.invType),
+          config.invInterval < 0.0
+              ? FloatAttr()
+              : builder.getF64FloatAttr(config.invInterval));
+    }
     module->setAttr(cheddar::kBootstrapConfigAttrName,
                     cheddar::BootstrapConfigAttr::get(
                         context, boot.numCtsLevels, boot.numStcLevels,
-                        boot.numEvalModLevels, logMessageRatio));
+                        boot.numEvalModLevels, logMessageRatio, evalMod));
     return success();
   }
 

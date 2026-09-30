@@ -83,8 +83,9 @@ struct MlirToRLWEPipelineOptions : public LoopOptions {
       llvm::cl::desc(
           "Take the CKKS modulus chain and the Cheddar runtime parameter set "
           "from this CHEDDAR parameter file (a scale-snu/cheddar-fhe "
-          "bootparam JSON, 32-bit or 64-bit words) instead of generating "
-          "primes; Cheddar backend only"),
+          "bootparam JSON or a Cyclops multi-profile parameter set, 32-bit "
+          "or 64-bit words) instead of generating primes; Cheddar backend "
+          "only"),
       llvm::cl::init("")};
   PassOptions::Option<int> bfvModBits{
       *this, "bfv-mod-bits",

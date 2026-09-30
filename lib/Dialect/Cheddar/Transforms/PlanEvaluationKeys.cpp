@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <exception>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "core/Parameter.h"                              // from @cyclops
 #include "extension/boot/BootKeyPlanner.h"               // from @cyclops
 #include "extension/boot/BootParameter.h"                // from @cyclops
+#include "extension/boot/Mod1Parameters.h"               // from @cyclops
 #include "extension/linalg/LinearTransformKeyPlanner.h"  // from @cyclops
 #include "lib/Dialect/Cheddar/IR/CheddarAttributes.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
@@ -17,6 +19,7 @@
 #include "lib/Dialect/ModuleAttributes.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"          // from @llvm-project
+#include "llvm/include/llvm/ADT/StringSwitch.h"         // from @llvm-project
 #include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"              // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"     // from @llvm-project
@@ -38,6 +41,37 @@ func::FuncOp findClientSetup(ModuleOp module) {
     return WalkResult::interrupt();
   });
   return found;
+}
+
+// The x mod 1 approximation the attribute describes, on top of Cyclops'
+// default for the same message ratio: the same resolution the emitted
+// BootParameter performs, so the planned keys match the runtime's circuit.
+std::optional<::cyclops::Mod1ParametersLiteral> toMod1Literal(
+    EvalModAttr attr, int logMessageRatio) {
+  if (!attr) return std::nullopt;
+  ::cyclops::Mod1ParametersLiteral literal =
+      ::cyclops::BootParameter::DefaultMod1(logMessageRatio);
+  if (StringAttr type = attr.getType()) {
+    literal.type = llvm::StringSwitch<::cyclops::Mod1Type>(type.getValue())
+                       .Case("cos_hk", ::cyclops::Mod1Type::kCosHK)
+                       .Case("cos_hk_even", ::cyclops::Mod1Type::kCosHKEven)
+                       .Case("cos_cheby", ::cyclops::Mod1Type::kCosCheby)
+                       .Case("sin_cheby", ::cyclops::Mod1Type::kSinCheby)
+                       .Case("exp_complex", ::cyclops::Mod1Type::kExpComplex)
+                       .Default(literal.type);
+  }
+  if (auto degree = attr.getDegree()) literal.degree = *degree;
+  if (auto interval = attr.getInterval()) literal.interval = *interval;
+  if (auto reduction = attr.getLogIntervalReduction())
+    literal.log_interval_reduction = *reduction;
+  if (auto invDegree = attr.getInvDegree()) literal.inv_degree = *invDegree;
+  if (StringAttr invType = attr.getInvType())
+    literal.inv_type = invType.getValue() == "cheby"
+                           ? ::cyclops::Mod1InvType::kArcsineCheby
+                           : ::cyclops::Mod1InvType::kArcsineTaylor;
+  if (FloatAttr invInterval = attr.getInvInterval())
+    literal.inv_interval = invInterval.getValueAsDouble();
+  return literal;
 }
 
 template <typename Word>
@@ -71,12 +105,19 @@ struct PlanEvaluationKeysPass
         primesOf<Word>(parameterSet.getMainPrimes()),
         primesOf<Word>(parameterSet.getAuxPrimes()),
         primesOf<Word>(parameterSet.getTerminalPrimes()),
-        std::pair<int, int>(baseMain, baseTerminal));
+        std::pair<int, int>(baseMain, baseTerminal),
+        static_cast<int>(parameterSet.getDefaultNumAux().value_or(-1)));
     // The dense weight goes first: the sparse one must stay below it.
     if (auto weight = parameterSet.getDenseHammingWeight())
       params.SetDenseHammingWeight(*weight);
     if (auto weight = parameterSet.getSparseHammingWeight())
       params.SetSparseHammingWeight(*weight);
+    if (FloatAttr budget = parameterSet.getMaxLogPq())
+      params.SetMaxLogPQ(budget.getValueAsDouble());
+    if (BoolAttr levelSpecific = parameterSet.getLevelSpecificKs())
+      params.SetLevelSpecificKS(levelSpecific.getValue());
+    if (auto cap = parameterSet.getMaxKeySwitchAux())
+      params.SetMaxKeySwitchAux(*cap);
 
     ::cyclops::EvkRequest request;
     ArrayRef<int64_t> pairs = rotationKeys.asArrayRef();
@@ -119,7 +160,8 @@ struct PlanEvaluationKeysPass
       // The emitter hard-codes the imaginary-removing variant.
       ::cyclops::BootParameter bootstrap(
           params.max_level_, bootstrapConfig.getNumCtsLevels(),
-          bootstrapConfig.getNumStcLevels(), ratio);
+          bootstrapConfig.getNumStcLevels(), ratio,
+          toMod1Literal(bootstrapConfig.getEvalMod(), ratio));
       if (bootstrap.GetNumEvalModLevels() !=
           bootstrapConfig.getNumEvalModLevels()) {
         return setup.emitOpError()

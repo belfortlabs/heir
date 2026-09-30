@@ -14,19 +14,19 @@ func.func @test_make_parameter() -> !cheddar.parameter {
 }
 
 // A 32-bit word chain: two or three primes per level, terminal primes moving
-// in and out, and the secret-key hamming weights.
+// in and out, and the runtime's key-switching policy and hamming weights.
 // CHECK: @test_make_parameter_layout
 func.func @test_make_parameter_layout() -> !cheddar.parameter {
-  // CHECK: cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 13, logScale = 35, mainPrimes = [969146369, 1172439041, 958136321, 1070727169], auxPrimes = [964558849, 974258177], terminalPrimes = [30539777, 32899073], levelConfig = [0, 2, 2, 1, 4, 0], wordBits = 32, defaultEncryptionLevel = 1, additionalBase = [0, 1], denseHammingWeight = 128, sparseHammingWeight = 32>
-  %p = cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 13, logScale = 35, mainPrimes = [969146369, 1172439041, 958136321, 1070727169], auxPrimes = [964558849, 974258177], terminalPrimes = [30539777, 32899073], levelConfig = [0, 2, 2, 1, 4, 0], wordBits = 32, defaultEncryptionLevel = 1, additionalBase = [0, 1], denseHammingWeight = 128, sparseHammingWeight = 32>} : !cheddar.parameter
+  // CHECK: cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 13, logScale = 35, mainPrimes = [969146369, 1172439041, 958136321, 1070727169], auxPrimes = [964558849, 974258177], terminalPrimes = [30539777, 32899073], levelConfig = [0, 2, 2, 1, 4, 0], wordBits = 32, defaultEncryptionLevel = 1, additionalBase = [0, 1], defaultNumAux = 1, levelSpecificKs = true, maxKeySwitchAux = 2, maxLogPq = 2.162500e+02 : f64, denseHammingWeight = 128, sparseHammingWeight = 32>
+  %p = cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 13, logScale = 35, mainPrimes = [969146369, 1172439041, 958136321, 1070727169], auxPrimes = [964558849, 974258177], terminalPrimes = [30539777, 32899073], levelConfig = [0, 2, 2, 1, 4, 0], wordBits = 32, defaultEncryptionLevel = 1, additionalBase = [0, 1], defaultNumAux = 1, levelSpecificKs = true, maxKeySwitchAux = 2, maxLogPq = 216.25 : f64, denseHammingWeight = 128, sparseHammingWeight = 32>} : !cheddar.parameter
   return %p : !cheddar.parameter
 }
 
 // CHECK: @test_create_boot_context
 func.func @test_create_boot_context(%params: !cheddar.parameter, %init: tensor<!cheddar.boot_context>) -> tensor<!cheddar.boot_context> {
   // CHECK: cheddar.create_boot_context
-  // CHECK-SAME: config = #cheddar.bootstrap_config<numCtsLevels = 5, numStcLevels = 3, numEvalModLevels = 8, logMessageRatio = 7>
-  %ctx = cheddar.create_boot_context %params, %init {config = #cheddar.bootstrap_config<numCtsLevels = 5, numStcLevels = 3, numEvalModLevels = 8, logMessageRatio = 7>} : (!cheddar.parameter, tensor<!cheddar.boot_context>) -> tensor<!cheddar.boot_context>
+  // CHECK-SAME: config = #cheddar.bootstrap_config<numCtsLevels = 5, numStcLevels = 3, numEvalModLevels = 8, logMessageRatio = 7, evalMod = <type = "cos_hk_even", degree = 26, interval = 16, logIntervalReduction = 3, invDegree = 3, invType = "cheby", invInterval = 2.500000e-01 : f64>>
+  %ctx = cheddar.create_boot_context %params, %init {config = #cheddar.bootstrap_config<numCtsLevels = 5, numStcLevels = 3, numEvalModLevels = 8, logMessageRatio = 7, evalMod = #cheddar.eval_mod<type = "cos_hk_even", degree = 26, interval = 16, logIntervalReduction = 3, invDegree = 3, invType = "cheby", invInterval = 0.25 : f64>>} : (!cheddar.parameter, tensor<!cheddar.boot_context>) -> tensor<!cheddar.boot_context>
   return %ctx : tensor<!cheddar.boot_context>
 }
 

@@ -190,8 +190,8 @@ def GenerateParamCKKS : Pass<"generate-param-ckks"> {
            "(https://eprint.iacr.org/2020/1118).">,
     Option<"cheddarParameterFile", "cheddar-parameter-file", "std::string",
            /*default=*/"\"\"", "Take the modulus chain from this CHEDDAR parameter "
-           "file (a scale-snu/cheddar-fhe bootparam JSON) instead of "
-           "generating primes: the "
+           "file (a scale-snu/cheddar-fhe bootparam JSON or a Cyclops "
+           "multi-profile parameter set) instead of generating primes: the "
            "smallest ring that holds the program is chosen, the scheme "
            "parameters model its per-level modulus growth, and the file's "
            "runtime parameter set (primes, level layout, bootstrap split) is "

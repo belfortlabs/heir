@@ -19,6 +19,7 @@
 #include "llvm/include/llvm/ADT/SmallVector.h"      // from @llvm-project
 #include "llvm/include/llvm/ADT/StringMap.h"        // from @llvm-project
 #include "llvm/include/llvm/ADT/StringSet.h"        // from @llvm-project
+#include "llvm/include/llvm/ADT/StringSwitch.h"     // from @llvm-project
 #include "llvm/include/llvm/ADT/Twine.h"            // from @llvm-project
 #include "llvm/include/llvm/Support/raw_ostream.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/ConvertToEmitC/ToEmitCInterface.h"  // from @llvm-project
@@ -239,7 +240,7 @@ void addCheddarEmitCTypeConversions(TypeConverter& tc, MLIRContext* ctx) {
   });
   tc.addConversion([ctx](cheddar::DebugHandlerType) -> Type {
     return PointerType::get(
-        OpaqueType::get(ctx, "const heir::cyclops::DebugSink"));
+        OpaqueType::get(ctx, "const heir::cyclops::DebugSink<word>"));
   });
   // Identity for lvalue, which the shared EmitCTypeConverter rejects.
   tc.addConversion([](emitc::LValueType t) -> Type { return t; });
@@ -435,8 +436,8 @@ struct ConvertMakeParameter
     std::string scale = "static_cast<double>(UINT64_C(1) << " +
                         std::to_string(set.getLogScale()) + ")";
     // The runtime's trailing constructor arguments (terminal primes, the
-    // additional base) default to what a HEIR-generated chain uses; they are
-    // spelled out only from the first one that differs.
+    // additional base, the default aux count) default to what a HEIR-generated
+    // chain uses; they are spelled out only from the first one that differs.
     SmallVector<std::string> arguments = {
         std::to_string(set.getLogN()),
         scale,
@@ -447,11 +448,16 @@ struct ConvertMakeParameter
         primes(set.getTerminalPrimes()),
         "std::pair<int, int>{" +
             std::to_string(set.getAdditionalBasePair().first) + ", " +
-            std::to_string(set.getAdditionalBasePair().second) + "}"};
+            std::to_string(set.getAdditionalBasePair().second) + "}",
+        std::to_string(set.getDefaultNumAux().value_or(-1))};
     size_t count = arguments.size();
-    if (set.getAdditionalBasePair() == std::pair<int64_t, int64_t>{0, 0}) {
+    if (!set.getDefaultNumAux()) {
       --count;
-      if (!set.getTerminalPrimes() || set.getTerminalPrimes().empty()) --count;
+      if (set.getAdditionalBasePair() == std::pair<int64_t, int64_t>{0, 0}) {
+        --count;
+        if (!set.getTerminalPrimes() || set.getTerminalPrimes().empty())
+          --count;
+      }
     }
     std::string args;
     for (size_t i = 0; i < count; ++i) {
@@ -470,6 +476,14 @@ struct ConvertMakeParameter
       statement(name + ".SetDenseHammingWeight(" + Twine(*weight) + ");");
     if (auto weight = set.getSparseHammingWeight())
       statement(name + ".SetSparseHammingWeight(" + Twine(*weight) + ");");
+    if (FloatAttr budget = set.getMaxLogPq())
+      statement(name + ".SetMaxLogPQ(" + floatLit(budget) + ");");
+    if (BoolAttr levelSpecific = set.getLevelSpecificKs()) {
+      StringRef enabled = levelSpecific.getValue() ? "true" : "false";
+      statement(name + ".SetLevelSpecificKS(" + enabled + ");");
+    }
+    if (auto cap = set.getMaxKeySwitchAux())
+      statement(name + ".SetMaxKeySwitchAux(" + Twine(*cap) + ");");
     auto literal =
         emitc::LiteralOp::create(rewriter, op.getLoc(), resultType, name);
     rewriter.replaceOp(op, literal.getResult());
@@ -550,6 +564,43 @@ struct ConvertPrepareLinearTransformKeys
   }
 };
 
+// The EvalMod approximation named by the attribute, applied on top of
+// Cyclops' default for the message ratio (the same resolution
+// cheddar-plan-evaluation-keys performs when it plans the bootstrap keys).
+void emitMod1Literal(ConversionPatternRewriter& rewriter, Location loc,
+                     cheddar::EvalModAttr attr, StringRef ratio,
+                     StringRef name) {
+  auto statement = [&](const Twine& text) {
+    VerbatimOp::create(rewriter, loc, text.str(), ValueRange{});
+  };
+  statement("Mod1ParametersLiteral " + name + " = BootParameter::DefaultMod1(" +
+            ratio + ");");
+  if (StringAttr type = attr.getType()) {
+    StringRef enumerator = llvm::StringSwitch<StringRef>(type.getValue())
+                               .Case("cos_hk", "kCosHK")
+                               .Case("cos_hk_even", "kCosHKEven")
+                               .Case("cos_cheby", "kCosCheby")
+                               .Case("sin_cheby", "kSinCheby")
+                               .Case("exp_complex", "kExpComplex");
+    statement(name + ".type = Mod1Type::" + enumerator + ";");
+  }
+  if (auto degree = attr.getDegree())
+    statement(name + ".degree = " + Twine(*degree) + ";");
+  if (auto interval = attr.getInterval())
+    statement(name + ".interval = " + Twine(*interval) + ";");
+  if (auto reduction = attr.getLogIntervalReduction())
+    statement(name + ".log_interval_reduction = " + Twine(*reduction) + ";");
+  if (auto invDegree = attr.getInvDegree())
+    statement(name + ".inv_degree = " + Twine(*invDegree) + ";");
+  if (StringAttr invType = attr.getInvType()) {
+    StringRef enumerator =
+        invType.getValue() == "cheby" ? "kArcsineCheby" : "kArcsineTaylor";
+    statement(name + ".inv_type = Mod1InvType::" + enumerator + ";");
+  }
+  if (FloatAttr invInterval = attr.getInvInterval())
+    statement(name + ".inv_interval = " + floatLit(invInterval) + ";");
+}
+
 struct ConvertCreateBootContext
     : public OpConversionPattern<cheddar::CreateBootContextOp> {
   using OpConversionPattern::OpConversionPattern;
@@ -557,16 +608,30 @@ struct ConvertCreateBootContext
       cheddar::CreateBootContextOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     cheddar::BootstrapConfigAttr config = op.getConfig();
+    std::string ratio;
+    if (auto value = config.getLogMessageRatio())
+      ratio = std::to_string(*value);
+    else if (config.getEvalMod())
+      ratio = "BootParameter::kDefaultLogMessageRatio";
     std::string arguments = "{}.max_level_, " +
                             std::to_string(config.getNumCtsLevels()) + ", " +
                             std::to_string(config.getNumStcLevels());
-    if (auto ratio = config.getLogMessageRatio())
-      arguments += ", " + std::to_string(*ratio);
+    if (!ratio.empty()) arguments += ", " + ratio;
+    // The literal needs statements of its own; scope them with the context
+    // creation.
+    if (config.getEvalMod()) {
+      VerbatimOp::create(rewriter, op.getLoc(), "{", ValueRange{});
+      emitMod1Literal(rewriter, op.getLoc(), config.getEvalMod(), ratio,
+                      "_boot_mod1");
+      arguments += ", _boot_mod1";
+    }
     VerbatimOp::create(
         rewriter, op.getLoc(),
         "{} = BootContext<word>::Create({}, BootParameter(" + arguments + "));",
         ValueRange{adaptor.getOutput(), adaptor.getParams(),
                    adaptor.getParams()});
+    if (config.getEvalMod())
+      VerbatimOp::create(rewriter, op.getLoc(), "}", ValueRange{});
     rewriter.eraseOp(op);
     return success();
   }

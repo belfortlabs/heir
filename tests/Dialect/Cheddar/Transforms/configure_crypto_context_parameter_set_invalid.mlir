@@ -6,6 +6,24 @@
 !evk_map = !cheddar.evk_map
 !ui = !cheddar.user_interface
 
+// A key-switching policy is Cyclops' alone; scale-snu's Parameter has no
+// setters for it.
+module attributes {
+  cheddar.parameter_set = #cheddar.parameter_set<logN = 13, logScale = 35, mainPrimes = [969146369, 1172439041], auxPrimes = [964558849], terminalPrimes = [30539777, 32899073], levelConfig = [0, 2, 2, 1], wordBits = 32, levelSpecificKs = true>,
+  scheme.requested_slot_count = 8 : i64
+} {
+  // expected-error@+1 {{a Cyclops parameter set requires the Cyclops runtime}}
+  func.func @main(%ctx: !context, %ui: !ui, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
+    return %ct : tensor<!ciphertext>
+  }
+}
+
+// -----
+
+!boot_context = !cheddar.boot_context
+!ciphertext = !cheddar.ciphertext
+!evk_map = !cheddar.evk_map
+
 // scale-snu's EvalMod always takes eight levels.
 module attributes {
   cheddar.bootstrap_config = #cheddar.bootstrap_config<numCtsLevels = 1, numStcLevels = 1, numEvalModLevels = 0>,

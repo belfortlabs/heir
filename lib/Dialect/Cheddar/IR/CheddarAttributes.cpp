@@ -4,6 +4,7 @@
 #include <optional>
 #include <utility>
 
+#include "llvm/include/llvm/ADT/STLExtras.h"         // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"       // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Diagnostics.h"        // from @llvm-project
@@ -13,10 +14,36 @@ namespace mlir {
 namespace heir {
 namespace cheddar {
 
+LogicalResult EvalModAttr::verify(
+    llvm::function_ref<InFlightDiagnostic()> emitError, StringAttr type,
+    std::optional<int64_t> degree, std::optional<int64_t> interval,
+    std::optional<int64_t> logIntervalReduction,
+    std::optional<int64_t> invDegree, StringAttr invType,
+    FloatAttr invInterval) {
+  if (type && !llvm::is_contained(kEvalModTypes, type.getValue()))
+    return emitError() << "unknown eval_mod type '" << type.getValue()
+                       << "'; expected one of cos_hk, cos_hk_even, "
+                          "cos_cheby, sin_cheby, exp_complex";
+  if (degree && *degree <= 0)
+    return emitError() << "eval_mod degree must be positive";
+  if (interval && *interval <= 0)
+    return emitError() << "eval_mod interval must be positive";
+  if (logIntervalReduction && *logIntervalReduction < 0)
+    return emitError() << "eval_mod logIntervalReduction must be non-negative";
+  if (invDegree && (*invDegree < 0 || (*invDegree > 0 && *invDegree % 2 == 0)))
+    return emitError() << "eval_mod invDegree must be zero or odd";
+  if (invType && !llvm::is_contained(kEvalModInvTypes, invType.getValue()))
+    return emitError() << "unknown eval_mod invType '" << invType.getValue()
+                       << "'; expected taylor or cheby";
+  if (invInterval && invInterval.getValueAsDouble() < 0.0)
+    return emitError() << "eval_mod invInterval must be non-negative";
+  return success();
+}
+
 LogicalResult BootstrapConfigAttr::verify(
     llvm::function_ref<InFlightDiagnostic()> emitError, int64_t numCtsLevels,
     int64_t numStcLevels, int64_t numEvalModLevels,
-    std::optional<int64_t> logMessageRatio) {
+    std::optional<int64_t> logMessageRatio, EvalModAttr evalMod) {
   if (numCtsLevels < 0 || numStcLevels < 0 || numEvalModLevels < 0)
     return emitError() << "bootstrap level counts must be non-negative";
   if (logMessageRatio && *logMessageRatio <= 0)
@@ -30,7 +57,9 @@ LogicalResult ParameterSetAttr::verify(
     DenseI64ArrayAttr terminalPrimes, DenseI64ArrayAttr levelConfig,
     std::optional<int64_t> wordBits,
     std::optional<int64_t> defaultEncryptionLevel,
-    DenseI64ArrayAttr additionalBase, std::optional<int64_t> denseHammingWeight,
+    DenseI64ArrayAttr additionalBase, std::optional<int64_t> defaultNumAux,
+    BoolAttr levelSpecificKs, std::optional<int64_t> maxKeySwitchAux,
+    FloatAttr maxLogPq, std::optional<int64_t> denseHammingWeight,
     std::optional<int64_t> sparseHammingWeight) {
   if (logN <= 0) return emitError() << "logN must be positive";
   if (logScale < 0 || logScale >= 64)
@@ -88,6 +117,13 @@ LogicalResult ParameterSetAttr::verify(
     if (additionalBase[0] < 0 || additionalBase[1] < 0)
       return emitError() << "additionalBase counts must be non-negative";
   }
+  if (defaultNumAux &&
+      (*defaultNumAux < 1 || *defaultNumAux > auxPrimes.size()))
+    return emitError() << "defaultNumAux must be in [1, number of aux primes]";
+  if (maxKeySwitchAux && *maxKeySwitchAux < 1)
+    return emitError() << "maxKeySwitchAux must be positive";
+  if (maxLogPq && maxLogPq.getValueAsDouble() <= 0.0)
+    return emitError() << "maxLogPq must be positive";
   if (denseHammingWeight && *denseHammingWeight <= 0)
     return emitError() << "denseHammingWeight must be positive";
   if (sparseHammingWeight && *sparseHammingWeight <= 0)

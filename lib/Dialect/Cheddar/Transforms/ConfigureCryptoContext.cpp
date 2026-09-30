@@ -335,15 +335,17 @@ struct CheddarConfigureCryptoContext
       int64_t ratio = logMessageRatio < 0 ? kGeneratedChainLogMessageRatio
                                           : logMessageRatio;
       bootstrap = BootstrapConfigAttr::get(ctx, bootNumCts, bootNumStc,
-                                           kBootstrapEvalModLevels, ratio);
+                                           kBootstrapEvalModLevels, ratio,
+                                           EvalModAttr());
     }
-    return ParameterSetAttr::get(ctx, schemeParam.getLogN(),
-                                 schemeParam.getLogDefaultScale(), Q, P,
-                                 /*terminalPrimes=*/DenseI64ArrayAttr(),
-                                 /*levelConfig=*/DenseI64ArrayAttr(),
-                                 /*wordBits=*/std::nullopt, defaultEncLevel,
-                                 /*additionalBase=*/DenseI64ArrayAttr(),
-                                 denseHammingWeight, sparseHammingWeight);
+    return ParameterSetAttr::get(
+        ctx, schemeParam.getLogN(), schemeParam.getLogDefaultScale(), Q, P,
+        /*terminalPrimes=*/DenseI64ArrayAttr(),
+        /*levelConfig=*/DenseI64ArrayAttr(),
+        /*wordBits=*/std::nullopt, defaultEncLevel,
+        /*additionalBase=*/DenseI64ArrayAttr(), /*defaultNumAux=*/std::nullopt,
+        /*levelSpecificKs=*/BoolAttr(), /*maxKeySwitchAux=*/std::nullopt,
+        /*maxLogPq=*/FloatAttr(), denseHammingWeight, sparseHammingWeight);
   }
 
   // The runtime parameters of a module whose chain was imported from a
@@ -352,11 +354,15 @@ struct CheddarConfigureCryptoContext
   FailureOr<ParameterSetAttr> parameterSetFromModule(
       func::FuncOp entry, ParameterSetAttr parameterSet, bool bootstraps,
       BootstrapConfigAttr& bootstrap) {
-    // The Cyclops runtime header is written for 64-bit words.
-    if (useCyclopsRuntime && parameterSet.getWordBitsOrDefault() != 64) {
+    // scale-snu's Parameter has no key-switching policy setters, and its
+    // BootParameter takes no EvalMod approximation.
+    if (!useCyclopsRuntime &&
+        (parameterSet.getDefaultNumAux() || parameterSet.getLevelSpecificKs() ||
+         parameterSet.getMaxKeySwitchAux() || parameterSet.getMaxLogPq() ||
+         (bootstrap && bootstrap.getEvalMod()))) {
       entry.emitOpError(
-          "the Cyclops runtime supports 64-bit words only, but the parameter "
-          "set is for 32-bit words");
+          "a Cyclops parameter set requires the Cyclops runtime "
+          "(use-cyclops-runtime=true)");
       return failure();
     }
     if (!bootstraps) {
@@ -397,7 +403,7 @@ struct CheddarConfigureCryptoContext
       bootstrap = BootstrapConfigAttr::get(
           &getContext(), bootstrap.getNumCtsLevels(),
           bootstrap.getNumStcLevels(), bootstrap.getNumEvalModLevels(),
-          logMessageRatio);
+          logMessageRatio, bootstrap.getEvalMod());
     return parameterSet;
   }
 

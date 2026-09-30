@@ -7,6 +7,7 @@ glob_lit_tests(
     data = [
         "@heir//tests:test_utilities",
         "@heir//tests/Parameters/cheddar:parameter_files",
+        "@heir//tests/Parameters/cyclops:parameter_files",
     ],
     driver = "@heir//tests:run_lit.sh",
     test_file_exts = ["mlir"],
