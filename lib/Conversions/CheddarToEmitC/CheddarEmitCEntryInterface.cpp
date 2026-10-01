@@ -508,7 +508,7 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
   if (split)
     VerbatimOp::create(builder, loc,
                        "{}.storage->PrepareRotationKey(GetKeyRequest(), "
-                       "{}->BootSecretId());",
+                       "{}->NativeSecretId());",
                        ValueRange{keyPair, function.getArgument(0)});
   for (StringRef field : {"secret_key", "public_key"}) {
     if (split && field == "public_key") continue;

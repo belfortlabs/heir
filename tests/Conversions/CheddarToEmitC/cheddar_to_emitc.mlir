@@ -50,7 +50,7 @@ func.func @configure() -> (tensor<!context>, tensor<!user_interface>) {
 // own; `prepare_linear_transform_keys` asks the runtime instead, through a
 // shape-only transform over a zero matrix with the same diagonals and width.
 // CHECK: func.func @configure_cyclops
-// CHECK: emitc.verbatim "{}->PrepareRotationKey(3, {}->BootSecretId(), 2);"
+// CHECK: emitc.verbatim "{}->PrepareRotationKey(3, {}->NativeSecretId(), 2);"
 // CHECK: emitc.verbatim "{"
 // CHECK: emitc.verbatim "ConstContextPtr<word> _ltk_cp = {};"
 // CHECK: emitc.verbatim "StripedMatrix _ltk_matrix(8, 8);"
@@ -59,7 +59,7 @@ func.func @configure() -> (tensor<!context>, tensor<!user_interface>) {
 // CHECK: emitc.verbatim "LinearTransform<word> _ltk(_ltk_cp, _ltk_matrix, 1, {}->param_.GetScale(1), 0, 0, -1, PlaintextCacheConfig(), KeyMode::kInherit, PlaintextMode::kShapeOnly);"
 // CHECK: emitc.verbatim "EvkRequest _ltk_req;"
 // CHECK: emitc.verbatim "_ltk.AddRequiredRotations(_ltk_req);"
-// CHECK: emitc.verbatim "{}->PrepareRotationKey(_ltk_req, {}->BootSecretId());"
+// CHECK: emitc.verbatim "{}->PrepareRotationKey(_ltk_req, {}->NativeSecretId());"
 // CHECK: emitc.verbatim "}"
 func.func @configure_cyclops() -> (tensor<!context>, tensor<!user_interface>) {
   %p = cheddar.make_parameter {logN = 14 : i64, logScale = 45 : i64, mainPrimes = array<i64: 1, 2, 3>, auxPrimes = array<i64: 4, 5>} : !parameter
@@ -218,7 +218,7 @@ func.func @enc_chain_slots(%enc: !encoder, %msg: tensor<4xf64>, %ui: !user_inter
 // UserInterface::EncryptMessage uses.
 // CHECK: func.func @enc_chain_tagged
 // CHECK: emitc.verbatim "{}.MatchRing({}->NewPlaintext());"
-// CHECK: emitc.verbatim "{}.SetSecretId({}->BootSecretId());"
+// CHECK: emitc.verbatim "{}.SetSecretId({}->NativeSecretId());"
 // CHECK: emitc.verbatim "{}.EncodeSlots({}, 5, {}.GetScale(5), {});"
 // CHECK: emitc.member_call_opaque %arg3 "Encrypt"
 func.func @enc_chain_tagged(%ctx: !context, %enc: !encoder, %msg: tensor<4xf64>, %ui: !user_interface) -> tensor<!ciphertext> {
