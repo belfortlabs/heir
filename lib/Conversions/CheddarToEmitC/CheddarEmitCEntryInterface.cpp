@@ -59,6 +59,8 @@ enum class InterfaceSide { Combined, Client, Server };
 // The lowered functions live in this namespace of each source file, with
 // internal linkage, so a helper both sides share can be defined in both.
 constexpr StringLiteral kDetailNamespace = "heir::generated::detail";
+constexpr StringLiteral kSecretSeedType =
+    "const std::optional<::cyclops::prng::Seed>&";
 
 // Shape of cheddar.evaluation_keys, as cheddar-plan-evaluation-keys writes it:
 // flat (family, rotation, level, key mode, required aux count) tuples. The
@@ -492,14 +494,24 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
   auto* ctx = builder.getContext();
   SmallVector<Type> inputs{
       OpaqueType::get(ctx, "const std::shared_ptr<Context>&")};
+  if (split) inputs.push_back(OpaqueType::get(ctx, kSecretSeedType));
   auto function = createEmitCFunction(builder, loc, "KeyGen", inputs,
                                       {OpaqueType::get(ctx, "KeyPair")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   Value keyPair = createLocal(builder, loc, "KeyPair");
   Value storage = MemberOp::create(
       builder, loc, LValueType::get(keyStorageType), "storage", keyPair);
-  callInternal(builder, loc, functions.keygen,
-               ValueRange{function.getArgument(0), storage});
+  // The Cyclops keygen only constructs the UserInterface, so build it here
+  // with the optional secret seed instead of calling it.
+  if (split)
+    VerbatimOp::create(
+        builder, loc,
+        "{}.storage = std::make_unique<UserInterface<word>>({}, "
+        "true, ::cyclops::prng::Backend::kShake128, true, {});",
+        ValueRange{keyPair, function.getArgument(0), function.getArgument(1)});
+  else
+    callInternal(builder, loc, functions.keygen,
+                 ValueRange{function.getArgument(0), storage});
   Type uiPointer =
       PointerType::get(OpaqueType::get(ctx, "UserInterface<word>"));
   Value ui = CallOpaqueOp::create(builder, loc, TypeRange{uiPointer},
@@ -980,6 +992,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   for (StringRef include : {"array", "complex", "cstddef", "cstdint", "memory",
                             "string_view", "tuple", "utility", "vector"})
     emitInclude(builder, loc, include);
+  if (split && client) emitInclude(builder, loc, "optional");
   if (client) emitInclude(builder, loc, "UserInterface.h", false);
   emitInclude(
       builder, loc,
@@ -1080,7 +1093,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   };
   visit(functions.setup);
   if (client) {
-    visit(functions.keygen);
+    if (!split) visit(functions.keygen);
     visit(functions.facadeEncrypt);
     visit(functions.facadeDecrypt);
   }
@@ -1129,6 +1142,15 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
     auto declaration = cast<FuncOp>(builder.clone(*wrapper));
     declaration.getBody().dropAllReferences();
     declaration.getBody().getBlocks().clear();
+    // A declaration prints only its parameter types, which leaves room for
+    // the seed's default argument.
+    if (split && declaration.getSymName() == "KeyGen") {
+      SmallVector<Type> inputs(declaration.getFunctionType().getInputs());
+      inputs.back() =
+          OpaqueType::get(ctx, (kSecretSeedType + " = std::nullopt").str());
+      declaration.setFunctionType(FunctionType::get(
+          ctx, inputs, declaration.getFunctionType().getResults()));
+    }
   }
 
   builder.setInsertionPointToStart(&source.getBodyRegion().front());
