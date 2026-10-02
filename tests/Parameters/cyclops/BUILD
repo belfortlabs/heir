@@ -8,5 +8,8 @@ package(
 
 filegroup(
     name = "parameter_files",
-    srcs = ["bootparam_35bit_14lvl.json"],
+    srcs = [
+        "bootparam_35bit_14lvl.json",
+        "bootparam_35bit_19lvl.json",
+    ],
 )
