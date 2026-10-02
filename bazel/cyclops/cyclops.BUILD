@@ -13,6 +13,17 @@ filegroup(
     ]),
 )
 
+# The planner links libtommath statically. find_library would pick up the
+# shared library rules_foreign_cc copies next to it, and it does not know
+# Bazel's .pic.a name, so name the position-independent archive directly.
+genrule(
+    name = "tommath_archive",
+    srcs = ["@libtommath//:tommath"],
+    outs = ["libtommath.a"],
+    cmd = "for f in $(locations @libtommath//:tommath); do case $$f in *.pic.a) cp $$f $@; exit 0;; esac; done; " +
+          "for f in $(locations @libtommath//:tommath); do case $$f in *.a) cp $$f $@; exit 0;; esac; done; exit 1",
+)
+
 # Configure only planner/, never the CUDA server or standalone client project.
 # The installed header and binary come from the same Cyclops revision.
 cmake(
@@ -22,9 +33,17 @@ cmake(
         "BUILD_PLANNER_TEST": "OFF",
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CXX_STANDARD": "20",
+        "LIBTOMMATH": "$$EXT_BUILD_ROOT$$/$(execpath :tommath_archive)",
     },
-    # CMake links try-compiles from scratch directories, outside the execroot.
-    env = {"LLVM_CLANGXX": "$$EXT_BUILD_ROOT$$/$(execpath @llvm//tools:clang++)"},
+    # In the target configuration, unlike build_data, so the archive is the
+    # library deps would link.
+    data = [":tommath_archive"],
+    env = {
+        # tommath.h; the planner's CMake project does not look for the header.
+        "CPLUS_INCLUDE_PATH": "$${EXT_BUILD_DEPS}/include",
+        # CMake links try-compiles from scratch directories, outside the execroot.
+        "LLVM_CLANGXX": "$$EXT_BUILD_ROOT$$/$(execpath @llvm//tools:clang++)",
+    },
     generate_args = ["-GNinja"],
     lib_source = ":planner_sources",
     out_shared_libs = select({
@@ -35,4 +54,5 @@ cmake(
     # and caches. This action runs on the trusted build host.
     tags = ["no-remote"],
     working_directory = "planner",
+    deps = ["@libtommath//:tommath"],
 )

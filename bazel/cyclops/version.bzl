@@ -1,3 +1,3 @@
 """Cyclops revision used to build the planner library."""
 
-CYCLOPS_COMMIT = "40a9aafff600dc70e04464e1c2136ed2af0470dd"
+CYCLOPS_COMMIT = "049eab6148e4cec50faf110b6b59b8449ec19a69"
