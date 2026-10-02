@@ -22,6 +22,7 @@
 #include "lib/Parameters/RLWEParams.h"
 #include "lib/Utils/LogArithmetic.h"
 #include "llvm/include/llvm/ADT/SmallVector.h"             // from @llvm-project
+#include "llvm/include/llvm/ADT/Twine.h"                   // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"               // from @llvm-project
 #include "llvm/include/llvm/Support/DebugLog.h"            // from @llvm-project
 #include "llvm/include/llvm/Support/Error.h"               // from @llvm-project
@@ -35,6 +36,7 @@
 #include "mlir/include/mlir/IR/Value.h"                    // from @llvm-project
 #include "mlir/include/mlir/Pass/PassManager.h"            // from @llvm-project
 #include "mlir/include/mlir/Support/LLVM.h"                // from @llvm-project
+#include "mlir/include/mlir/Support/LogicalResult.h"       // from @llvm-project
 #include "mlir/include/mlir/Support/WalkResult.h"          // from @llvm-project
 
 // IWYU pragma: begin_keep
@@ -76,6 +78,11 @@ constexpr int kCheddarBootOverhead =
     kCheddarBootNumCts + kCheddarBootNumStc + kCheddarBootEvalModLevels;
 
 constexpr int kDefaultScalingModBits = 45;
+
+// The largest prime of a model chain modeling a parameter file: a model
+// prime is one 64-bit modulus, and HEIR's own chains use primes of at most
+// 60 bits.
+constexpr int kMaxModelPrimeBits = 60;
 
 // The bootstrap message ratio for a parameter file that does not state one:
 // log2(q0 / scale) less two bits. A smaller ratio puts large messages at the
@@ -147,10 +154,10 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
 
   // Takes the modulus chain from a CHEDDAR parameter file. The mid-end keeps
   // its one-modulus-per-level model: each level's model prime has the bit
-  // size of the file's modulus growth at that level (its level-0 modulus for
-  // level 0), which is all the scale bookkeeping reads. The file's own primes
-  // and level layout are recorded for the backend, which is where they are
-  // consumed.
+  // size of the file's modulus growth at that level (its level-0 modulus,
+  // capped at kMaxModelPrimeBits, for level 0), which is all the scale
+  // bookkeeping reads. The file's own primes and level layout are recorded
+  // for the backend, which is where they are consumed.
   LogicalResult importCheddarParameters(int computeMaxLevel,
                                         bool hasBootstrap) {
     Operation* module = getOperation();
@@ -232,19 +239,43 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
     std::vector<int64_t> pi;
     std::vector<double> logqi;
     std::vector<double> logpi;
+    // findPrime returns a larger prime when no NTT-friendly prime of the
+    // requested size exists, which would model a growth the file does not
+    // have, so a model prime must come out at the size it models.
+    auto modelPrime = [&](int bits,
+                          const llvm::Twine& what) -> FailureOr<int64_t> {
+      if (bits >= 1 && bits <= kMaxModelPrimeBits) {
+        int64_t prime = findPrime(bits, ringDim, existing);
+        if (std::llround(std::log2(prime)) == bits) {
+          existing.push_back(prime);
+          return prime;
+        }
+      }
+      module->emitError() << cheddarParameterFile << ": " << what << " is "
+                          << bits << " bits, which no model prime at logN "
+                          << profile->logDegree << " can have";
+      return failure();
+    };
     for (size_t level = 0; level < layout.size(); ++level) {
       int bits = std::llround(file->log2ModulusGrowth(layout, level));
-      int64_t prime = findPrime(bits, ringDim, existing);
-      existing.push_back(prime);
-      qi.push_back(prime);
-      logqi.push_back(std::log2(prime));
+      // Nothing rescales by the level-0 modulus: the model reads its size
+      // only as the room above the scale, so a smaller model prime keeps
+      // that bound conservative. A 32-bit chain's level 0 can hold more
+      // bits than one model prime.
+      if (level == 0) bits = std::min(bits, kMaxModelPrimeBits);
+      FailureOr<int64_t> prime = modelPrime(
+          bits, "the modulus growth at level " + llvm::Twine(level));
+      if (failed(prime)) return failure();
+      qi.push_back(*prime);
+      logqi.push_back(std::log2(*prime));
     }
     for (uint64_t aux : file->auxPrimes) {
       int bits = std::llround(std::log2(static_cast<double>(aux)));
-      int64_t prime = findPrime(bits, ringDim, existing);
-      existing.push_back(prime);
-      pi.push_back(prime);
-      logpi.push_back(std::log2(prime));
+      FailureOr<int64_t> prime =
+          modelPrime(bits, "auxiliary prime " + llvm::Twine(aux));
+      if (failed(prime)) return failure();
+      pi.push_back(*prime);
+      logpi.push_back(std::log2(*prime));
     }
     int dnum =
         static_cast<int>(std::ceil(static_cast<double>(qi.size()) / pi.size()));
