@@ -565,6 +565,8 @@ std::vector<HoistOption> LayoutOptimization::computeHoistingOptions(
   KernelAttr oldKernel = op->getAttrOfType<KernelAttr>(kKernelAttrName);
   std::vector<HoistOption> options;
   for (HoistResult& result : results) {
+    // hoistOp rejects a result without one layout per operand.
+    if (result.newInputLayouts.size() != op->getNumOperands()) continue;
     HoistOption& option = options.emplace_back();
     option.hoistResult = result;
     option.cost = 0;
@@ -577,8 +579,11 @@ std::vector<HoistOption> LayoutOptimization::computeHoistingOptions(
     DenseMap<std::tuple<Value, Attribute, Attribute>, Cost> operandChangeMap;
     SmallVector<Cost> operandChangeCosts;
     for (auto& operand : op->getOpOperands()) {
-      auto computedCost =
-          costOfChangedOperand(operand, op, outputLayout, solver);
+      // The hoister's layout for this operand, which differs from the result
+      // layout for ops that change shape (collapse_shape, pad, matvec, ...).
+      auto computedCost = costOfChangedOperand(
+          operand, op, result.newInputLayouts[operand.getOperandNumber()],
+          solver);
       operandChangeCosts.push_back(computedCost.cost);
       auto key = std::make_tuple(operand.get(), computedCost.fromLayout,
                                  computedCost.toLayout);
