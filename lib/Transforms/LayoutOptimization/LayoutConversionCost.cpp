@@ -86,6 +86,9 @@ Cost computeCostOfLayoutConversion(int64_t numCiphertexts, int64_t minSlotCount,
     return 0;
   }
 
+  assert(fromLayout.getIntegerRelation().getNumDomainVars() ==
+             toLayout.getIntegerRelation().getNumDomainVars() &&
+         "a layout conversion must keep the tensor's rank");
   std::shared_ptr<IntegerRelation> composedLayout =
       fromLayout.getIntegerRelation().clone();
   composedLayout->inverse();
