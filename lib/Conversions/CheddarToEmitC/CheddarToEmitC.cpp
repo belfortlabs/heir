@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 
+#include "lib/Dialect/Cheddar/IR/CheddarAttributes.h"
 #include "lib/Dialect/Cheddar/IR/CheddarDialect.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
@@ -18,6 +19,8 @@
 #include "llvm/include/llvm/ADT/SmallVector.h"      // from @llvm-project
 #include "llvm/include/llvm/ADT/StringMap.h"        // from @llvm-project
 #include "llvm/include/llvm/ADT/StringSet.h"        // from @llvm-project
+#include "llvm/include/llvm/ADT/StringSwitch.h"     // from @llvm-project
+#include "llvm/include/llvm/ADT/Twine.h"            // from @llvm-project
 #include "llvm/include/llvm/Support/raw_ostream.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/ConvertToEmitC/ToEmitCInterface.h"  // from @llvm-project
 #include "mlir/include/mlir/Conversion/MemRefToEmitC/MemRefToEmitC.h"  // from @llvm-project
@@ -237,7 +240,7 @@ void addCheddarEmitCTypeConversions(TypeConverter& tc, MLIRContext* ctx) {
   });
   tc.addConversion([ctx](cheddar::DebugHandlerType) -> Type {
     return PointerType::get(
-        OpaqueType::get(ctx, "const heir::cyclops::DebugSink"));
+        OpaqueType::get(ctx, "const heir::cyclops::DebugSink<word>"));
   });
   // Identity for lvalue, which the shared EmitCTypeConverter rejects.
   tc.addConversion([](emitc::LValueType t) -> Type { return t; });
@@ -410,47 +413,77 @@ struct ConvertMakeParameter
       cheddar::MakeParameterOp op, OpAdaptor /*adaptor*/,
       ConversionPatternRewriter& rewriter) const override {
     Type resultType = typeConverter->convertType(op.getResult().getType());
-    ArrayRef<int64_t> mainPrimes = op.getMainPrimes();
-    int64_t defaultLevel = op.getDefaultEncryptionLevel()
-                               ? op.getDefaultEncryptionLevelAttr().getInt()
-                               : static_cast<int64_t>(mainPrimes.size()) - 1;
+    cheddar::ParameterSetAttr set = op.getParameterSet();
 
     std::string levels = "std::vector<std::pair<int, int>>{";
-    for (size_t i = 0; i < mainPrimes.size(); ++i) {
-      if (i) levels += ", ";
-      levels += "{" + std::to_string(i + 1) + ", 0}";
+    for (auto [index, level] : llvm::enumerate(set.getLevelPairs())) {
+      if (index) levels += ", ";
+      levels += "{" + std::to_string(level.first) + ", " +
+                std::to_string(level.second) + "}";
     }
     levels += "}";
-    auto primes = [](ArrayRef<int64_t> values) {
+    auto primes = [](DenseI64ArrayAttr values) {
       std::string result = "std::vector<word>{";
-      for (size_t i = 0; i < values.size(); ++i) {
-        if (i) result += ", ";
-        result += std::to_string(static_cast<uint64_t>(values[i])) + "ULL";
+      if (values) {
+        for (auto [index, value] : llvm::enumerate(values.asArrayRef())) {
+          if (index) result += ", ";
+          result += std::to_string(static_cast<uint64_t>(value)) + "ULL";
+        }
       }
       return result + "}";
     };
-    std::string scale = "static_cast<double>(static_cast<word>(1) << " +
-                        std::to_string(op.getLogScale().getInt()) + ")";
-    std::string args = std::to_string(op.getLogN().getInt()) + ", " + scale +
-                       ", " + std::to_string(defaultLevel) + ", " + levels +
-                       ", " + primes(mainPrimes) + ", " +
-                       primes(op.getAuxPrimes());
+    // The scale is a power of two below 2^64 whatever the word width is.
+    std::string scale = "static_cast<double>(UINT64_C(1) << " +
+                        std::to_string(set.getLogScale()) + ")";
+    // The runtime's trailing constructor arguments (terminal primes, the
+    // additional base, the default aux count) default to what a HEIR-generated
+    // chain uses; they are spelled out only from the first one that differs.
+    SmallVector<std::string> arguments = {
+        std::to_string(set.getLogN()),
+        scale,
+        std::to_string(set.getDefaultEncryptionLevelOrDefault()),
+        levels,
+        primes(set.getMainPrimes()),
+        primes(set.getAuxPrimes()),
+        primes(set.getTerminalPrimes()),
+        "std::pair<int, int>{" +
+            std::to_string(set.getAdditionalBasePair().first) + ", " +
+            std::to_string(set.getAdditionalBasePair().second) + "}",
+        std::to_string(set.getDefaultNumAux().value_or(-1))};
+    size_t count = arguments.size();
+    if (!set.getDefaultNumAux()) {
+      --count;
+      if (set.getAdditionalBasePair() == std::pair<int64_t, int64_t>{0, 0}) {
+        --count;
+        if (!set.getTerminalPrimes() || set.getTerminalPrimes().empty())
+          --count;
+      }
+    }
+    std::string args;
+    for (size_t i = 0; i < count; ++i) {
+      if (i) args += ", ";
+      args += arguments[i];
+    }
 
     StringRef name = "cheddar_param";
-    VerbatimOp::create(
-        rewriter, op.getLoc(),
-        ("static Parameter<word> " + name + "(" + args + ");").str(),
-        ValueRange{});
-    if (auto weight = op.getDenseHammingWeightAttr())
-      VerbatimOp::create(
-          rewriter, op.getLoc(),
-          (name + ".SetDenseHammingWeight(" + intLit(weight) + ");").str(),
-          ValueRange{});
-    if (auto weight = op.getSparseHammingWeightAttr())
-      VerbatimOp::create(
-          rewriter, op.getLoc(),
-          (name + ".SetSparseHammingWeight(" + intLit(weight) + ");").str(),
-          ValueRange{});
+    auto statement = [&](const Twine& text) {
+      VerbatimOp::create(rewriter, op.getLoc(), text.str(), ValueRange{});
+    };
+    statement("static Parameter<word> " + name + "(" + args + ");");
+    // Setters in the runtime's own order: the dense weight first, since the
+    // sparse one must stay below it.
+    if (auto weight = set.getDenseHammingWeight())
+      statement(name + ".SetDenseHammingWeight(" + Twine(*weight) + ");");
+    if (auto weight = set.getSparseHammingWeight())
+      statement(name + ".SetSparseHammingWeight(" + Twine(*weight) + ");");
+    if (FloatAttr budget = set.getMaxLogPq())
+      statement(name + ".SetMaxLogPQ(" + floatLit(budget) + ");");
+    if (BoolAttr levelSpecific = set.getLevelSpecificKs()) {
+      StringRef enabled = levelSpecific.getValue() ? "true" : "false";
+      statement(name + ".SetLevelSpecificKS(" + enabled + ");");
+    }
+    if (auto cap = set.getMaxKeySwitchAux())
+      statement(name + ".SetMaxKeySwitchAux(" + Twine(*cap) + ");");
     auto literal =
         emitc::LiteralOp::create(rewriter, op.getLoc(), resultType, name);
     rewriter.replaceOp(op, literal.getResult());
@@ -531,21 +564,74 @@ struct ConvertPrepareLinearTransformKeys
   }
 };
 
+// The EvalMod approximation named by the attribute, applied on top of
+// Cyclops' default for the message ratio (the same resolution
+// cheddar-plan-evaluation-keys performs when it plans the bootstrap keys).
+void emitMod1Literal(ConversionPatternRewriter& rewriter, Location loc,
+                     cheddar::EvalModAttr attr, StringRef ratio,
+                     StringRef name) {
+  auto statement = [&](const Twine& text) {
+    VerbatimOp::create(rewriter, loc, text.str(), ValueRange{});
+  };
+  statement("Mod1ParametersLiteral " + name + " = BootParameter::DefaultMod1(" +
+            ratio + ");");
+  if (StringAttr type = attr.getType()) {
+    StringRef enumerator = llvm::StringSwitch<StringRef>(type.getValue())
+                               .Case("cos_hk", "kCosHK")
+                               .Case("cos_hk_even", "kCosHKEven")
+                               .Case("cos_cheby", "kCosCheby")
+                               .Case("sin_cheby", "kSinCheby")
+                               .Case("exp_complex", "kExpComplex");
+    statement(name + ".type = Mod1Type::" + enumerator + ";");
+  }
+  if (auto degree = attr.getDegree())
+    statement(name + ".degree = " + Twine(*degree) + ";");
+  if (auto interval = attr.getInterval())
+    statement(name + ".interval = " + Twine(*interval) + ";");
+  if (auto reduction = attr.getLogIntervalReduction())
+    statement(name + ".log_interval_reduction = " + Twine(*reduction) + ";");
+  if (auto invDegree = attr.getInvDegree())
+    statement(name + ".inv_degree = " + Twine(*invDegree) + ";");
+  if (StringAttr invType = attr.getInvType()) {
+    StringRef enumerator =
+        invType.getValue() == "cheby" ? "kArcsineCheby" : "kArcsineTaylor";
+    statement(name + ".inv_type = Mod1InvType::" + enumerator + ";");
+  }
+  if (FloatAttr invInterval = attr.getInvInterval())
+    statement(name + ".inv_interval = " + floatLit(invInterval) + ";");
+}
+
 struct ConvertCreateBootContext
     : public OpConversionPattern<cheddar::CreateBootContextOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
       cheddar::CreateBootContextOp op, OpAdaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
+    cheddar::BootstrapConfigAttr config = op.getConfig();
     std::string ratio;
-    if (auto attr = op.getLogMessageRatioAttr()) ratio = ", " + intLit(attr);
+    if (auto value = config.getLogMessageRatio())
+      ratio = std::to_string(*value);
+    else if (config.getEvalMod())
+      ratio = "BootParameter::kDefaultLogMessageRatio";
+    std::string arguments = "{}.max_level_, " +
+                            std::to_string(config.getNumCtsLevels()) + ", " +
+                            std::to_string(config.getNumStcLevels());
+    if (!ratio.empty()) arguments += ", " + ratio;
+    // The literal needs statements of its own; scope them with the context
+    // creation.
+    if (config.getEvalMod()) {
+      VerbatimOp::create(rewriter, op.getLoc(), "{", ValueRange{});
+      emitMod1Literal(rewriter, op.getLoc(), config.getEvalMod(), ratio,
+                      "_boot_mod1");
+      arguments += ", _boot_mod1";
+    }
     VerbatimOp::create(
         rewriter, op.getLoc(),
-        "{} = BootContext<word>::Create({}, BootParameter({}.max_level_, " +
-            std::to_string(op.getNumCtsLevels().getInt()) + ", " +
-            std::to_string(op.getNumStcLevels().getInt()) + ratio + "));",
+        "{} = BootContext<word>::Create({}, BootParameter(" + arguments + "));",
         ValueRange{adaptor.getOutput(), adaptor.getParams(),
                    adaptor.getParams()});
+    if (config.getEvalMod())
+      VerbatimOp::create(rewriter, op.getLoc(), "}", ValueRange{});
     rewriter.eraseOp(op);
     return success();
   }
@@ -725,6 +811,46 @@ struct ConvertDecode : public OpConversionPattern<cheddar::DecodeOp> {
     rewriter.eraseOp(op);
     return success();
   }
+};
+
+// Relinearize/RelinearizeRescale/HMult keyed by an evaluation-key map (the
+// Cyclops runtime): the multiplication key is looked up for the op's level,
+// the default key where the ring's key-switching budget holds one and the
+// level-specific key otherwise, which is what the planner requested.
+template <typename Op>
+struct ConvertMapKeyedRelinearize : public OpConversionPattern<Op> {
+  ConvertMapKeyedRelinearize(const TypeConverter& tc, MLIRContext* ctx,
+                             StringRef method)
+      : OpConversionPattern<Op>(tc, ctx, /*benefit=*/2), method(method.str()) {}
+
+  LogicalResult matchAndRewrite(
+      Op op, typename Op::Adaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    if (!isa<cheddar::EvkMapType>(op.getMultKey().getType()))
+      return rewriter.notifyMatchFailure(op, "keyed by a fixed key");
+    Value ctx = adaptor.getCtx();
+    std::string code = "{}->" + method + "({}, ";
+    SmallVector<Value> operands{ctx, adaptor.getOutput()};
+    if constexpr (std::is_same_v<Op, cheddar::HMultOp>) {
+      code += "{}, {}, ";
+      operands.append({adaptor.getLhs(), adaptor.getRhs()});
+    } else {
+      code += "{}, ";
+      operands.push_back(adaptor.getInput());
+    }
+    code += "{}.GetMultiplicationKey({}->NativeSecretId(), {}->param_, " +
+            intLit(op.getLevelAttr()) + ", KeyMode::kDefault)";
+    operands.append({adaptor.getMultKey(), ctx, ctx});
+    if constexpr (std::is_same_v<Op, cheddar::HMultOp>)
+      code += op.getRescale() ? ", true" : ", false";
+    code += ");";
+    markDestination(VerbatimOp::create(rewriter, op.getLoc(), code, operands),
+                    1);
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+  std::string method;
 };
 
 // HRot/HRotAdd/HConj/HConjAdd: look up the rotation/conjugation key inline on
@@ -1054,9 +1180,13 @@ struct ConvertEvalPoly : public OpConversionPattern<cheddar::EvalPolyOp> {
              "_ep_lvl, _ep_is, _ep_ts, true);",
          {});
     emit("_ep.Compile(_ep_cp);", {});
+    // Cyclops resolves the multiplication key at each level the evaluation
+    // relinearizes at: the default key where the ring holds one, the
+    // level-specific key otherwise.
     StringRef evaluate =
         op.getSelectMultKeyAtUseLevel()
-            ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
+            ? "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}, "
+              "KeyMode::kDefault));"
             : "_ep.Evaluate(_ep_cp, {}, {}, {}.GetMultiplicationKey());";
     markDestination(
         VerbatimOp::create(rewriter, loc, rewriter.getStringAttr(evaluate),
@@ -1774,6 +1904,12 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
         ConvertPrepareLinearTransform, ConvertApplyPreparedLinearTransform,
         ConvertEvalPoly, ConvertPrepareLinearTransformKeys, ConvertGetEvkMap>(
         typeConverter, ctx);
+    patterns.add<ConvertMapKeyedRelinearize<cheddar::RelinearizeOp>>(
+        typeConverter, ctx, "Relinearize");
+    patterns.add<ConvertMapKeyedRelinearize<cheddar::RelinearizeRescaleOp>>(
+        typeConverter, ctx, "RelinearizeRescale");
+    patterns.add<ConvertMapKeyedRelinearize<cheddar::HMultOp>>(typeConverter,
+                                                               ctx, "HMult");
     patterns.add<ConvertRuntimeAccessor<cheddar::GetEncoderOp>>(
         typeConverter, ctx, "heir::getEncoder");
     patterns.add<ConvertRuntimeAccessor<cheddar::GetMultKeyOp>>(

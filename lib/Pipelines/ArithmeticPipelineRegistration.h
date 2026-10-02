@@ -73,8 +73,20 @@ struct MlirToRLWEPipelineOptions : public LoopOptions {
       llvm::cl::init(55)};
   PassOptions::Option<int> scalingModBits{
       *this, "scaling-mod-bits",
-      llvm::cl::desc("The number of bits in the scaling modulus for CKKS"),
-      llvm::cl::init(45)};
+      llvm::cl::desc("The number of bits in the scaling modulus for CKKS. 0 "
+                     "selects 45 bits, or the scale of the "
+                     "cheddar-parameter-file, which any other value must "
+                     "equal"),
+      llvm::cl::init(0)};
+  PassOptions::Option<std::string> cheddarParameterFile{
+      *this, "cheddar-parameter-file",
+      llvm::cl::desc(
+          "Take the CKKS modulus chain and the Cheddar runtime parameter set "
+          "from this CHEDDAR parameter file (a scale-snu/cheddar-fhe "
+          "bootparam JSON or a Cyclops multi-profile parameter set, 32-bit "
+          "or 64-bit words) instead of generating primes; Cheddar backend "
+          "only"),
+      llvm::cl::init("")};
   PassOptions::Option<int> bfvModBits{
       *this, "bfv-mod-bits",
       llvm::cl::desc("The number of bits for all moduli for B/FV"),

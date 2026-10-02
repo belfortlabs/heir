@@ -50,3 +50,11 @@ func.func @transform_keys_duplicate_diagonal(%ctx: tensor<!context>, %ui: tensor
   %0 = cheddar.prepare_linear_transform_keys %ctx, %ui {diagonal_indices = array<i32: 3, 11>, width = 8 : i64, level = 1 : i64} : (tensor<!context>, tensor<!ui>) -> tensor<!ui>
   return %0 : tensor<!ui>
 }
+
+// -----
+
+func.func @relinearize_from_map_without_level(%ctx: !cheddar.context, %evk: !cheddar.evk_map, %ct: tensor<!cheddar.ciphertext>, %out: tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext> {
+  // expected-error@+1 {{takes its multiplication key from an evaluation-key map and needs the level to look it up for}}
+  %0 = cheddar.relinearize %ctx, %ct, %evk, %out : (!cheddar.context, tensor<!cheddar.ciphertext>, !cheddar.evk_map, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
+  return %0 : tensor<!cheddar.ciphertext>
+}

@@ -30,14 +30,12 @@ memref.global "private" constant @negative_zero_splat : memref<4xf32> = dense<-0
 // CHECK: func.func @configure
 // CHECK-SAME: !emitc.opaque<"std::shared_ptr<Context<word>>&">
 // CHECK-SAME: !emitc.opaque<"std::unique_ptr<UserInterface<word>>&">
-// CHECK: emitc.verbatim "static Parameter<word> cheddar_param
-// CHECK-SAME: std::vector<word>{1ULL, 2ULL, 3ULL}
-// CHECK-SAME: std::vector<word>{4ULL, 5ULL}
+// CHECK: emitc.verbatim "static Parameter<word> cheddar_param(14, static_cast<double>(UINT64_C(1) << 45), 2, std::vector<std::pair<int, int>>{{[{][{]}}1, 0}, {2, 0}, {3, 0}}, std::vector<word>{1ULL, 2ULL, 3ULL}, std::vector<word>{4ULL, 5ULL});"
 // CHECK: emitc.verbatim "{} = Context<word>::Create({});"
 // CHECK: emitc.verbatim "{} = std::make_unique<UserInterface<word>>({});"
 // CHECK: emitc.verbatim "{}->PrepareRotationKey(3, 2);"
 func.func @configure() -> (tensor<!context>, tensor<!user_interface>) {
-  %p = cheddar.make_parameter {logN = 14 : i64, logScale = 45 : i64, mainPrimes = array<i64: 1, 2, 3>, auxPrimes = array<i64: 4, 5>} : !parameter
+  %p = cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 14, logScale = 45, mainPrimes = [1, 2, 3], auxPrimes = [4, 5]>} : !parameter
   %context_dest = tensor.empty() : tensor<!context>
   %context = cheddar.create_context %p, %context_dest : (!parameter, tensor<!context>) -> tensor<!context>
   %ui_dest = tensor.empty() : tensor<!user_interface>
@@ -62,7 +60,7 @@ func.func @configure() -> (tensor<!context>, tensor<!user_interface>) {
 // CHECK: emitc.verbatim "{}->PrepareRotationKey(_ltk_req, {}->NativeSecretId());"
 // CHECK: emitc.verbatim "}"
 func.func @configure_cyclops() -> (tensor<!context>, tensor<!user_interface>) {
-  %p = cheddar.make_parameter {logN = 14 : i64, logScale = 45 : i64, mainPrimes = array<i64: 1, 2, 3>, auxPrimes = array<i64: 4, 5>} : !parameter
+  %p = cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 14, logScale = 45, mainPrimes = [1, 2, 3], auxPrimes = [4, 5]>} : !parameter
   %context_dest = tensor.empty() : tensor<!context>
   %context = cheddar.create_context %p, %context_dest : (!parameter, tensor<!context>) -> tensor<!context>
   %ui_dest = tensor.empty() : tensor<!user_interface>
@@ -299,7 +297,7 @@ func.func @eval_poly(%ctx: !context, %enc: !encoder, %ct: tensor<!ciphertext>, %
 
 // CHECK: func.func @eval_poly_level_key
 // CHECK: emitc.verbatim "EvalPoly<word> _ep(std::vector<double>{1, 2, 3}, PolynomialParity::kFull, _ep_lvl, _ep_is, _ep_ts, true);"
-// CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}));"
+// CHECK: emitc.verbatim "_ep.Evaluate(_ep_cp, {}, {}, MultKeySelector<word>({}, KeyMode::kDefault));"
 func.func @eval_poly_level_key(%ctx: !context, %ct: tensor<!ciphertext>, %evk: !evk_map) -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>
   %r = cheddar.eval_poly %ctx, %ct, %evk, %d0 {coefficients = [1.0 : f64, 2.0 : f64, 3.0 : f64], levelConsumption = 2 : i64, selectMultKeyAtUseLevel} : (!context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>

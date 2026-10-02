@@ -164,4 +164,19 @@ func.func @support_values(%ctx: !context, %ui: !user_interface,
   return %0 : tensor<!ciphertext>
 }
 
+// Relinearizations keyed by the map resolve the key for their level.
+func.func @level_keyed(%ctx: !context, %evk: !evk_map, %a: tensor<!ciphertext>,
+                       %b: tensor<!ciphertext>) -> tensor<!ciphertext> {
+  %d0 = tensor.empty() : tensor<!ciphertext>
+  %0 = cheddar.hmult %ctx, %a, %b, %evk, %d0 {level = 2 : i64, rescale = true}
+      : (!context, tensor<!ciphertext>, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
+  %d1 = tensor.empty() : tensor<!ciphertext>
+  %1 = cheddar.relinearize %ctx, %0, %evk, %d1 {level = 1 : i64}
+      : (!context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
+  %d2 = tensor.empty() : tensor<!ciphertext>
+  %2 = cheddar.relinearize_rescale %ctx, %1, %evk, %d2 {level = 1 : i64}
+      : (!context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
+  return %2 : tensor<!ciphertext>
+}
+
 }

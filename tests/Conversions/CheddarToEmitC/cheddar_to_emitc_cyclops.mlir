@@ -21,6 +21,27 @@ module attributes {cheddar.runtime = "cyclops"} {
     return %result : tensor<!ciphertext>
   }
 
+  // A relinearization keyed by the map looks its key up for the op's level:
+  // the default key when the ring holds one, the level-specific key otherwise.
+  // CHECK: func.func @relinearize
+  // CHECK: emitc.verbatim "{}->Relinearize({}, {}, {}.GetMultiplicationKey({}->NativeSecretId(), {}->param_, 3, KeyMode::kDefault));"
+  // CHECK: emitc.verbatim "{}->RelinearizeRescale({}, {}, {}.GetMultiplicationKey({}->NativeSecretId(), {}->param_, 3, KeyMode::kDefault));"
+  func.func @relinearize(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {
+    %dest = tensor.empty() : tensor<!ciphertext>
+    %relin = cheddar.relinearize %ctx, %ct, %evk, %dest {level = 3 : i64} : (!context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
+    %dest2 = tensor.empty() : tensor<!ciphertext>
+    %result = cheddar.relinearize_rescale %ctx, %relin, %evk, %dest2 {level = 3 : i64} : (!context, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
+    return %result : tensor<!ciphertext>
+  }
+
+  // CHECK: func.func @hmult
+  // CHECK: emitc.verbatim "{}->HMult({}, {}, {}, {}.GetMultiplicationKey({}->NativeSecretId(), {}->param_, 2, KeyMode::kDefault), true);"
+  func.func @hmult(%ctx: !context, %evk: !evk_map, %a: tensor<!ciphertext>, %b: tensor<!ciphertext>) -> tensor<!ciphertext> {
+    %dest = tensor.empty() : tensor<!ciphertext>
+    %result = cheddar.hmult %ctx, %a, %b, %evk, %dest {level = 2 : i64, rescale = true} : (!context, tensor<!ciphertext>, tensor<!ciphertext>, !evk_map, tensor<!ciphertext>) -> tensor<!ciphertext>
+    return %result : tensor<!ciphertext>
+  }
+
   // CHECK: func.func @hconj_add
   // CHECK: emitc.verbatim "{}->HConjAdd({}, {}, {}, {}.GetConjugationKey({}->NativeSecretId()));"
   func.func @hconj_add(%ctx: !context, %evk: !evk_map, %lhs: tensor<!ciphertext>, %rhs: tensor<!ciphertext>) -> tensor<!ciphertext> {

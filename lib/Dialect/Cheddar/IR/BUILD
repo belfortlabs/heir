@@ -15,13 +15,16 @@ cc_library(
         "CheddarDialect.cpp",
     ],
     hdrs = [
+        "CheddarAttributes.h",
         "CheddarDialect.h",
         "CheddarOps.h",
         "CheddarTypes.h",
     ],
     deps = [
+        ":CheddarAttributes",
         ":CheddarOps",
         ":CheddarTypes",
+        ":attributes_inc_gen",
         ":dialect_inc_gen",
         ":ops_inc_gen",
         ":types_inc_gen",
@@ -31,6 +34,24 @@ cc_library(
         "@llvm-project//mlir:DestinationStyleOpInterface",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:InferTypeOpInterface",
+    ],
+)
+
+cc_library(
+    name = "CheddarAttributes",
+    srcs = [
+        "CheddarAttributes.cpp",
+    ],
+    hdrs = [
+        "CheddarAttributes.h",
+        "CheddarDialect.h",
+    ],
+    deps = [
+        ":attributes_inc_gen",
+        ":dialect_inc_gen",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
     ],
 )
 
@@ -58,12 +79,15 @@ cc_library(
         "CheddarOps.cpp",
     ],
     hdrs = [
+        "CheddarAttributes.h",
         "CheddarDialect.h",
         "CheddarOps.h",
         "CheddarTypes.h",
     ],
     deps = [
+        ":CheddarAttributes",
         ":CheddarTypes",
+        ":attributes_inc_gen",
         ":dialect_inc_gen",
         ":ops_inc_gen",
         ":types_inc_gen",
@@ -80,6 +104,7 @@ cc_library(
 td_library(
     name = "td_files",
     srcs = [
+        "CheddarAttributes.td",
         "CheddarDialect.td",
         "CheddarOps.td",
         "CheddarTypes.td",
@@ -100,6 +125,16 @@ add_heir_dialect_library(
     dialect = "Cheddar",
     kind = "dialect",
     td_file = "CheddarDialect.td",
+    deps = [
+        ":td_files",
+    ],
+)
+
+add_heir_dialect_library(
+    name = "attributes_inc_gen",
+    dialect = "Cheddar",
+    kind = "attribute",
+    td_file = "CheddarAttributes.td",
     deps = [
         ":td_files",
     ],
