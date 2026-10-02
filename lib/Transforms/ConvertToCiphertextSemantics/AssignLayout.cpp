@@ -309,6 +309,28 @@ static FailureOr<Value> implementCyclicAssignLayoutStep(
   return loop.getResult(0);
 }
 
+// A dense resource constant whose raw bytes the folding path can repack.
+static bool isFoldableResourceConstant(Value input) {
+  auto cstOp = dyn_cast_or_null<arith::ConstantOp>(input.getDefiningOp());
+  if (!cstOp) return false;
+  auto resourceAttr = dyn_cast<DenseResourceElementsAttr>(cstOp.getValue());
+  Type elementType = getElementTypeOrSelf(input.getType());
+  return resourceAttr && !resourceAttr.getData().empty() &&
+         elementType.isIntOrFloat() &&
+         elementType.getIntOrFloatBitWidth() % 8 == 0;
+}
+
+// Whether implementAssignLayoutStep folds `input` into a packed constant
+// without checking the size of the layout relation.
+static bool foldsRegardlessOfSize(Value input, CodegenStrategy strategy) {
+  if (!isa<RankedTensorType>(input.getType())) return false;
+  bool isResourceConstant = isFoldableResourceConstant(input);
+  if (strategy == CodegenStrategy::AUTO) return isResourceConstant;
+  DenseElementsAttr constantAttr;
+  return strategy == CodegenStrategy::FOLD_WHEN_POSSIBLE &&
+         (isResourceConstant || matchPattern(input, m_Constant(&constantAttr)));
+}
+
 static FailureOr<Value> implementAssignLayoutStep(
     Value input, LayoutAttr layout, Type targetTypeTy,
     ImplicitLocOpBuilder& builder,
@@ -408,9 +430,7 @@ static FailureOr<Value> implementAssignLayoutStep(
       }
     }
   }
-  bool isResourceConstant = !resourceRaw.empty() &&
-                            elementType.isIntOrFloat() &&
-                            elementType.getIntOrFloatBitWidth() % 8 == 0;
+  bool isResourceConstant = isFoldableResourceConstant(input);
   auto tryFolding = [&]() -> FailureOr<Value> {
     if (!dataSemanticType) return failure();
     LLVM_DEBUG(llvm::dbgs() << "Detected constant input, evaluating layout\n");
@@ -525,8 +545,7 @@ static FailureOr<Value> implementAssignLayoutStep(
 
   bool shouldFold = false;
   if ((isDenseConstant || isResourceConstant) && dataSemanticType) {
-    if (strategy == CodegenStrategy::FOLD_WHEN_POSSIBLE ||
-        (strategy == CodegenStrategy::AUTO && isResourceConstant)) {
+    if (foldsRegardlessOfSize(input, strategy)) {
       shouldFold = true;
     } else if (strategy == CodegenStrategy::AUTO) {
       if (rel.getNumLocalVars() > 5) {
@@ -643,6 +662,22 @@ FailureOr<Value> implementAssignLayout(
   OpBuilder::InsertionGuard guard(builder);
 
   if (auto arrayAttr = dyn_cast<ArrayAttr>(layout)) {
+    // Folding step by step would enumerate every point of each intermediate
+    // layout, e.g. a conv filter's whole expanded Toeplitz matrix. Folding
+    // through the composed layout only visits the points the input maps to.
+    bool allLayouts = llvm::all_of(
+        arrayAttr, [](Attribute attr) { return isa<LayoutAttr>(attr); });
+    if (allLayouts && arrayAttr.size() > 1 &&
+        foldsRegardlessOfSize(input, strategy)) {
+      auto lastLayout = cast<LayoutAttr>(arrayAttr[arrayAttr.size() - 1]);
+      Type targetType = materializeLayout(getElementTypeOrSelf(input.getType()),
+                                          lastLayout, minSlotCount);
+      return implementAssignLayoutStep(
+          input, LayoutAttr::composeLayouts(arrayAttr, builder.getContext()),
+          targetType, builder, createdOpCallback, /*isLast=*/true,
+          /*domainSchedule=*/{}, strategy);
+    }
+
     Value currentInput = input;
     for (size_t i = 0; i < arrayAttr.size(); ++i) {
       auto layoutAttr = dyn_cast<LayoutAttr>(arrayAttr[i]);
