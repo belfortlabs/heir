@@ -501,17 +501,9 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
   Value keyPair = createLocal(builder, loc, "KeyPair");
   Value storage = MemberOp::create(
       builder, loc, LValueType::get(keyStorageType), "storage", keyPair);
-  // The Cyclops keygen only constructs the UserInterface, so build it here
-  // with the optional secret seed instead of calling it.
-  if (split)
-    VerbatimOp::create(
-        builder, loc,
-        "{}.storage = std::make_unique<UserInterface<word>>({}, "
-        "true, ::cyclops::prng::Backend::kShake128, true, {});",
-        ValueRange{keyPair, function.getArgument(0), function.getArgument(1)});
-  else
-    callInternal(builder, loc, functions.keygen,
-                 ValueRange{function.getArgument(0), storage});
+  SmallVector<Value> keygenOperands(function.getArguments());
+  keygenOperands.push_back(storage);
+  callInternal(builder, loc, functions.keygen, keygenOperands);
   Type uiPointer =
       PointerType::get(OpaqueType::get(ctx, "UserInterface<word>"));
   Value ui = CallOpaqueOp::create(builder, loc, TypeRange{uiPointer},
@@ -1093,7 +1085,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   };
   visit(functions.setup);
   if (client) {
-    if (!split) visit(functions.keygen);
+    visit(functions.keygen);
     visit(functions.facadeEncrypt);
     visit(functions.facadeDecrypt);
   }
@@ -1142,8 +1134,8 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
     auto declaration = cast<FuncOp>(builder.clone(*wrapper));
     declaration.getBody().dropAllReferences();
     declaration.getBody().getBlocks().clear();
-    // A declaration prints only its parameter types, which leaves room for
-    // the seed's default argument.
+    // EmitC has no default arguments; a declaration prints only its parameter
+    // types, so the seed's default rides on its type.
     if (split && declaration.getSymName() == "KeyGen") {
       SmallVector<Type> inputs(declaration.getFunctionType().getInputs());
       inputs.back() =
