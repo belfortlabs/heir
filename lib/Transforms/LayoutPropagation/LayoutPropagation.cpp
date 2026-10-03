@@ -1893,11 +1893,34 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
            << "layout propagation only supports zero-padding tensor.pad";
   }
 
+  RankedTensorType paddedType = op.getResultType();
+  LayoutAttr sourceLayout = getComposedLayoutAttr(op.getSource());
+  Attribute kernelInfoAttr =
+      cloneKernelInfoWithResultShape(op.getSource(), paddedType.getShape());
+  std::optional<KernelInfo> info =
+      kernelInfoAttr ? getKernelInfo(kernelInfoAttr) : std::nullopt;
+  // Un-shuffle gapped data before padding it so the next conv can fold the pad
+  // into its padding parameter. A matrix built against the padded, shuffled
+  // operand has nearly every diagonal nonzero.
+  if (info && info->gapFactor > 1) {
+    IntegerRelation rowMajor =
+        getRowMajorLayoutRelation(op.getSourceType(), minSlotCount);
+    if (!isRelationEqual(sourceLayout.getIntegerRelation(), rowMajor)) {
+      mlir::IRRewriter builder(op.getContext());
+      auto [converted, convertedLayout] = convertToLayout(
+          op.getContext(), builder, op, op.getSource(), sourceLayout, rowMajor);
+      debugAssignLayout(converted, convertedLayout);
+      assignedLayouts.insert({converted, convertedLayout});
+      sourceLayout = convertedLayout;
+    }
+    info->gapFactor = 1;
+    kernelInfoAttr = makeKernelInfoAttr(op.getContext(), *info);
+  }
+
   // Check if this pad is eligible to be folded forward into a conv op.
   // If so, we use the shifted relation (special case) to ensure the fold
   // pattern matches.
   bool isEligibleForConvFusion = false;
-  RankedTensorType paddedType = op.getResultType();
   if (paddedType.getRank() == 3 && paddedType.getDimSize(0) == 1) {
     ArrayRef<int64_t> low = op.getStaticLow();
     ArrayRef<int64_t> high = op.getStaticHigh();
@@ -1915,8 +1938,7 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
     // low padding. Pad positions stay unmapped in the relation; unmapped points
     // are zero-filled when a layout is materialized, which matches the
     // zero-fill pad body.
-    IntegerRelation padRelation =
-        getComposedLayoutAttr(op.getSource()).getIntegerRelation();
+    IntegerRelation padRelation = sourceLayout.getIntegerRelation();
     auto domainVarOffset =
         padRelation.getVarKindOffset(presburger::VarKind::Domain);
     for (auto [dim, low] : llvm::enumerate(op.getStaticLow())) {
@@ -1927,8 +1949,6 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
 
     LayoutAttr outputLayout =
         LayoutAttr::getFromIntegerRelation(op.getContext(), padRelation);
-    Attribute kernelInfoAttr = cloneKernelInfoWithResultShape(
-        op.getSource(), op.getResultType().getShape());
     assignedLayouts.insert({op.getResult(), outputLayout});
     debugAssignLayout(op.getResult(), outputLayout);
     setResultLayoutAttr(op, kernelInfoAttr);
@@ -1937,17 +1957,11 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
 
   // General case: use getPaddingRelation and compose.
   SmallVector<int64_t> lowPadding = llvm::to_vector(op.getStaticLow());
-  IntegerRelation sourceLayout =
-      getComposedLayoutAttr(op.getSource()).getIntegerRelation();
-
   RankedTensorType unpaddedType = op.getSourceType();
   IntegerRelation paddingRel =
       getPaddingRelation(paddedType, unpaddedType, lowPadding);
 
-  paddingRel.compose(sourceLayout);
-
-  Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(op.getSource(), paddedType.getShape());
+  paddingRel.compose(sourceLayout.getIntegerRelation());
 
   LayoutAttr outputLayout =
       LayoutAttr::getFromIntegerRelation(op.getContext(), paddingRel);
