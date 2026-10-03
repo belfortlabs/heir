@@ -126,11 +126,43 @@ cc_library(
     ],
 )
 
+heir_opt(
+    name = "math_emitc",
+    src = "math.mlir",
+    generated_filename = "math_emitc.mlir",
+    pass_flags = ["--cheddar-to-emitc"],
+)
+
+heir_translate(
+    name = "math_cpp_raw",
+    src = ":math_emitc.mlir",
+    generated_filename = "math_raw.cc",
+    pass_flags = ["--mlir-to-cpp"],
+)
+
+genrule(
+    name = "math_lib_src",
+    srcs = [":math_raw.cc"],
+    outs = ["math_lib.cc"],
+    cmd = """cat > $@ <<'PRELUDE_EOF'
+// AUTO-GENERATED: do not edit. See tests/Conversions/CheddarToEmitC/compile/BUILD.
+#include <cstdint>
+PRELUDE_EOF
+cat $(location :math_raw.cc) >> $@
+""",
+)
+
+cc_library(
+    name = "math_compiled",
+    srcs = [":math_lib_src"],
+)
+
 build_test(
     name = "compile_test",
     targets = [
         ":kernels_compiled",
         ":kernels_cyclops_compiled",
+        ":math_compiled",
     ],
 )
 

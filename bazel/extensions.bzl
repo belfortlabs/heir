@@ -23,6 +23,10 @@ def _llvm_deps_impl(_):
             # through the automated integration process). The patch file is
             # automatically generated, and should not be removed even if empty.
             "@heir//patches:llvm.patch",
+            # The <cmath> calls MathToEmitC is missing, pending upstream
+            # (llvm-project branch math-to-emitc-cmath). Drop the patch once
+            # the LLVM integrate includes them.
+            "@heir//patches:math_to_emitc_cmath.patch",
         ],
         patch_args = ["-p1"],
     )
