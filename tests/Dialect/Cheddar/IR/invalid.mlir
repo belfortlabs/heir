@@ -50,3 +50,15 @@ func.func @transform_keys_duplicate_diagonal(%ctx: tensor<!context>, %ui: tensor
   %0 = cheddar.prepare_linear_transform_keys %ctx, %ui {diagonal_indices = array<i32: 3, 11>, width = 8 : i64, level = 1 : i64} : (tensor<!context>, tensor<!ui>) -> tensor<!ui>
   return %0 : tensor<!ui>
 }
+
+// -----
+
+!context = !cheddar.context
+!ui = !cheddar.user_interface
+
+// Only the Cyclops client derives its secrets from a seed.
+func.func @secret_seed_without_client_context(%ctx: tensor<!context>, %seed: !cheddar.secret_seed, %ui: tensor<!ui>) -> tensor<!ui> {
+  // expected-error@below {{a secret seed requires a Cyclops client context}}
+  %0 = cheddar.create_user_interface %ctx, %seed, %ui : (tensor<!context>, !cheddar.secret_seed, tensor<!ui>) -> tensor<!ui>
+  return %0 : tensor<!ui>
+}
