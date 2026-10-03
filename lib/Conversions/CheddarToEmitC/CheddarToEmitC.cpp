@@ -239,6 +239,9 @@ void addCheddarEmitCTypeConversions(TypeConverter& tc, MLIRContext* ctx) {
     return PointerType::get(
         OpaqueType::get(ctx, "const heir::cyclops::DebugSink"));
   });
+  tc.addConversion([ctx](cheddar::SecretSeedType) -> Type {
+    return OpaqueType::get(ctx, "const std::optional<::cyclops::prng::Seed>&");
+  });
   // Identity for lvalue, which the shared EmitCTypeConverter rejects.
   tc.addConversion([](emitc::LValueType t) -> Type { return t; });
   tc.addConversion([ctx](cheddar::ParameterType) -> Type {
@@ -357,18 +360,37 @@ struct ConvertSetupAssign : public OpConversionPattern<Op> {
       Op op, typename Op::Adaptor adaptor,
       ConversionPatternRewriter& rewriter) const override {
     auto operands = adaptor.getOperands();
-    // Seed Cyclops key material instead of sampling every coefficient directly.
-    std::string args = "{}";
-    if (isa<cheddar::CreateUserInterfaceOp>(op) && useCyclopsRuntime(op))
-      args += ", true";
-    VerbatimOp::create(rewriter, op.getLoc(),
-                       "{} = " + rhsCallee + "(" + args + ");",
+    VerbatimOp::create(rewriter, op.getLoc(), "{} = " + rhsCallee + "({});",
                        ValueRange{operands[1], operands[0]});
     rewriter.eraseOp(op);
     return success();
   }
 
   std::string rhsCallee;
+};
+
+struct ConvertCreateUserInterface
+    : public OpConversionPattern<cheddar::CreateUserInterfaceOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      cheddar::CreateUserInterfaceOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    SmallVector<Value> operands{adaptor.getOutput(), adaptor.getCtx()};
+    // Seed Cyclops key material instead of sampling every coefficient directly.
+    std::string args = "{}";
+    if (useCyclopsRuntime(op)) args += ", true";
+    // A secret seed, when it holds a value, derives the secrets.
+    if (Value seed = adaptor.getSecretSeed()) {
+      args += ", ::cyclops::prng::Backend::kShake128, true, {}";
+      operands.push_back(seed);
+    }
+    VerbatimOp::create(
+        rewriter, op.getLoc(),
+        "{} = std::make_unique<UserInterface<word>>(" + args + ");", operands);
+    rewriter.eraseOp(op);
+    return success();
+  }
 };
 
 // Support values derived from a context or key. The runtime header supplies
@@ -1772,8 +1794,8 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
         ConvertEncodeConstant, ConvertDecode, ConvertHRot, ConvertHRotAdd,
         ConvertHConj, ConvertHConjAdd, ConvertLinearTransform,
         ConvertPrepareLinearTransform, ConvertApplyPreparedLinearTransform,
-        ConvertEvalPoly, ConvertPrepareLinearTransformKeys, ConvertGetEvkMap>(
-        typeConverter, ctx);
+        ConvertEvalPoly, ConvertPrepareLinearTransformKeys, ConvertGetEvkMap,
+        ConvertCreateUserInterface>(typeConverter, ctx);
     patterns.add<ConvertRuntimeAccessor<cheddar::GetEncoderOp>>(
         typeConverter, ctx, "heir::getEncoder");
     patterns.add<ConvertRuntimeAccessor<cheddar::GetMultKeyOp>>(
@@ -1782,8 +1804,6 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
         typeConverter, ctx, "Context<word>::Create");
     patterns.add<ConvertSetupAssign<cheddar::CreateClientContextOp>>(
         typeConverter, ctx, "ClientContext<word>::Create");
-    patterns.add<ConvertSetupAssign<cheddar::CreateUserInterfaceOp>>(
-        typeConverter, ctx, "std::make_unique<UserInterface<word>>");
 
     auto addDps = [&](StringRef name, auto opTag,
                       std::function<std::string(decltype(opTag))> extra =
