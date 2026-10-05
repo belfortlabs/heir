@@ -212,7 +212,7 @@ template <typename Word>
     const std::vector<int>& rotations) {
   const auto [numMain, numTer, numAux] = shape;
   return ::cyclops::PlanGaloisKeys<Word>(
-      parameter, nullptr,
+      parameter,
       ::cyclops::KeySwitchLayout<Word>(
           parameter, ::cyclops::NPInfo(numMain, numTer, numAux)),
       rotations);
