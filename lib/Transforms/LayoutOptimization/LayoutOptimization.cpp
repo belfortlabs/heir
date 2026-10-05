@@ -330,20 +330,8 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
 
 Cost LayoutOptimization::costOfLayoutConversion(Attribute fromLayout,
                                                 Attribute toLayout) {
-  LayoutAttr fromLayoutAttr = dyn_cast<LayoutAttr>(fromLayout);
-  LayoutAttr toLayoutAttr = dyn_cast<LayoutAttr>(toLayout);
-
-  if (!fromLayoutAttr || !toLayoutAttr) {
-    return fromLayout == toLayout ? 0 : 1;
-  }
-
-  if (fromLayoutAttr == toLayoutAttr) {
-    return 0;
-  }
-
-  return computeCostOfLayoutConversion(minSlotCount, fromLayoutAttr,
-                                       toLayoutAttr, vveRandomSeed,
-                                       vveRandomTries);
+  return computeCostOfLayoutConversion(minSlotCount, fromLayout, toLayout,
+                                       vveRandomSeed, vveRandomTries);
 }
 
 OperandChange LayoutOptimization::costOfChangedOperand(OpOperand& operand,
