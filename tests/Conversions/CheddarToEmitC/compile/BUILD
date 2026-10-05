@@ -3,6 +3,7 @@ load("@heir//bazel/cheddar:config.bzl", "requires_cheddar")
 load("@heir//tools:heir-opt.bzl", "heir_opt")
 load("@heir//tools:heir-translate.bzl", "heir_translate")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(
     default_applicable_licenses = ["@heir//:license"],
@@ -155,6 +156,16 @@ cat $(location :math_raw.cc) >> $@
 cc_library(
     name = "math_compiled",
     srcs = [":math_lib_src"],
+)
+
+# Runs the emitted math functions on known values.
+cc_test(
+    name = "math_test",
+    srcs = ["math_test.cc"],
+    deps = [
+        ":math_compiled",
+        "@googletest//:gtest_main",
+    ],
 )
 
 build_test(
