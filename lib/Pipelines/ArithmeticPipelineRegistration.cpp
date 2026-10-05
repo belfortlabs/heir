@@ -89,6 +89,7 @@
 #include "mlir/include/mlir/Dialect/Arith/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/Passes.h"  // from @llvm-project
+#include "mlir/include/mlir/Dialect/Math/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/MemRef/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Pass/PassManager.h"   // from @llvm-project
 #include "mlir/include/mlir/Pass/PassOptions.h"   // from @llvm-project
@@ -819,6 +820,14 @@ void cheddarToEmitCPipelineBuilder(OpPassManager& pm) {
   pm.addPass(createCanonicalizerPass());
   pm.addPass(bufferization::createBufferDeallocationSimplificationPass());
   pm.addPass(bufferization::createLowerDeallocationsPass());
+
+  // MathToEmitC lowers the math ops that have a <cmath> function. Expand
+  // the ones without one into ops that do: rsqrt into divf and sqrt, clampf
+  // into min/max (lowered by arith-expand below), fpowi into multiplications
+  // or pow, and ctlz into integer arithmetic.
+  math::MathExpandOpsPassOptions mathExpandOptions;
+  mathExpandOptions.opMnemonics = {"rsqrt", "clampf", "fpowi", "ctlz"};
+  pm.addPass(math::createMathExpandOpsPass(mathExpandOptions));
 
   arith::ArithExpandOpsPassOptions arithExpandOptions;
   arithExpandOptions.includeMinMaxF = true;

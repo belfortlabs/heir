@@ -1,0 +1,549 @@
+From d0a1bd0354e7d3b22a4fb0306f4c31825ecb6b8a Mon Sep 17 00:00:00 2001
+From: Alexander Viand <alexander.viand@gmail.com>
+Date: Sat, 3 Oct 2026 00:20:15 +0200
+Subject: [PATCH 1/2] [mlir][emitc] Lower the remaining <math.h> functions in
+ MathToEmitC
+
+MathToEmitC lowered only a dozen math ops to <math.h>/<cmath> calls, so
+code using e.g. math.log, math.tanh or math.isnan could not reach EmitC
+even though C and C++ provide these functions directly.
+
+Add call patterns for tan, atan, sinh, cosh, tanh, asinh, acosh, atanh,
+exp2, expm1, log, log2, log10, log1p, cbrt, erf, erfc, trunc, copysign
+and fma, which follow the existing f32 `f` suffix (C) and `std::` (C++)
+naming. Lower the classification ops isnan, isinf, isfinite and isnormal
+to the macros of the same name, which take any floating-point type and
+so carry no suffix in C. Lower math.sincos to separate sin and cos calls.
+
+convert-math-to-emitc now also marks sqrt and roundeven illegal, which
+it already had patterns for.
+---
+ .../Conversion/MathToEmitC/MathToEmitC.cpp    | 131 ++++++++-
+ .../MathToEmitC/MathToEmitCPass.cpp           |  12 +-
+ .../MathToEmitC/math-to-emitc-failed.mlir     |  16 ++
+ .../Conversion/MathToEmitC/math-to-emitc.mlir | 254 ++++++++++++++++++
+ 4 files changed, 401 insertions(+), 12 deletions(-)
+
+diff --git a/mlir/lib/Conversion/MathToEmitC/MathToEmitC.cpp b/mlir/lib/Conversion/MathToEmitC/MathToEmitC.cpp
+index adf06c139021..fc1a4b5ab21d 100644
+--- a/mlir/lib/Conversion/MathToEmitC/MathToEmitC.cpp
++++ b/mlir/lib/Conversion/MathToEmitC/MathToEmitC.cpp
+@@ -32,6 +32,17 @@ struct MathToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
+   }
+ };
+ 
++/// The <math.h> function `calleeStr` for `type`: `std::` qualified for C++,
++/// and with the `f` suffix of the float variant for an f32 in C.
++std::string getCalleeName(StringRef calleeStr, Type type,
++                          emitc::LanguageTarget languageTarget) {
++  if (languageTarget == emitc::LanguageTarget::cpp11)
++    return ("std::" + calleeStr).str();
++  if (type.isF32())
++    return (calleeStr + "f").str();
++  return calleeStr.str();
++}
++
+ template <typename OpType>
+ class LowerToEmitCCallOpaque : public OpRewritePattern<OpType> {
+   std::string calleeStr;
+@@ -57,19 +68,72 @@ LogicalResult LowerToEmitCCallOpaque<OpType>::matchAndRewrite(
+     return rewriter.notifyMatchFailure(
+         op.getLoc(),
+         "expected all operands and results to be of type f32 or f64");
+-  std::string modifiedCalleeStr = calleeStr;
+-  if (languageTarget == emitc::LanguageTarget::cpp11) {
+-    modifiedCalleeStr = "std::" + calleeStr;
+-  } else if (languageTarget == emitc::LanguageTarget::c99) {
+-    auto operandType = op->getOperandTypes()[0];
+-    if (operandType.isF32())
+-      modifiedCalleeStr = calleeStr + "f";
+-  }
+   rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(
+-      op, op.getType(), modifiedCalleeStr, op->getOperands());
++      op, op.getType(),
++      getCalleeName(calleeStr, op->getOperandTypes()[0], languageTarget),
++      op->getOperands());
+   return success();
+ }
+ 
++/// Lowers a floating-point classification op (`math.isnan` etc.) to a call of
++/// the <math.h> macro of the same name, which takes any floating-point type
++/// and so needs no type suffix in C.
++template <typename OpType>
++class LowerClassificationToEmitCCallOpaque : public OpRewritePattern<OpType> {
++  std::string calleeStr;
++  emitc::LanguageTarget languageTarget;
++
++public:
++  LowerClassificationToEmitCCallOpaque(MLIRContext *context,
++                                       std::string calleeStr,
++                                       emitc::LanguageTarget languageTarget)
++      : OpRewritePattern<OpType>(context), calleeStr(std::move(calleeStr)),
++        languageTarget(languageTarget) {}
++
++  LogicalResult matchAndRewrite(OpType op,
++                                PatternRewriter &rewriter) const override {
++    if (!isa<Float32Type, Float64Type>(op.getOperand().getType()) ||
++        !op.getType().isInteger(1))
++      return rewriter.notifyMatchFailure(
++          op.getLoc(), "expected an f32 or f64 operand and an i1 result");
++    std::string callee = languageTarget == emitc::LanguageTarget::cpp11
++                             ? "std::" + calleeStr
++                             : calleeStr;
++    rewriter.replaceOpWithNewOp<emitc::CallOpaqueOp>(op, op.getType(), callee,
++                                                     op.getOperand());
++    return success();
++  }
++};
++
++/// Lowers `math.sincos` to separate `sin` and `cos` calls.
++class LowerSincosToEmitCCallOpaque : public OpRewritePattern<math::SincosOp> {
++  emitc::LanguageTarget languageTarget;
++
++public:
++  LowerSincosToEmitCCallOpaque(MLIRContext *context,
++                               emitc::LanguageTarget languageTarget)
++      : OpRewritePattern<math::SincosOp>(context),
++        languageTarget(languageTarget) {}
++
++  LogicalResult matchAndRewrite(math::SincosOp op,
++                                PatternRewriter &rewriter) const override {
++    Type type = op.getOperand().getType();
++    if (!isa<Float32Type, Float64Type>(type))
++      return rewriter.notifyMatchFailure(
++          op.getLoc(), "expected the operand to be of type f32 or f64");
++    Value sin = emitc::CallOpaqueOp::create(
++                    rewriter, op.getLoc(), type,
++                    getCalleeName("sin", type, languageTarget), op.getOperand())
++                    .getResult(0);
++    Value cos = emitc::CallOpaqueOp::create(
++                    rewriter, op.getLoc(), type,
++                    getCalleeName("cos", type, languageTarget), op.getOperand())
++                    .getResult(0);
++    rewriter.replaceOp(op, {sin, cos});
++    return success();
++  }
++};
++
+ } // namespace
+ 
+ void mlir::registerConvertMathToEmitCInterface(DialectRegistry &registry) {
+@@ -109,4 +173,53 @@ void mlir::populateConvertMathToEmitCPatterns(
+                                                         languageTarget);
+   patterns.insert<LowerToEmitCCallOpaque<math::SqrtOp>>(context, "sqrt",
+                                                         languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::TanOp>>(context, "tan",
++                                                       languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::AtanOp>>(context, "atan",
++                                                        languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::SinhOp>>(context, "sinh",
++                                                        languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::CoshOp>>(context, "cosh",
++                                                        languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::TanhOp>>(context, "tanh",
++                                                        languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::AsinhOp>>(context, "asinh",
++                                                         languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::AcoshOp>>(context, "acosh",
++                                                         languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::AtanhOp>>(context, "atanh",
++                                                         languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::Exp2Op>>(context, "exp2",
++                                                        languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::ExpM1Op>>(context, "expm1",
++                                                         languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::LogOp>>(context, "log",
++                                                       languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::Log2Op>>(context, "log2",
++                                                        languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::Log10Op>>(context, "log10",
++                                                         languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::Log1pOp>>(context, "log1p",
++                                                         languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::CbrtOp>>(context, "cbrt",
++                                                        languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::ErfOp>>(context, "erf",
++                                                       languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::ErfcOp>>(context, "erfc",
++                                                        languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::TruncOp>>(context, "trunc",
++                                                         languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::CopySignOp>>(context, "copysign",
++                                                            languageTarget);
++  patterns.insert<LowerToEmitCCallOpaque<math::FmaOp>>(context, "fma",
++                                                       languageTarget);
++  patterns.insert<LowerClassificationToEmitCCallOpaque<math::IsNaNOp>>(
++      context, "isnan", languageTarget);
++  patterns.insert<LowerClassificationToEmitCCallOpaque<math::IsInfOp>>(
++      context, "isinf", languageTarget);
++  patterns.insert<LowerClassificationToEmitCCallOpaque<math::IsFiniteOp>>(
++      context, "isfinite", languageTarget);
++  patterns.insert<LowerClassificationToEmitCCallOpaque<math::IsNormalOp>>(
++      context, "isnormal", languageTarget);
++  patterns.insert<LowerSincosToEmitCCallOpaque>(context, languageTarget);
+ }
+diff --git a/mlir/lib/Conversion/MathToEmitC/MathToEmitCPass.cpp b/mlir/lib/Conversion/MathToEmitC/MathToEmitCPass.cpp
+index 87a27644210f..53633038d332 100644
+--- a/mlir/lib/Conversion/MathToEmitC/MathToEmitCPass.cpp
++++ b/mlir/lib/Conversion/MathToEmitC/MathToEmitCPass.cpp
+@@ -40,9 +40,15 @@ void ConvertMathToEmitC::runOnOperation() {
+   ConversionTarget target(getContext());
+   target.addLegalOp<emitc::CallOpaqueOp>();
+ 
+-  target.addIllegalOp<math::FloorOp, math::ExpOp, math::RoundOp, math::CosOp,
+-                      math::SinOp, math::Atan2Op, math::CeilOp, math::AcosOp,
+-                      math::AsinOp, math::AbsFOp, math::PowFOp>();
++  target.addIllegalOp<
++      math::FloorOp, math::ExpOp, math::RoundOp, math::RoundEvenOp, math::CosOp,
++      math::SinOp, math::Atan2Op, math::CeilOp, math::AcosOp, math::AsinOp,
++      math::AbsFOp, math::PowFOp, math::SqrtOp, math::TanOp, math::AtanOp,
++      math::SinhOp, math::CoshOp, math::TanhOp, math::AsinhOp, math::AcoshOp,
++      math::AtanhOp, math::Exp2Op, math::ExpM1Op, math::LogOp, math::Log2Op,
++      math::Log10Op, math::Log1pOp, math::CbrtOp, math::ErfOp, math::ErfcOp,
++      math::TruncOp, math::CopySignOp, math::FmaOp, math::IsNaNOp,
++      math::IsInfOp, math::IsFiniteOp, math::IsNormalOp, math::SincosOp>();
+ 
+   RewritePatternSet patterns(&getContext());
+   populateConvertMathToEmitCPatterns(patterns, languageTarget);
+diff --git a/mlir/test/Conversion/MathToEmitC/math-to-emitc-failed.mlir b/mlir/test/Conversion/MathToEmitC/math-to-emitc-failed.mlir
+index f1de97c5465a..46b6547a64ab 100644
+--- a/mlir/test/Conversion/MathToEmitC/math-to-emitc-failed.mlir
++++ b/mlir/test/Conversion/MathToEmitC/math-to-emitc-failed.mlir
+@@ -21,3 +21,19 @@ func.func @unsupported_f128_type(%arg0 : f128) -> f128 {
+   %0 = math.absf %arg0 : f128
+   return %0 : f128
+ }
++
++// -----
++
++func.func @unsupported_f16_classification(%arg0 : f16) -> i1 {
++// expected-error @+1 {{failed to legalize operation 'math.isnan' that was explicitly marked illegal}}
++  %0 = math.isnan %arg0 : f16
++  return %0 : i1
++}
++
++// -----
++
++func.func @unsupported_f16_sincos(%arg0 : f16) -> (f16, f16) {
++// expected-error @+1 {{failed to legalize operation 'math.sincos' that was explicitly marked illegal}}
++  %0, %1 = math.sincos %arg0 : f16
++  return %0, %1 : f16, f16
++}
+diff --git a/mlir/test/Conversion/MathToEmitC/math-to-emitc.mlir b/mlir/test/Conversion/MathToEmitC/math-to-emitc.mlir
+index 0947556e20fb..6f8acfdb6435 100644
+--- a/mlir/test/Conversion/MathToEmitC/math-to-emitc.mlir
++++ b/mlir/test/Conversion/MathToEmitC/math-to-emitc.mlir
+@@ -132,3 +132,257 @@ func.func @roundeven(%arg0: f32, %arg1: f64) {
+   %1 = math.roundeven %arg1 : f64
+   return
+ }
++
++func.func @tan(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "tanf"
++    // c99-NEXT: emitc.call_opaque "tan"
++    // cpp11: emitc.call_opaque "std::tan"
++    // cpp11-NEXT: emitc.call_opaque "std::tan"
++    %0 = math.tan %arg0 : f32
++    %1 = math.tan %arg1 : f64
++    return
++}
++
++func.func @atan(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "atanf"
++    // c99-NEXT: emitc.call_opaque "atan"
++    // cpp11: emitc.call_opaque "std::atan"
++    // cpp11-NEXT: emitc.call_opaque "std::atan"
++    %0 = math.atan %arg0 : f32
++    %1 = math.atan %arg1 : f64
++    return
++}
++
++func.func @sinh(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "sinhf"
++    // c99-NEXT: emitc.call_opaque "sinh"
++    // cpp11: emitc.call_opaque "std::sinh"
++    // cpp11-NEXT: emitc.call_opaque "std::sinh"
++    %0 = math.sinh %arg0 : f32
++    %1 = math.sinh %arg1 : f64
++    return
++}
++
++func.func @cosh(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "coshf"
++    // c99-NEXT: emitc.call_opaque "cosh"
++    // cpp11: emitc.call_opaque "std::cosh"
++    // cpp11-NEXT: emitc.call_opaque "std::cosh"
++    %0 = math.cosh %arg0 : f32
++    %1 = math.cosh %arg1 : f64
++    return
++}
++
++func.func @tanh(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "tanhf"
++    // c99-NEXT: emitc.call_opaque "tanh"
++    // cpp11: emitc.call_opaque "std::tanh"
++    // cpp11-NEXT: emitc.call_opaque "std::tanh"
++    %0 = math.tanh %arg0 : f32
++    %1 = math.tanh %arg1 : f64
++    return
++}
++
++func.func @asinh(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "asinhf"
++    // c99-NEXT: emitc.call_opaque "asinh"
++    // cpp11: emitc.call_opaque "std::asinh"
++    // cpp11-NEXT: emitc.call_opaque "std::asinh"
++    %0 = math.asinh %arg0 : f32
++    %1 = math.asinh %arg1 : f64
++    return
++}
++
++func.func @acosh(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "acoshf"
++    // c99-NEXT: emitc.call_opaque "acosh"
++    // cpp11: emitc.call_opaque "std::acosh"
++    // cpp11-NEXT: emitc.call_opaque "std::acosh"
++    %0 = math.acosh %arg0 : f32
++    %1 = math.acosh %arg1 : f64
++    return
++}
++
++func.func @atanh(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "atanhf"
++    // c99-NEXT: emitc.call_opaque "atanh"
++    // cpp11: emitc.call_opaque "std::atanh"
++    // cpp11-NEXT: emitc.call_opaque "std::atanh"
++    %0 = math.atanh %arg0 : f32
++    %1 = math.atanh %arg1 : f64
++    return
++}
++
++func.func @exp2(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "exp2f"
++    // c99-NEXT: emitc.call_opaque "exp2"
++    // cpp11: emitc.call_opaque "std::exp2"
++    // cpp11-NEXT: emitc.call_opaque "std::exp2"
++    %0 = math.exp2 %arg0 : f32
++    %1 = math.exp2 %arg1 : f64
++    return
++}
++
++func.func @expm1(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "expm1f"
++    // c99-NEXT: emitc.call_opaque "expm1"
++    // cpp11: emitc.call_opaque "std::expm1"
++    // cpp11-NEXT: emitc.call_opaque "std::expm1"
++    %0 = math.expm1 %arg0 : f32
++    %1 = math.expm1 %arg1 : f64
++    return
++}
++
++func.func @log(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "logf"
++    // c99-NEXT: emitc.call_opaque "log"
++    // cpp11: emitc.call_opaque "std::log"
++    // cpp11-NEXT: emitc.call_opaque "std::log"
++    %0 = math.log %arg0 : f32
++    %1 = math.log %arg1 : f64
++    return
++}
++
++func.func @log2(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "log2f"
++    // c99-NEXT: emitc.call_opaque "log2"
++    // cpp11: emitc.call_opaque "std::log2"
++    // cpp11-NEXT: emitc.call_opaque "std::log2"
++    %0 = math.log2 %arg0 : f32
++    %1 = math.log2 %arg1 : f64
++    return
++}
++
++func.func @log10(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "log10f"
++    // c99-NEXT: emitc.call_opaque "log10"
++    // cpp11: emitc.call_opaque "std::log10"
++    // cpp11-NEXT: emitc.call_opaque "std::log10"
++    %0 = math.log10 %arg0 : f32
++    %1 = math.log10 %arg1 : f64
++    return
++}
++
++func.func @log1p(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "log1pf"
++    // c99-NEXT: emitc.call_opaque "log1p"
++    // cpp11: emitc.call_opaque "std::log1p"
++    // cpp11-NEXT: emitc.call_opaque "std::log1p"
++    %0 = math.log1p %arg0 : f32
++    %1 = math.log1p %arg1 : f64
++    return
++}
++
++func.func @cbrt(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "cbrtf"
++    // c99-NEXT: emitc.call_opaque "cbrt"
++    // cpp11: emitc.call_opaque "std::cbrt"
++    // cpp11-NEXT: emitc.call_opaque "std::cbrt"
++    %0 = math.cbrt %arg0 : f32
++    %1 = math.cbrt %arg1 : f64
++    return
++}
++
++func.func @erf(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "erff"
++    // c99-NEXT: emitc.call_opaque "erf"
++    // cpp11: emitc.call_opaque "std::erf"
++    // cpp11-NEXT: emitc.call_opaque "std::erf"
++    %0 = math.erf %arg0 : f32
++    %1 = math.erf %arg1 : f64
++    return
++}
++
++func.func @erfc(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "erfcf"
++    // c99-NEXT: emitc.call_opaque "erfc"
++    // cpp11: emitc.call_opaque "std::erfc"
++    // cpp11-NEXT: emitc.call_opaque "std::erfc"
++    %0 = math.erfc %arg0 : f32
++    %1 = math.erfc %arg1 : f64
++    return
++}
++
++func.func @trunc(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "truncf"
++    // c99-NEXT: emitc.call_opaque "trunc"
++    // cpp11: emitc.call_opaque "std::trunc"
++    // cpp11-NEXT: emitc.call_opaque "std::trunc"
++    %0 = math.trunc %arg0 : f32
++    %1 = math.trunc %arg1 : f64
++    return
++}
++
++func.func @copysign(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "copysignf"
++    // c99-NEXT: emitc.call_opaque "copysign"
++    // cpp11: emitc.call_opaque "std::copysign"
++    // cpp11-NEXT: emitc.call_opaque "std::copysign"
++    %0 = math.copysign %arg0, %arg0 : f32
++    %1 = math.copysign %arg1, %arg1 : f64
++    return
++}
++
++func.func @fma(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "fmaf"
++    // c99-NEXT: emitc.call_opaque "fma"
++    // cpp11: emitc.call_opaque "std::fma"
++    // cpp11-NEXT: emitc.call_opaque "std::fma"
++    %0 = math.fma %arg0, %arg0, %arg0 : f32
++    %1 = math.fma %arg1, %arg1, %arg1 : f64
++    return
++}
++
++func.func @isnan(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "isnan"(%{{.*}}) : (f32) -> i1
++    // c99-NEXT: emitc.call_opaque "isnan"(%{{.*}}) : (f64) -> i1
++    // cpp11: emitc.call_opaque "std::isnan"(%{{.*}}) : (f32) -> i1
++    // cpp11-NEXT: emitc.call_opaque "std::isnan"(%{{.*}}) : (f64) -> i1
++    %0 = math.isnan %arg0 : f32
++    %1 = math.isnan %arg1 : f64
++    return
++}
++
++func.func @isinf(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "isinf"(%{{.*}}) : (f32) -> i1
++    // c99-NEXT: emitc.call_opaque "isinf"(%{{.*}}) : (f64) -> i1
++    // cpp11: emitc.call_opaque "std::isinf"(%{{.*}}) : (f32) -> i1
++    // cpp11-NEXT: emitc.call_opaque "std::isinf"(%{{.*}}) : (f64) -> i1
++    %0 = math.isinf %arg0 : f32
++    %1 = math.isinf %arg1 : f64
++    return
++}
++
++func.func @isfinite(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "isfinite"(%{{.*}}) : (f32) -> i1
++    // c99-NEXT: emitc.call_opaque "isfinite"(%{{.*}}) : (f64) -> i1
++    // cpp11: emitc.call_opaque "std::isfinite"(%{{.*}}) : (f32) -> i1
++    // cpp11-NEXT: emitc.call_opaque "std::isfinite"(%{{.*}}) : (f64) -> i1
++    %0 = math.isfinite %arg0 : f32
++    %1 = math.isfinite %arg1 : f64
++    return
++}
++
++func.func @isnormal(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "isnormal"(%{{.*}}) : (f32) -> i1
++    // c99-NEXT: emitc.call_opaque "isnormal"(%{{.*}}) : (f64) -> i1
++    // cpp11: emitc.call_opaque "std::isnormal"(%{{.*}}) : (f32) -> i1
++    // cpp11-NEXT: emitc.call_opaque "std::isnormal"(%{{.*}}) : (f64) -> i1
++    %0 = math.isnormal %arg0 : f32
++    %1 = math.isnormal %arg1 : f64
++    return
++}
++
++func.func @sincos(%arg0: f32, %arg1: f64) {
++    // c99: emitc.call_opaque "sinf"
++    // c99-NEXT: emitc.call_opaque "cosf"
++    // c99-NEXT: emitc.call_opaque "sin"
++    // c99-NEXT: emitc.call_opaque "cos"
++    // cpp11: emitc.call_opaque "std::sin"
++    // cpp11-NEXT: emitc.call_opaque "std::cos"
++    // cpp11-NEXT: emitc.call_opaque "std::sin"
++    // cpp11-NEXT: emitc.call_opaque "std::cos"
++    %0, %1 = math.sincos %arg0 : f32
++    %2, %3 = math.sincos %arg1 : f64
++    return
++}
+-- 
+2.52.0
+
+
+From db907a563d858bb663280bd5104164d6f8a1b9a8 Mon Sep 17 00:00:00 2001
+From: Alexander Viand <alexander.viand@gmail.com>
+Date: Sat, 3 Oct 2026 00:23:29 +0200
+Subject: [PATCH 2/2] [mlir][emitc] Lower math.roundeven to std::nearbyint for
+ C++
+
+C++ has no std::roundeven: roundeven is a C23 addition that <cmath> does
+not provide, so the emitted call did not compile. std::nearbyint rounds
+half to even in the default rounding mode, which is what math.roundeven
+specifies. The C target keeps calling roundeven.
+---
+ mlir/lib/Conversion/MathToEmitC/MathToEmitC.cpp     | 7 ++++++-
+ mlir/test/Conversion/MathToEmitC/math-to-emitc.mlir | 4 ++--
+ 2 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/mlir/lib/Conversion/MathToEmitC/MathToEmitC.cpp b/mlir/lib/Conversion/MathToEmitC/MathToEmitC.cpp
+index fc1a4b5ab21d..955d8e061810 100644
+--- a/mlir/lib/Conversion/MathToEmitC/MathToEmitC.cpp
++++ b/mlir/lib/Conversion/MathToEmitC/MathToEmitC.cpp
+@@ -151,8 +151,13 @@ void mlir::populateConvertMathToEmitCPatterns(
+                                                          languageTarget);
+   patterns.insert<LowerToEmitCCallOpaque<math::RoundOp>>(context, "round",
+                                                          languageTarget);
++  // C++ has no `roundeven`; `nearbyint` rounds half to even in the default
++  // rounding mode.
+   patterns.insert<LowerToEmitCCallOpaque<math::RoundEvenOp>>(
+-      context, "roundeven", languageTarget);
++      context,
++      languageTarget == emitc::LanguageTarget::cpp11 ? "nearbyint"
++                                                     : "roundeven",
++      languageTarget);
+   patterns.insert<LowerToEmitCCallOpaque<math::ExpOp>>(context, "exp",
+                                                        languageTarget);
+   patterns.insert<LowerToEmitCCallOpaque<math::CosOp>>(context, "cos",
+diff --git a/mlir/test/Conversion/MathToEmitC/math-to-emitc.mlir b/mlir/test/Conversion/MathToEmitC/math-to-emitc.mlir
+index 6f8acfdb6435..b5540171c15e 100644
+--- a/mlir/test/Conversion/MathToEmitC/math-to-emitc.mlir
++++ b/mlir/test/Conversion/MathToEmitC/math-to-emitc.mlir
+@@ -126,8 +126,8 @@ func.func @round(%arg0: f32, %arg1: f64) {
+ func.func @roundeven(%arg0: f32, %arg1: f64) {
+   // c99: emitc.call_opaque "roundevenf"
+   // c99-NEXT: emitc.call_opaque "roundeven"
+-  // cpp11: emitc.call_opaque "std::roundeven"
+-  // cpp11-NEXT: emitc.call_opaque "std::roundeven"
++  // cpp11: emitc.call_opaque "std::nearbyint"
++  // cpp11-NEXT: emitc.call_opaque "std::nearbyint"
+   %0 = math.roundeven %arg0 : f32
+   %1 = math.roundeven %arg1 : f64
+   return
+-- 
+2.52.0
+
