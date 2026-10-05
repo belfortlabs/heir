@@ -16,6 +16,9 @@
 // A helper both sides use is defined, with internal linkage, in both.
 // SHARED: static void shared_layout(
 // SHARED: shared_layout(
+// The server re-plans from the same key table.
+// SHARED: constexpr std::array<KeyRequest, 4> kEvaluationKeys
+// SHARED-SAME: {0, 5, 7, 2, 3}
 // CHECK: static void shared_layout(
 // CHECK: shared_layout(
 // The client constructs its key request from the compiler's table.
