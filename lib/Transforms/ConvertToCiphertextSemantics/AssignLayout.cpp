@@ -334,7 +334,7 @@ static bool foldsRegardlessOfSize(Value input, CodegenStrategy strategy) {
 static FailureOr<Value> implementAssignLayoutStep(
     Value input, LayoutAttr layout, Type targetTypeTy,
     ImplicitLocOpBuilder& builder,
-    const std::function<void(Operation*)>& createdOpCallback, bool isLast,
+    const std::function<void(Operation*)>& createdOpCallback,
     ArrayRef<int64_t> domainSchedule = {},
     CodegenStrategy strategy = CodegenStrategy::AUTO) {
   presburger::IntegerRelation rel = layout.getIntegerRelation();
@@ -674,8 +674,8 @@ FailureOr<Value> implementAssignLayout(
                                           lastLayout, minSlotCount);
       return implementAssignLayoutStep(
           input, LayoutAttr::composeLayouts(arrayAttr, builder.getContext()),
-          targetType, builder, createdOpCallback, /*isLast=*/true,
-          /*domainSchedule=*/{}, strategy);
+          targetType, builder, createdOpCallback, /*domainSchedule=*/{},
+          strategy);
     }
 
     Value currentInput = input;
@@ -696,10 +696,9 @@ FailureOr<Value> implementAssignLayout(
         if (failed(intermediateType)) return failure();
         targetType = intermediateType.value();
       }
-      auto result =
-          implementAssignLayoutStep(currentInput, layoutAttr, targetType,
-                                    builder, createdOpCallback, isLast,
-                                    /*domainSchedule=*/{}, strategy);
+      auto result = implementAssignLayoutStep(
+          currentInput, layoutAttr, targetType, builder, createdOpCallback,
+          /*domainSchedule=*/{}, strategy);
       if (failed(result)) {
         return failure();
       }
@@ -712,8 +711,8 @@ FailureOr<Value> implementAssignLayout(
     auto elementType = getElementTypeOrSelf(input.getType());
     Type targetType = materializeLayout(elementType, layoutAttr, minSlotCount);
     return implementAssignLayoutStep(input, layoutAttr, targetType, builder,
-                                     createdOpCallback, /*isLast=*/true,
-                                     domainSchedule, strategy);
+                                     createdOpCallback, domainSchedule,
+                                     strategy);
   } else if (DenseIntElementsAttr elementAttr =
                  dyn_cast<DenseIntElementsAttr>(layout)) {
     Type targetType = materializePermutationLayout(input.getType(), elementAttr,
