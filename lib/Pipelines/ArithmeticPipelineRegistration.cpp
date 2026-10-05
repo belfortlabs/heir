@@ -526,6 +526,7 @@ void mlirToRLWEPipeline(OpPassManager& pm,
       generateParamOptions.scalingModBits = options.scalingModBits;
       generateParamOptions.minSlotCount = options.minSlotCount;
       generateParamOptions.usePublicKey = options.usePublicKey;
+      generateParamOptions.cheddarParameterFile = options.cheddarParameterFile;
       pm.addPass(createGenerateParamCKKS(generateParamOptions));
 
       PopulateScaleCKKSOptions populateScaleCKKSOptions;
@@ -870,6 +871,7 @@ void torchLinalgToCkksBuilder(OpPassManager& manager,
   suboptions.useCompositeRelu = options.useCompositeRelu;
   suboptions.scalingModBits = options.scalingModBits;
   suboptions.firstModBits = options.firstModBits;
+  suboptions.cheddarParameterFile = options.cheddarParameterFile;
   suboptions.enableSplitPreprocessing = options.enableSplitPreprocessing;
   suboptions.unrollFheKernelLoops = options.unrollFheKernelLoops;
   suboptions.usePublicKey = options.usePublicKey;

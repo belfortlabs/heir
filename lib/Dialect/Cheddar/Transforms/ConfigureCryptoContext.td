@@ -30,7 +30,7 @@ def CheddarConfigureCryptoContext : Pass<"cheddar-configure-crypto-context"> {
     Option<"entryFunction", "entry-function", "std::string", "", "Entry function to configure (auto-detected if empty)">,
     Option<"numCtsLevels", "num-cts-levels", "int", /*default=*/"3", "Bootstrap CoeffToSlot (CtS) level budget (cf. OpenFHE level-budget-encode); only used when the program bootstraps">,
     Option<"numStcLevels", "num-stc-levels", "int", /*default=*/"3", "Bootstrap SlotToCoeff (StC) level budget (cf. OpenFHE level-budget-decode); only used when the program bootstraps">,
-    Option<"logMessageRatio", "log-message-ratio", "int", /*default=*/"-1", "Bootstrap message headroom passed to CHEDDAR's BootParameter (governs EvalMod precision). -1 uses CHEDDAR's default headroom of 5; only used when the program bootstraps">,
+    Option<"logMessageRatio", "log-message-ratio", "int", /*default=*/"-1", "Bootstrap message headroom passed to CHEDDAR's BootParameter (governs EvalMod precision). -1 keeps the ratio of an imported parameter set (see generate-param-ckks) and uses 8 for a generated chain; only used when the program bootstraps">,
     Option<"prepareRotationKeysAtUseLevels", "prepare-rotation-keys-at-use-levels", "bool", /*default=*/"false", "Prepare each rotation key at the level of the operation that uses it instead of once at the maximum level">,
     Option<"useCyclopsRuntime", "use-cyclops-runtime", "bool", /*default=*/"false", "Target the Cyclops runtime, whose key-preparation API takes the secret handle each key must match">,
   ];

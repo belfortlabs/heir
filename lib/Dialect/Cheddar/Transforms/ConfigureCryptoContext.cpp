@@ -1,12 +1,15 @@
 #include "lib/Dialect/Cheddar/Transforms/ConfigureCryptoContext.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "lib/Analysis/RotationAnalysis/RotationAnalysis.h"
 #include "lib/Dialect/CKKS/IR/CKKSAttributes.h"
 #include "lib/Dialect/CKKS/IR/CKKSDialect.h"
+#include "lib/Dialect/Cheddar/IR/CheddarAttributes.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/ModuleAttributes.h"
@@ -36,6 +39,11 @@ namespace {
 // resulting SlotToCoeff start level.
 constexpr int64_t kBootstrapEvalModLevels = 8;
 constexpr int64_t kMinBootstrapSlots = 256;
+// Reserve eight bits between the message and q0 to keep the sine-based
+// EvalMod approximation accurate on normalized bootstrap inputs. Parameter
+// generation supplies at least 50-bit CtS/EvalMod primes so rounding noise
+// remains small when the message is scaled back up after the bootstrap.
+constexpr int64_t kGeneratedChainLogMessageRatio = 8;
 
 struct LinearTransformKeyShape {
   DenseI32ArrayAttr indices;
@@ -70,6 +78,34 @@ SmallVector<LinearTransformKeyShape> collectLinearTransformKeyShapes(
   return shapes;
 }
 
+// The levels the program relinearizes at, for the Cyclops client's key
+// request: the ops keyed by the evaluation-key map and the levels a polynomial
+// evaluation descends through.
+SmallVector<int64_t> collectMultiplicationKeyLevels(ModuleOp moduleOp) {
+  llvm::SmallDenseSet<int64_t> levels;
+  auto record = [&](IntegerAttr level) {
+    if (level) levels.insert(level.getInt());
+  };
+  moduleOp->walk([&](Operation* op) {
+    if (auto relin = dyn_cast<RelinearizeOp>(op)) {
+      record(relin.getLevelAttr());
+    } else if (auto relin = dyn_cast<RelinearizeRescaleOp>(op)) {
+      record(relin.getLevelAttr());
+    } else if (auto mult = dyn_cast<HMultOp>(op)) {
+      record(mult.getLevelAttr());
+    } else if (auto poly = dyn_cast<EvalPolyOp>(op)) {
+      if (IntegerAttr top = poly.getLevelAttr())
+        for (int64_t level =
+                 top.getInt() - poly.getLevelConsumption().getInt() + 1;
+             level <= top.getInt(); ++level)
+          if (level >= 0) levels.insert(level);
+    }
+  });
+  SmallVector<int64_t> sorted(levels.begin(), levels.end());
+  llvm::sort(sorted);
+  return sorted;
+}
+
 // Build setup and key-generation functions in destination-passing tensor form:
 //   %p   = cheddar.make_parameter ...
 //   %ctx = cheddar.create_context %p, %ctx_init
@@ -78,38 +114,25 @@ SmallVector<LinearTransformKeyShape> collectLinearTransformKeyShapes(
 //   %ui0 = cheddar.create_user_interface %ctx, %ui_init
 //   %ui1 = cheddar.prepare_rot_key %ui0 {distance, maxLevel}   // per distance
 //   return %ctx, %uiN
-// Params come from the CKKS scheme attrs (logN/scale/Q/P); the rotation
-// distances come from the shared RotationAnalysis (the same way the lattigo and
-// openfhe backends discover which keys to generate). The two tensor results
-// become owning context/user_interface out-params during Cheddar
-// bufferization, and the cheddar-to-emitc boundary re-types them to owning
-// smart-pointer references.
-// When the program bootstraps, the generated configure builds a BootContext
-// (and runs the one-time bootstrap precompute + rotation-key request) instead
-// of a plain Context: the entry then takes a `!cheddar.boot_context`.
-// `bootstrapNumSlots` is the number of slots used to prepare the bootstrap;
-// `numCtsLevels` / `numStcLevels` are the CtS/StC level budgets (a
-// depth/rotations trade-off, cf. OpenFHE's level-budget-encode/decode),
-// threaded in as pass options.
-void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
-                         int64_t logScale, DenseI64ArrayAttr Q,
-                         DenseI64ArrayAttr P,
+// The parameter set describes the runtime Parameter; the rotation distances
+// come from the shared RotationAnalysis (the same way the lattigo and openfhe
+// backends discover which keys to generate). The two tensor results become
+// owning context/user_interface out-params during Cheddar bufferization, and
+// the cheddar-to-emitc boundary re-types them to owning smart-pointer
+// references.
+// When the program bootstraps (`bootstrap` is set), the generated configure
+// builds a BootContext (and runs the one-time bootstrap precompute + rotation
+// key request) instead of a plain Context: the entry then takes a
+// `!cheddar.boot_context`. `bootstrapNumSlots` is the number of slots used to
+// prepare the bootstrap.
+void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry,
+                         ParameterSetAttr parameterSet,
                          ArrayRef<std::pair<int64_t, int64_t>> rotationKeys,
-                         bool bootstraps, int64_t bootstrapNumSlots,
-                         int64_t numCtsLevels, int64_t numStcLevels,
-                         int64_t defaultEncLevel, int64_t denseHammingWeight,
-                         int64_t sparseHammingWeight, int64_t logMessageRatio,
-                         bool useCyclopsRuntime,
+                         BootstrapConfigAttr bootstrap,
+                         int64_t bootstrapNumSlots, bool useCyclopsRuntime,
                          ArrayRef<LinearTransformKeyShape> transformShapes) {
   MLIRContext* ctx = moduleOp.getContext();
-  // Reserve eight bits between the message and q0 to keep the sine-based
-  // EvalMod approximation accurate on normalized bootstrap inputs. Parameter
-  // generation supplies at least 50-bit CtS/EvalMod primes so rounding noise
-  // remains small when the message is scaled back up after the bootstrap.
-  int64_t effLogMessageRatio = logMessageRatio;
-  if (bootstraps && effLogMessageRatio < 0) {
-    effLogMessageRatio = 8;
-  }
+  bool bootstraps = bootstrap != nullptr;
 
   OpBuilder builder(ctx);
   builder.setInsertionPointToEnd(moduleOp.getBody());
@@ -135,29 +158,17 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
   builder.setInsertionPointToStart(bodyBlock);
 
   auto i64 = [&](int64_t v) { return builder.getI64IntegerAttr(v); };
-  // Bootstrapping pins default_encryption_level below the chain top and sets
-  // the secret-key hamming weights; non-boot leaves these null (emitter
-  // defaults).
-  IntegerAttr defaultEncAttr =
-      bootstraps ? i64(defaultEncLevel) : IntegerAttr();
-  IntegerAttr denseHwAttr =
-      bootstraps ? i64(denseHammingWeight) : IntegerAttr();
-  IntegerAttr sparseHwAttr =
-      bootstraps ? i64(sparseHammingWeight) : IntegerAttr();
-  Value params =
-      MakeParameterOp::create(builder, loc, ParameterType::get(ctx), i64(logN),
-                              i64(logScale), Q, P, defaultEncAttr, denseHwAttr,
-                              sparseHwAttr)
-          .getParams();
+  Value params = MakeParameterOp::create(builder, loc, ParameterType::get(ctx),
+                                         parameterSet)
+                     .getParams();
   // Shape-only DPS destinations. Cheddar bufferization connects these to the
   // caller-provided result destinations before One-Shot Bufferize.
   Value ctxInit = tensor::EmptyOp::create(builder, loc, ctxTensor.getShape(),
                                           ctxTensor.getElementType());
   Value context =
       bootstraps
-          ? CreateBootContextOp::create(
-                builder, loc, TypeRange{ctxTensor}, params, i64(numCtsLevels),
-                i64(numStcLevels), i64(effLogMessageRatio), ctxInit)
+          ? CreateBootContextOp::create(builder, loc, TypeRange{ctxTensor},
+                                        params, bootstrap, ctxInit)
                 ->getResult(0)
           : CreateContextOp::create(builder, loc, TypeRange{ctxTensor},
                                     ValueRange{params, ctxInit})
@@ -192,6 +203,9 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
     }
     clientSetup->setAttr(kRotationKeysAttrName,
                          builder.getDenseI64ArrayAttr(requests));
+    clientSetup->setAttr(
+        kMultiplicationKeysAttrName,
+        builder.getDenseI64ArrayAttr(collectMultiplicationKeyLevels(moduleOp)));
     SmallVector<Attribute> shapes;
     for (const LinearTransformKeyShape& shape : transformShapes) {
       shapes.push_back(builder.getDictionaryAttr({
@@ -206,10 +220,7 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                          builder.getArrayAttr(shapes));
     if (bootstraps) {
       clientSetup->setAttr(kBootstrapSlotsAttrName, i64(bootstrapNumSlots));
-      clientSetup->setAttr(kBootstrapNumCtsAttrName, i64(numCtsLevels));
-      clientSetup->setAttr(kBootstrapNumStcAttrName, i64(numStcLevels));
-      clientSetup->setAttr(kBootstrapLogMessageRatioAttrName,
-                           i64(effLogMessageRatio));
+      clientSetup->setAttr(kBootstrapConfigAttrName, bootstrap);
     }
     func::ReturnOp::create(builder, loc, clientContext);
   }
@@ -308,6 +319,129 @@ struct CheddarConfigureCryptoContext
           CheddarConfigureCryptoContext> {
   using CheddarConfigureCryptoContextBase::CheddarConfigureCryptoContextBase;
 
+  // The runtime parameters of a module whose chain was generated by HEIR: the
+  // CKKS Q primes are the main primes, one per level, and the P primes the
+  // aux pool. A bootstrapping program pins fresh encryptions below the chain
+  // top (the boot-circuit primes sit above it) and sets the secret-key
+  // hamming weights CHEDDAR's BootContext requires.
+  FailureOr<ParameterSetAttr> parameterSetFromSchemeParam(
+      func::FuncOp entry, ckks::SchemeParamAttr schemeParam, bool bootstraps,
+      BootstrapConfigAttr& bootstrap) {
+    MLIRContext* ctx = &getContext();
+    DenseI64ArrayAttr Q = schemeParam.getQ();
+    DenseI64ArrayAttr P = schemeParam.getP();
+    if (!Q || Q.size() == 0 || !P || P.size() == 0) {
+      entry->getParentOfType<ModuleOp>().emitError(
+          "CHEDDAR context configuration requires non-empty CKKS Q and P "
+          "modulus chains");
+      return failure();
+    }
+    std::optional<int64_t> defaultEncLevel;
+    std::optional<int64_t> denseHammingWeight;
+    std::optional<int64_t> sparseHammingWeight;
+    if (bootstraps) {
+      int64_t bootNumCts = numCtsLevels;
+      int64_t bootNumStc = numStcLevels;
+      auto moduleOp = entry->getParentOfType<ModuleOp>();
+      if (auto attr =
+              moduleOp->getAttrOfType<IntegerAttr>("cheddar.boot.num_cts"))
+        bootNumCts = attr.getInt();
+      if (auto attr =
+              moduleOp->getAttrOfType<IntegerAttr>("cheddar.boot.num_stc"))
+        bootNumStc = attr.getInt();
+      if (bootNumCts < 0 || bootNumStc < 0) {
+        entry.emitOpError(
+            "CHEDDAR bootstrap CtS and StC level counts must be non-negative");
+        return failure();
+      }
+      defaultEncLevel = static_cast<int64_t>(Q.size()) - 1 - bootNumCts -
+                        kBootstrapEvalModLevels;
+      int64_t bootstrapEndLevel = *defaultEncLevel - bootNumStc;
+      if (*defaultEncLevel < 0 || bootstrapEndLevel < 0) {
+        entry.emitOpError()
+            << "CHEDDAR bootstrap modulus chain is too short: " << Q.size()
+            << " Q primes cannot cover " << bootNumCts << " CtS + "
+            << kBootstrapEvalModLevels << " EvalMod + " << bootNumStc
+            << " StC levels";
+        return failure();
+      }
+      denseHammingWeight = int64_t{1} << (schemeParam.getLogN() - 1);
+      sparseHammingWeight = 32;
+      int64_t ratio = logMessageRatio < 0 ? kGeneratedChainLogMessageRatio
+                                          : logMessageRatio;
+      bootstrap = BootstrapConfigAttr::get(ctx, bootNumCts, bootNumStc,
+                                           kBootstrapEvalModLevels, ratio,
+                                           EvalModAttr());
+    }
+    return ParameterSetAttr::get(
+        ctx, schemeParam.getLogN(), schemeParam.getLogDefaultScale(), Q, P,
+        /*terminalPrimes=*/DenseI64ArrayAttr(),
+        /*levelConfig=*/DenseI64ArrayAttr(),
+        /*wordBits=*/std::nullopt, defaultEncLevel,
+        /*additionalBase=*/DenseI64ArrayAttr(), /*defaultNumAux=*/std::nullopt,
+        /*levelSpecificKs=*/BoolAttr(), /*maxKeySwitchAux=*/std::nullopt,
+        /*maxLogPq=*/FloatAttr(), denseHammingWeight, sparseHammingWeight);
+  }
+
+  // The runtime parameters of a module whose chain was imported from a
+  // CHEDDAR parameter file (see generate-param-ckks): the file's layout is
+  // taken as is; only the message headroom may be overridden by the option.
+  FailureOr<ParameterSetAttr> parameterSetFromModule(
+      func::FuncOp entry, ParameterSetAttr parameterSet, bool bootstraps,
+      BootstrapConfigAttr& bootstrap) {
+    // scale-snu's Parameter has no key-switching policy setters, and its
+    // BootParameter takes no EvalMod approximation.
+    if (!useCyclopsRuntime &&
+        (parameterSet.getDefaultNumAux() || parameterSet.getLevelSpecificKs() ||
+         parameterSet.getMaxKeySwitchAux() || parameterSet.getMaxLogPq() ||
+         (bootstrap && bootstrap.getEvalMod()))) {
+      entry.emitOpError(
+          "a Cyclops parameter set requires the Cyclops runtime "
+          "(use-cyclops-runtime=true)");
+      return failure();
+    }
+    if (!bootstraps) {
+      bootstrap = nullptr;
+      return parameterSet;
+    }
+    if (!bootstrap) {
+      entry.emitOpError(
+          "program bootstraps, but the parameter set carries no bootstrap "
+          "chain");
+      return failure();
+    }
+    if (!useCyclopsRuntime &&
+        bootstrap.getNumEvalModLevels() != kBootstrapEvalModLevels) {
+      entry.emitOpError() << "scale-snu CHEDDAR's EvalMod consumes "
+                          << kBootstrapEvalModLevels
+                          << " levels, but the parameter set reserves "
+                          << bootstrap.getNumEvalModLevels();
+      return failure();
+    }
+    // The bootstrap lands SlotToCoeff's levels below where SlotToCoeff
+    // starts. scale-snu's BootContext requires the default encryption level
+    // to be that start; Cyclops' accepts any level in between.
+    int64_t stcStart = parameterSet.getMaxLevel() -
+                       bootstrap.getNumCtsLevels() -
+                       bootstrap.getNumEvalModLevels();
+    int64_t endLevel = stcStart - bootstrap.getNumStcLevels();
+    int64_t defaultLevel = parameterSet.getDefaultEncryptionLevelOrDefault();
+    if (useCyclopsRuntime ? (defaultLevel < endLevel || defaultLevel > stcStart)
+                          : defaultLevel != stcStart) {
+      entry.emitOpError() << "the default encryption level " << defaultLevel
+                          << " does not fit the bootstrap, whose SlotToCoeff "
+                             "runs from level "
+                          << stcStart << " down to level " << endLevel;
+      return failure();
+    }
+    if (logMessageRatio >= 0)
+      bootstrap = BootstrapConfigAttr::get(
+          &getContext(), bootstrap.getNumCtsLevels(),
+          bootstrap.getNumStcLevels(), bootstrap.getNumEvalModLevels(),
+          logMessageRatio, bootstrap.getEvalMod());
+    return parameterSet;
+  }
+
   void runOnOperation() override {
     auto moduleOp = cast<ModuleOp>(getOperation());
     MLIRContext* ctx = &getContext();
@@ -325,17 +459,9 @@ struct CheddarConfigureCryptoContext
 
     auto schemeParamAttr = moduleOp->getAttrOfType<ckks::SchemeParamAttr>(
         ckks::CKKSDialect::kSchemeParamAttrName);
-    if (!schemeParamAttr) return;
-
-    DenseI64ArrayAttr Q = schemeParamAttr.getQ();
-    DenseI64ArrayAttr P = schemeParamAttr.getP();
-    if (!Q || Q.size() == 0 || !P || P.size() == 0) {
-      moduleOp.emitError(
-          "CHEDDAR context configuration requires non-empty CKKS Q and P "
-          "modulus chains");
-      signalPassFailure();
-      return;
-    }
+    auto importedParameterSet =
+        moduleOp->getAttrOfType<ParameterSetAttr>(kParameterSetAttrName);
+    if (!schemeParamAttr && !importedParameterSet) return;
 
     auto entry = detectEntryFunction(moduleOp, entryFunction);
     if (!entry) {
@@ -377,40 +503,20 @@ struct CheddarConfigureCryptoContext
       bootstrapNumSlots = std::max(slotsAttr.getInt(), kMinBootstrapSlots);
     }
 
-    int64_t logN = schemeParamAttr.getLogN();
-    int64_t logDefaultScale = schemeParamAttr.getLogDefaultScale();
-    int64_t bootNumCts = numCtsLevels;
-    int64_t bootNumStc = numStcLevels;
-    int64_t defaultEncLevel = static_cast<int64_t>(Q.size()) - 1;
-    int64_t denseHammingWeight = 0;
-    int64_t sparseHammingWeight = 0;
-    if (bootstraps) {
-      if (auto attr =
-              moduleOp->getAttrOfType<IntegerAttr>("cheddar.boot.num_cts"))
-        bootNumCts = attr.getInt();
-      if (auto attr =
-              moduleOp->getAttrOfType<IntegerAttr>("cheddar.boot.num_stc"))
-        bootNumStc = attr.getInt();
-      if (bootNumCts < 0 || bootNumStc < 0) {
-        entry.emitOpError(
-            "CHEDDAR bootstrap CtS and StC level counts must be non-negative");
-        signalPassFailure();
-        return;
-      }
-      defaultEncLevel -= bootNumCts + kBootstrapEvalModLevels;
-      int64_t bootstrapEndLevel = defaultEncLevel - bootNumStc;
-      if (defaultEncLevel < 0 || bootstrapEndLevel < 0) {
-        entry.emitOpError()
-            << "CHEDDAR bootstrap modulus chain is too short: " << Q.size()
-            << " Q primes cannot cover " << bootNumCts << " CtS + "
-            << kBootstrapEvalModLevels << " EvalMod + " << bootNumStc
-            << " StC levels";
-        signalPassFailure();
-        return;
-      }
-      denseHammingWeight = int64_t{1} << (logN - 1);
-      sparseHammingWeight = 32;
+    BootstrapConfigAttr bootstrap =
+        moduleOp->getAttrOfType<BootstrapConfigAttr>(kBootstrapConfigAttrName);
+    FailureOr<ParameterSetAttr> parameterSet =
+        importedParameterSet
+            ? parameterSetFromModule(entry, importedParameterSet, bootstraps,
+                                     bootstrap)
+            : parameterSetFromSchemeParam(entry, schemeParamAttr, bootstraps,
+                                          bootstrap);
+    if (failed(parameterSet)) {
+      signalPassFailure();
+      return;
     }
+    int64_t defaultEncLevel =
+        parameterSet->getDefaultEncryptionLevelOrDefault();
 
     SmallVector<std::pair<int64_t, int64_t>> rotationKeys;
     if (prepareRotationKeysAtUseLevels) {
@@ -433,10 +539,8 @@ struct CheddarConfigureCryptoContext
         return;
       }
     } else {
-      int64_t rotationKeyLevel =
-          bootstraps ? defaultEncLevel : static_cast<int64_t>(Q.size()) - 1;
       for (int64_t distance : rotationAnalysis.getRotationIndices())
-        rotationKeys.emplace_back(distance, rotationKeyLevel);
+        rotationKeys.emplace_back(distance, defaultEncLevel);
     }
     llvm::sort(rotationKeys, [](const auto& lhs, const auto& rhs) {
       if (lhs.first != rhs.first) return lhs.first < rhs.first;
@@ -445,17 +549,20 @@ struct CheddarConfigureCryptoContext
     rotationKeys.erase(std::unique(rotationKeys.begin(), rotationKeys.end()),
                        rotationKeys.end());
 
-    moduleOp->setAttr("cheddar.logN",
-                      IntegerAttr::get(IntegerType::get(ctx, 64), logN));
-    moduleOp->setAttr(
-        "cheddar.logDefaultScale",
-        IntegerAttr::get(IntegerType::get(ctx, 64), logDefaultScale));
-    moduleOp->setAttr("cheddar.Q", Q);
-    moduleOp->setAttr("cheddar.P", P);
-    buildConfigureFuncs(moduleOp, entry, logN, logDefaultScale, Q, P,
-                        rotationKeys, bootstraps, bootstrapNumSlots, bootNumCts,
-                        bootNumStc, defaultEncLevel, denseHammingWeight,
-                        sparseHammingWeight, logMessageRatio, useCyclopsRuntime,
+    auto i64Attr = [&](int64_t value) {
+      return IntegerAttr::get(IntegerType::get(ctx, 64), value);
+    };
+    moduleOp->setAttr("cheddar.logN", i64Attr(parameterSet->getLogN()));
+    moduleOp->setAttr("cheddar.logDefaultScale",
+                      i64Attr(parameterSet->getLogScale()));
+    moduleOp->setAttr(kWordBitsAttrName,
+                      i64Attr(parameterSet->getWordBitsOrDefault()));
+    if (schemeParamAttr) {
+      moduleOp->setAttr("cheddar.Q", schemeParamAttr.getQ());
+      moduleOp->setAttr("cheddar.P", schemeParamAttr.getP());
+    }
+    buildConfigureFuncs(moduleOp, entry, *parameterSet, rotationKeys, bootstrap,
+                        bootstrapNumSlots, useCyclopsRuntime,
                         collectLinearTransformKeyShapes(moduleOp));
 
     if (useCyclopsRuntime) {
@@ -467,6 +574,8 @@ struct CheddarConfigureCryptoContext
 
     moduleOp->removeAttr(ckks::CKKSDialect::kSchemeParamAttrName);
     moduleOp->removeAttr("scheme.ckks");
+    moduleOp->removeAttr(kParameterSetAttrName);
+    moduleOp->removeAttr(kBootstrapConfigAttrName);
   }
 };
 

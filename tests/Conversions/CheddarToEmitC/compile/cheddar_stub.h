@@ -149,6 +149,12 @@ struct EvkMap {
                                             int level, KeyMode key_mode) const;
   const EvaluationKey<word>& GetConjugationKey(SecretId secret) const;
   const EvaluationKey<word>& GetMultiplicationKey(SecretId secret) const;
+  // The best multiplication key for a level: the default key where the ring
+  // holds one, the level-specific key otherwise.
+  const EvaluationKey<word>& GetMultiplicationKey(SecretId secret,
+                                                  const Parameter<word>& param,
+                                                  int level,
+                                                  KeyMode key_mode) const;
 #ifndef HEIR_CYCLOPS_STUB
   // The level-blind getters, which only scale-snu has. The EvalPoly emitter
   // still reads the multiplication key through one.

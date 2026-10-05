@@ -131,9 +131,28 @@ struct AnnotateMgmt : impl::AnnotateMgmtBase<AnnotateMgmt> {
       return;
     }
 
+    // A pinned top places the analysis's level 0 (fresh ciphertexts and
+    // bootstrap outputs) at that level instead of at the program's depth.
+    int base = baseLevel;
+    if (module) {
+      if (auto top = module->getAttrOfType<IntegerAttr>(
+              MgmtDialect::kTopLevelAttrName)) {
+        int depth = getMaxLevel(getOperation(), &solver);
+        if (top.getInt() < depth) {
+          module.emitError()
+              << "the program is " << depth << " levels deep, but "
+              << MgmtDialect::kTopLevelAttrName << " pins its top at level "
+              << top.getInt();
+          signalPassFailure();
+          return;
+        }
+        base += top.getInt() - depth;
+      }
+    }
+
     copyScalesToScaleAttr(getOperation());
     clearAttrs(getOperation(), MgmtDialect::kArgMgmtAttrName);
-    annotateLevel(getOperation(), &solver, baseLevel);
+    annotateLevel(getOperation(), &solver, base);
     annotateDimension(getOperation(), &solver);
     // Combine level and dimension (and optional scale) into MgmtAttr
     // also removes the level/dimension/(optional scale) annotations.
