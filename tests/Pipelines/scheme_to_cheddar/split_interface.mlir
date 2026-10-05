@@ -9,7 +9,8 @@
 // CLIENT-H: namespace heir::generated::split::client
 // CLIENT-H: using Context = ::cyclops::ClientContext<word>;
 // CLIENT-H: EvaluationKeyRequest GetKeyRequest()
-// CLIENT-H: KeyPair KeyGen(const std::shared_ptr<Context>&, const std::optional<::cyclops::prng::Seed>& = std::nullopt);
+// CLIENT-H: KeyPair KeyGen(const std::shared_ptr<Context>&, const std::optional<::cyclops::prng::Seed>&);
+// CLIENT-H-NEXT: inline KeyPair KeyGen(const std::shared_ptr<Context>& ctx) { return KeyGen(ctx, std::nullopt); }
 // CLIENT-CPP: #include "split_client.h"
 // CLIENT-CPP: ClientContext<word>::Create
 // CLIENT-CPP: void split__keygen(const std::shared_ptr<ClientContext<word>>& [[CTX:v[0-9]+]], const std::optional<::cyclops::prng::Seed>& [[SEED:v[0-9]+]], std::unique_ptr<UserInterface<word>>& [[UI:v[0-9]+]]) {

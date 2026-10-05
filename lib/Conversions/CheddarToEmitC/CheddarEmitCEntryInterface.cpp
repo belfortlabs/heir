@@ -1134,15 +1134,12 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
     auto declaration = cast<FuncOp>(builder.clone(*wrapper));
     declaration.getBody().dropAllReferences();
     declaration.getBody().getBlocks().clear();
-    // EmitC has no default arguments; a declaration prints only its parameter
-    // types, so the seed's default rides on its type.
-    if (split && declaration.getSymName() == "KeyGen") {
-      SmallVector<Type> inputs(declaration.getFunctionType().getInputs());
-      inputs.back() =
-          OpaqueType::get(ctx, (kSecretSeedType + " = std::nullopt").str());
-      declaration.setFunctionType(FunctionType::get(
-          ctx, inputs, declaration.getFunctionType().getResults()));
-    }
+    // Two emitc.funcs cannot share a symbol, so the unseeded overload is
+    // verbatim.
+    if (split && declaration.getSymName() == "KeyGen")
+      emitVerbatim(builder, loc,
+                   "inline KeyPair KeyGen(const std::shared_ptr<Context>& "
+                   "ctx) { return KeyGen(ctx, std::nullopt); }");
   }
 
   builder.setInsertionPointToStart(&source.getBodyRegion().front());
