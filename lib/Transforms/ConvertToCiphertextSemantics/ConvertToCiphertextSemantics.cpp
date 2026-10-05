@@ -42,6 +42,7 @@
 #include "lib/Utils/Layout/Convolution.h"
 #include "lib/Utils/Layout/Utils.h"
 #include "lib/Utils/MathUtils.h"
+#include "lib/Utils/MaxPoolUtils.h"
 #include "lib/Utils/Utils.h"
 #include "llvm/include/llvm/ADT/ArrayRef.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/Hashing.h"             // from @llvm-project
@@ -3449,6 +3450,53 @@ struct ConvertLinalgBatchMatmul
   }
 };
 
+// Lowers a max pool to one kernel.max_pool over the channels laid end to end
+// in one ciphertext; see the PoolingNcwMaxOp visitor in layout propagation.
+struct ConvertLinalgPoolingNcwMax
+    : public ConversionBase<linalg::PoolingNcwMaxOp> {
+ public:
+  ConvertLinalgPoolingNcwMax(
+      const ContextAwareTypeConverter& contextAwareTypeConverter,
+      MLIRContext* context)
+      : ConversionBase(contextAwareTypeConverter, context, /*benefit=*/10) {}
+
+  LogicalResult matchAndRewrite(
+      linalg::PoolingNcwMaxOp op, OpAdaptor adaptor,
+      ContextAwareConversionPatternRewriter& rewriter) const final {
+    std::string reason;
+    FailureOr<SupportedMaxPool> pool = getSupportedMaxPool(op, reason);
+    if (failed(pool)) {
+      return op.emitOpError() << "cannot lower to an FHE max pool: " << reason;
+    }
+
+    Value data = adaptor.getInputs().front();
+    auto dataType = dyn_cast<RankedTensorType>(data.getType());
+    if (!dataType || !getLayoutAttr(data)) {
+      return rewriter.notifyMatchFailure(op, "missing layout for the input");
+    }
+    Attribute layoutAttr = op->getAttr(kLayoutAttrName);
+    if (auto arrayAttr = dyn_cast_or_null<ArrayAttr>(layoutAttr)) {
+      layoutAttr = LayoutAttr::composeLayouts(arrayAttr, op.getContext());
+    }
+    if (!layoutAttr) {
+      return rewriter.notifyMatchFailure(op, "missing layout for the result");
+    }
+    Type resultType =
+        getTypeConverter()->convertType(op.getResult(0).getType(), layoutAttr);
+    if (!resultType) return failure();
+
+    MaxPoolShape shape = pool->getKernelShape(dataType.getShape().back());
+    auto maxPoolOp = kernel::MaxPoolOp::create(
+        rewriter, op.getLoc(), resultType, data, shape.numSlots,
+        shape.inputLength, shape.windowSize, shape.stride, shape.dilation,
+        shape.ceilMode, llvm::APFloat(shape.valueBound));
+    setMaterializedAttr(maxPoolOp);
+    maxPoolOp->setAttr(kLayoutAttrName, layoutAttr);
+    rewriter.replaceOp(op, maxPoolOp);
+    return success();
+  }
+};
+
 struct ConvertBootstrap : public ConversionBase<mgmt::BootstrapOp> {
   using ConversionBase<mgmt::BootstrapOp>::ConversionBase;
 
@@ -3498,7 +3546,8 @@ struct ConvertToCiphertextSemantics
         ConvertTensorCollapseShape, ConvertTensorExpandShape,
         ConvertTensorExtractLayout, ConvertTensorExtractSlice, ConvertTensorPad,
         ConvertTensorInsertLayout, ConvertTensorInsertSlice,
-        PreserveLinalgMatvecAsLinearTransform>(typeConverter, context);
+        PreserveLinalgMatvecAsLinearTransform, ConvertLinalgPoolingNcwMax>(
+        typeConverter, context);
     patterns.add<ConvertLinalgMatvecLayout, ConvertLinalgConv1D,
                  ConvertLinalgConv2D, ConvertLinalgConv2DNchwFchw,
                  ConvertLinalgConv1DNcwFcw>(typeConverter, context,
