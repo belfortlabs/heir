@@ -80,9 +80,7 @@ struct PlanEvaluationKeysPass
   using CheddarPlanEvaluationKeysBase::CheddarPlanEvaluationKeysBase;
 
   // Resolves the recorded key requirements against the runtime's own planner,
-  // with a Parameter built exactly as the emitted client constructs it. The
-  // planner's Parameter is 64-bit; key planning does not depend on the word
-  // size, and the parameter-file import already checks that 32-bit primes fit.
+  // with a Parameter built exactly as the emitted client constructs it.
   LogicalResult plan(func::FuncOp setup, ParameterSetAttr parameterSet,
                      DenseI64ArrayAttr rotationKeys,
                      DenseI64ArrayAttr multiplicationKeys, ArrayAttr shapes,
@@ -117,7 +115,8 @@ struct PlanEvaluationKeysPass
             primesOf(parameterSet.getTerminalPrimes()),
             sizeOf(parameterSet.getTerminalPrimes()), additionalBase,
             static_cast<int>(parameterSet.getDefaultNumAux().value_or(-1)),
-            CYCLOPS_RING_STANDARD, &error),
+            CYCLOPS_RING_STANDARD,
+            static_cast<int>(parameterSet.getWordBitsOrDefault()), &error),
         cyclops_params_free);
     if (failed(params != nullptr)) return failure();
     // The dense weight goes first: the sparse one must stay below it.
@@ -197,6 +196,16 @@ struct PlanEvaluationKeysPass
       int ratio = bootstrapConfig.getLogMessageRatio().value_or(
           kDefaultLogMessageRatio);
       std::optional<cyclops_mod1> mod1 = toMod1(bootstrapConfig.getEvalMod());
+      int evalModLevels = 0;
+      if (failed(cyclops_mod1_depth(mod1 ? &*mod1 : nullptr, ratio,
+                                    &evalModLevels, &error) == 0))
+        return failure();
+      if (evalModLevels != bootstrapConfig.getNumEvalModLevels()) {
+        return setup.emitOpError()
+               << "the EvalMod approximation consumes " << evalModLevels
+               << " levels, but the bootstrap config reserves "
+               << bootstrapConfig.getNumEvalModLevels();
+      }
       // The emitter hard-codes the imaginary-removing variant.
       if (failed(cyclops_add_bootstrap_required_rotations(
                      request.get(), params.get(),
