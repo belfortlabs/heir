@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <exception>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -11,9 +12,11 @@
 #include "extension/boot/BootKeyPlanner.h"               // from @cyclops
 #include "extension/boot/BootParameter.h"                // from @cyclops
 #include "extension/linalg/LinearTransformKeyPlanner.h"  // from @cyclops
+#include "extension/max/MaxPoolPlanner.h"                // from @cyclops
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/ModuleAttributes.h"
+#include "lib/Target/Cheddar/MaxPoolCyclopsConfig.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"          // from @llvm-project
 #include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
@@ -39,6 +42,15 @@ func::FuncOp findClientSetup(ModuleOp module) {
   return found;
 }
 
+// Disables Cyclops' small-window league level cap, which HEIR's level model
+// leaves out (requirement R2 in cyclops_maxpool_requirements.md), when the
+// Cyclops planner has an option for it.
+template <typename Config>
+void disableLeagueLevelCap(Config& config) {
+  if constexpr (requires { config.cap_league_level; })
+    config.cap_league_level = false;
+}
+
 struct PlanEvaluationKeysPass
     : impl::CheddarPlanEvaluationKeysBase<PlanEvaluationKeysPass> {
   using CheddarPlanEvaluationKeysBase::CheddarPlanEvaluationKeysBase;
@@ -50,7 +62,8 @@ struct PlanEvaluationKeysPass
     const StringRef planningAttrs[] = {
         kRotationKeysAttrName,    kLinearTransformKeysAttrName,
         kBootstrapSlotsAttrName,  kBootstrapNumCtsAttrName,
-        kBootstrapNumStcAttrName, kBootstrapLogMessageRatioAttrName};
+        kBootstrapNumStcAttrName, kBootstrapLogMessageRatioAttrName,
+        kMaxPoolKeysAttrName};
     if (llvm::none_of(planningAttrs,
                       [&](StringRef name) { return setup->hasAttr(name); }))
       return;
@@ -163,18 +176,83 @@ struct PlanEvaluationKeysPass
       }
     }
 
+    // The bootstrap parameters, shared by the bootstraps and the max pools.
+    std::optional<cyclops::BootParameter> bootstrap;
     if (auto slots =
             setup->getAttrOfType<IntegerAttr>(kBootstrapSlotsAttrName)) {
       auto cts = setup->getAttrOfType<IntegerAttr>(kBootstrapNumCtsAttrName);
       auto stc = setup->getAttrOfType<IntegerAttr>(kBootstrapNumStcAttrName);
       auto ratio =
           setup->getAttrOfType<IntegerAttr>(kBootstrapLogMessageRatioAttrName);
+      bootstrap.emplace(params.max_level_, cts.getInt(), stc.getInt(),
+                        ratio.getInt());
       // The emitter hard-codes the imaginary-removing variant.
-      cyclops::BootParameter bootstrap(params.max_level_, cts.getInt(),
-                                       stc.getInt(), ratio.getInt());
       cyclops::AddBootstrapRequiredRotations(
-          request, params, bootstrap, slots.getInt(),
+          request, params, *bootstrap, slots.getInt(),
           cyclops::BootVariant::kImaginaryRemoving);
+    }
+
+    if (auto maxPools = setup->getAttrOfType<ArrayAttr>(kMaxPoolKeysAttrName);
+        maxPools && !maxPools.empty()) {
+      if (!bootstrap) {
+        setup.emitOpError() << kMaxPoolKeysAttrName
+                            << " requires the bootstrap planning attributes";
+        return signalPassFailure();
+      }
+      for (auto [index, attr] : llvm::enumerate(maxPools)) {
+        auto shape = dyn_cast<DictionaryAttr>(attr);
+        auto field = [&](StringRef name) -> IntegerAttr {
+          return shape ? shape.getAs<IntegerAttr>(name) : nullptr;
+        };
+        auto ceilMode = shape ? shape.getAs<BoolAttr>("ceil_mode") : nullptr;
+        auto valueBound =
+            shape ? shape.getAs<FloatAttr>("value_bound") : nullptr;
+        if (!field("num_slots") || !field("input_length") ||
+            !field("window_size") || !field("stride") || !field("dilation") ||
+            !field("level") || !field("level_consumption") || !ceilMode ||
+            !valueBound) {
+          setup.emitOpError()
+              << kMaxPoolKeysAttrName << " entry " << index
+              << " is missing a field; run cheddar-configure-crypto-context "
+                 "first";
+          return signalPassFailure();
+        }
+        std::optional<cyclops::MaxPoolConfig> config = toCyclopsMaxPoolConfig(
+            {field("num_slots").getInt(), field("input_length").getInt(),
+             field("window_size").getInt(), field("stride").getInt(),
+             field("dilation").getInt(), ceilMode.getValue(),
+             valueBound.getValueAsDouble()});
+        if (!config) {
+          setup.emitOpError() << kMaxPoolKeysAttrName << " entry " << index
+                              << " does not fit a Cyclops MaxPoolConfig";
+          return signalPassFailure();
+        }
+        disableLeagueLevelCap(*config);
+        // The generated code checks the same levels at run time, against the
+        // compiled MaxPool. Without the cap option, the small-window league
+        // level cap lowers the levels of a padded window of 2 to 7 slots when
+        // its input level is more than the selector depth + 1 above the
+        // gather stages.
+        int level = field("level").getInt();
+        int levelConsumption = field("level_consumption").getInt();
+        cyclops::MaxPoolPlan plan =
+            cyclops::PlanMaxPool(*config, level, bootstrap->GetEndLevel());
+        if (level - plan.output_level != levelConsumption) {
+          setup.emitOpError()
+              << "cannot plan the evaluation keys of max pool " << index
+              << ": at input level " << level << " and bootstrap end level "
+              << bootstrap->GetEndLevel() << ", Cyclops' MaxPool drops "
+              << level - plan.output_level << " levels, but HEIR planned "
+              << levelConsumption
+              << "; Cyclops' small-window league level cap causes this when "
+                 "MaxPoolConfig has no cap_league_level option";
+          return signalPassFailure();
+        }
+        // The emitter hard-codes the imaginary-removing variant.
+        cyclops::AddMaxPoolRequiredKeys(
+            request, params, *bootstrap, *config, level,
+            cyclops::BootVariant::kImaginaryRemoving);
+      }
     }
 
     SmallVector<int64_t> flattened;

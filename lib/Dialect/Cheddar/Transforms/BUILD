@@ -92,6 +92,7 @@ cc_library(
         ":plan_evaluation_keys_inc_gen",
         "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/Cheddar/IR:Dialect",
+        "@heir//lib/Target/Cheddar:MaxPoolCyclopsConfig",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",

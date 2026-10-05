@@ -70,6 +70,28 @@ SmallVector<LinearTransformKeyShape> collectLinearTransformKeyShapes(
   return shapes;
 }
 
+// One distinct cheddar.max_pool, for Cyclops' MaxPool key planner.
+SmallVector<DictionaryAttr> collectMaxPoolKeyShapes(ModuleOp moduleOp) {
+  SmallVector<DictionaryAttr> shapes;
+  llvm::SmallDenseSet<Attribute> seen;
+  moduleOp->walk([&](MaxPoolOp op) {
+    Builder b(op.getContext());
+    auto shape = b.getDictionaryAttr({
+        b.getNamedAttr("num_slots", op.getNumSlotsAttr()),
+        b.getNamedAttr("input_length", op.getInputLengthAttr()),
+        b.getNamedAttr("window_size", op.getWindowSizeAttr()),
+        b.getNamedAttr("stride", op.getStrideAttr()),
+        b.getNamedAttr("dilation", op.getDilationAttr()),
+        b.getNamedAttr("ceil_mode", op.getCeilModeAttr()),
+        b.getNamedAttr("value_bound", op.getValueBoundAttr()),
+        b.getNamedAttr("level", op.getLevelAttr()),
+        b.getNamedAttr("level_consumption", op.getLevelConsumptionAttr()),
+    });
+    if (seen.insert(shape).second) shapes.push_back(shape);
+  });
+  return shapes;
+}
+
 // Build setup and key-generation functions in destination-passing tensor form:
 //   %p   = cheddar.make_parameter ...
 //   %ctx = cheddar.create_context %p, %ctx_init
@@ -100,7 +122,8 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
                          int64_t defaultEncLevel, int64_t denseHammingWeight,
                          int64_t sparseHammingWeight, int64_t logMessageRatio,
                          bool useCyclopsRuntime,
-                         ArrayRef<LinearTransformKeyShape> transformShapes) {
+                         ArrayRef<LinearTransformKeyShape> transformShapes,
+                         ArrayRef<DictionaryAttr> maxPoolShapes) {
   MLIRContext* ctx = moduleOp.getContext();
   // Reserve eight bits between the message and q0 to keep the sine-based
   // EvalMod approximation accurate on normalized bootstrap inputs. Parameter
@@ -204,6 +227,10 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
     }
     clientSetup->setAttr(kLinearTransformKeysAttrName,
                          builder.getArrayAttr(shapes));
+    if (!maxPoolShapes.empty())
+      clientSetup->setAttr(kMaxPoolKeysAttrName,
+                           builder.getArrayAttr(SmallVector<Attribute>(
+                               maxPoolShapes.begin(), maxPoolShapes.end())));
     if (bootstraps) {
       clientSetup->setAttr(kBootstrapSlotsAttrName, i64(bootstrapNumSlots));
       clientSetup->setAttr(kBootstrapNumCtsAttrName, i64(numCtsLevels));
@@ -356,7 +383,10 @@ struct CheddarConfigureCryptoContext
       return;
     }
     bool bootstraps = false;
-    moduleOp.walk([&](BootOp) { bootstraps = true; });
+    // A max pool bootstraps its comparisons internally.
+    moduleOp.walk([&](Operation* op) {
+      if (isa<BootOp, MaxPoolOp>(op)) bootstraps = true;
+    });
     int64_t bootstrapNumSlots = 0;
     if (bootstraps) {
       auto slotsAttr =
@@ -452,7 +482,8 @@ struct CheddarConfigureCryptoContext
                         rotationKeys, bootstraps, bootstrapNumSlots, bootNumCts,
                         bootNumStc, defaultEncLevel, denseHammingWeight,
                         sparseHammingWeight, logMessageRatio, useCyclopsRuntime,
-                        collectLinearTransformKeyShapes(moduleOp));
+                        collectLinearTransformKeyShapes(moduleOp),
+                        collectMaxPoolKeyShapes(moduleOp));
 
     if (useCyclopsRuntime) {
       if (failed(dropUnusedDebugKeys(moduleOp))) {
