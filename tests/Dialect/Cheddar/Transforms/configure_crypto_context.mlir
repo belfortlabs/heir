@@ -42,6 +42,7 @@ module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [3602879
 // CHECK: cheddar.make_parameter
 // CHECK: cheddar.create_context
 // CHECK: func.func @main__keygen
+// CHECK-SAME: (%{{.*}}: tensor<!context>) ->
 // CHECK-SAME: heir.interface = {func_name = "main", roles = ["client.keygen"]}
 // CHECK: cheddar.create_user_interface
 // CHECK: cheddar.prepare_rot_key
@@ -61,7 +62,8 @@ module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [3602879
 // The client request names the relinearization level too.
 // CYCLOPS: func.func @main__setup
 // CYCLOPS-SAME: cheddar.multiplication_keys = array<i64: 1>
-// CYCLOPS: func.func @main__keygen
+// CYCLOPS: func.func @main__keygen(%{{.*}}: tensor<!client_context>, %[[SEED:.*]]: !secret_seed)
+// CYCLOPS: cheddar.create_user_interface %{{.*}}, %[[SEED]], %{{.*}} :
 // CYCLOPS-NOT: cheddar.prepare_rot_key
 // CYCLOPS-NOT: cheddar.prepare_linear_transform_keys
 // CYCLOPS: return

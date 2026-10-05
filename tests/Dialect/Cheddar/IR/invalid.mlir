@@ -58,3 +58,15 @@ func.func @relinearize_from_map_without_level(%ctx: !cheddar.context, %evk: !che
   %0 = cheddar.relinearize %ctx, %ct, %evk, %out : (!cheddar.context, tensor<!cheddar.ciphertext>, !cheddar.evk_map, tensor<!cheddar.ciphertext>) -> tensor<!cheddar.ciphertext>
   return %0 : tensor<!cheddar.ciphertext>
 }
+
+// -----
+
+!context = !cheddar.context
+!ui = !cheddar.user_interface
+
+// Only the Cyclops client derives its secrets from a seed.
+func.func @secret_seed_without_client_context(%ctx: tensor<!context>, %seed: !cheddar.secret_seed, %ui: tensor<!ui>) -> tensor<!ui> {
+  // expected-error@below {{a secret seed requires a Cyclops client context}}
+  %0 = cheddar.create_user_interface %ctx, %seed, %ui : (tensor<!context>, !cheddar.secret_seed, tensor<!ui>) -> tensor<!ui>
+  return %0 : tensor<!ui>
+}

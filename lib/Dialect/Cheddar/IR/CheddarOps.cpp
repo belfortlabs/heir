@@ -256,6 +256,13 @@ LogicalResult PrepareLinearTransformKeysOp::verify() {
   return success();
 }
 
+LogicalResult CreateUserInterfaceOp::verify() {
+  if (getSecretSeed() &&
+      !isa<ClientContextType>(getElementTypeOrSelf(getCtx().getType())))
+    return emitOpError("a secret seed requires a Cyclops client context");
+  return success();
+}
+
 LogicalResult EvalPolyOp::verify() {
   if (getLevelConsumption().getInt() < 2)
     return emitOpError("level consumption must be at least two");

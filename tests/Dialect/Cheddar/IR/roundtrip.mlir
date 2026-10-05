@@ -57,6 +57,13 @@ func.func @test_create_user_interface(%ctx: tensor<!cheddar.context>, %init: ten
   return %ui : tensor<!cheddar.user_interface>
 }
 
+// CHECK: @test_create_user_interface_from_seed
+func.func @test_create_user_interface_from_seed(%ctx: tensor<!cheddar.client_context>, %seed: !cheddar.secret_seed, %init: tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface> {
+  // CHECK: cheddar.create_user_interface %{{.*}}, %{{.*}}, %{{.*}} : (tensor<!client_context>, !secret_seed, tensor<!user_interface>)
+  %ui = cheddar.create_user_interface %ctx, %seed, %init : (tensor<!cheddar.client_context>, !cheddar.secret_seed, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+  return %ui : tensor<!cheddar.user_interface>
+}
+
 // CHECK: @test_get_encoder
 func.func @test_get_encoder(%ctx: !cheddar.context) -> !cheddar.encoder {
   // CHECK: cheddar.get_encoder
