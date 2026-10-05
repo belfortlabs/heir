@@ -14,6 +14,9 @@ class CompilationTarget<string name> {
   // Whether ciphertext-plaintext operations require equal modulus-chain levels.
   int requires_matching_ciphertext_plaintext_levels = 0;
   int can_emit_adjust_scale = 1;
+  // Whether the backend evaluates a whole max pooling layer in one call, via
+  // kernel.max_pool.
+  int has_kernel_max_pool = 0;
 }
 
 #endif // LIB_TARGET_COMPILATIONTARGET_HEIRTARGET_TD_
