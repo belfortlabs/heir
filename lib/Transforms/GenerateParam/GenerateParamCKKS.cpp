@@ -44,7 +44,8 @@ namespace heir {
 namespace {
 bool containsBootstrap(Operation* op) {
   auto result = op->walk([&](Operation* walkOp) {
-    if (isa<ResetsMulDepthOpInterface>(walkOp)) {
+    if (isa<ResetsMulDepthOpInterface, BootstrapsInternallyOpInterface>(
+            walkOp)) {
       return WalkResult::interrupt();
     }
     return WalkResult::advance();

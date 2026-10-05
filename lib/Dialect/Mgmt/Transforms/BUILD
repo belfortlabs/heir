@@ -44,6 +44,7 @@ cc_library(
         "@heir//lib/Analysis/LevelAnalysis",
         "@heir//lib/Analysis/ScaleAnalysis",
         "@heir//lib/Analysis/SecretnessAnalysis",
+        "@heir//lib/Dialect:HEIRInterfaces",
         "@heir//lib/Dialect/Mgmt/IR:Dialect",
         "@heir//lib/Dialect/Secret/IR:SecretPatterns",
         "@heir//lib/Target/CompilationTarget",
