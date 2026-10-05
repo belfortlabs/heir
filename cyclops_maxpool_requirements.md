@@ -33,7 +33,7 @@ of 0.00035 and 0.00021.
 | R13 | A default `pad_value` of `-value_bound`. | New request. |
 | R14 | Several sequences in one call. | New request. |
 | R15 | `Compile` without the input scale. | New request. |
-| R16 | A stable secret-id API. | New request. |
+| R16 | A stable secret-id API. | Resolved: HEIR emits `NativeSecretId()`. |
 
 ## How HEIR uses `MaxPool`
 
@@ -465,12 +465,12 @@ compiled `MaxPool` can evaluate many inputs.
 
 ## R16: A stable secret-id API
 
-**Status: new request.**
+**Status: resolved on the HEIR side.**
 
 Cyclops commit 8de7c716 renamed `BootSecretId()` to `NativeSecretId()` on
-`ClientContext` and `Parameter`. HEIR emits `BootSecretId()`, so its generated
-code does not compile against e8efd441 without a change. For the end-to-end
-runs, we changed the name in the generated files by hand.
+`ClientContext` and `Parameter`. HEIR now emits `NativeSecretId()`, so its
+generated code needs Cyclops 8de7c716 or later. HEIR pins e8efd441.
 
-**Request.** Keep `BootSecretId()` as a deprecated alias of `NativeSecretId()`
-for some releases, so that HEIR can move to the new name without a break.
+**Request.** Before a future rename of a public API that HEIR emits, please
+keep the old name as a deprecated alias for some releases, so that HEIR can
+move to the new name without a break.

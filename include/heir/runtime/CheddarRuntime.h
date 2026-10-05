@@ -66,8 +66,8 @@ const T& deref(const T* value) {
 
 template <typename Keys, typename Context>
 decltype(auto) multiplicationKey(const Keys& keys, Context& context) {
-  if constexpr (requires { context.BootSecretId(); }) {
-    return keys.GetMultiplicationKey(context.BootSecretId());
+  if constexpr (requires { context.NativeSecretId(); }) {
+    return keys.GetMultiplicationKey(context.NativeSecretId());
   } else {
     return keys.GetMultiplicationKey();
   }

@@ -55,12 +55,11 @@ side waits for a file (default 3600 seconds).
 
 ## Known issues
 
-- HEIR emits `BootSecretId()`, but Cyclops e8efd441 has only
-  `NativeSecretId()` (requirement R16). Until the emitter changes, build the
-  two sides by hand: configure them as the script does, generate
-  `max_pool_client.cpp` and `max_pool_server.cpp` with Ninja, replace
-  `BootSecretId()` by `NativeSecretId()` in both files, and then build and
-  start the two programs.
+- The server builds for `CUDA_ARCHITECTURES` (default `native`). With
+  several GPUs in the host, `native` also targets the others, and the link
+  fails when a Cyclops dependency (cuPQC) does not support one of them, for
+  example sm_75. Then set `CUDA_ARCHITECTURES` to the architecture of the GPU
+  that runs the server, for example `120`.
 - CUDA numbers the GPUs fastest first by default. To select a GPU by its
   `nvidia-smi` index, set `CUDA_DEVICE_ORDER=PCI_BUS_ID` together with
   `CUDA_VISIBLE_DEVICES`. On a GPU with 4 GB, the server runs out of memory.

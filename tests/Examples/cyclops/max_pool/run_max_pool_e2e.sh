@@ -15,6 +15,10 @@ build=$(realpath -m "$3")
 source_dir=$(dirname "$(realpath "$0")")
 cc=${CC:-clang}
 cxx=${CXX:-clang++}
+# "native" also targets every other GPU in the host, which can be one that a
+# Cyclops dependency does not support; set CUDA_ARCHITECTURES, for example to
+# 120, to build for one architecture.
+cuda_architectures=${CUDA_ARCHITECTURES:-native}
 
 configure_and_build() {
   local side=$1
@@ -28,7 +32,8 @@ configure_and_build() {
 
 configure_and_build client -DMAX_POOL_SERVER=OFF
 configure_and_build server -DMAX_POOL_SERVER=ON \
-  -DCMAKE_CUDA_ARCHITECTURES=native -DCMAKE_CUDA_HOST_COMPILER="$cxx"
+  -DCMAKE_CUDA_ARCHITECTURES="$cuda_architectures" \
+  -DCMAKE_CUDA_HOST_COMPILER="$cxx"
 
 # The evaluation keys are several gigabytes, so the exchange directory is in
 # BUILD_DIR, not in /tmp.
