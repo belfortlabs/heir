@@ -152,12 +152,15 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
     return level0ModBits;
   }
 
-  // Takes the modulus chain from a CHEDDAR parameter file. The mid-end keeps
-  // its one-modulus-per-level model: each level's model prime has the bit
-  // size of the file's modulus growth at that level (its level-0 modulus,
-  // capped at kMaxModelPrimeBits, for level 0), which is all the scale
-  // bookkeeping reads. The file's own primes and level layout are recorded
-  // for the backend, which is where they are consumed.
+  // Takes the modulus chain from a CHEDDAR parameter file. The passes that
+  // read ckks.scheme_param after this one assume one prime per level:
+  // secret-to-ckks builds the ciphertext type's RNS ring from one modulus per
+  // level, and populate-scale and validate-scale read each level's log2 size.
+  // A file's level can span several primes, so ckks.scheme_param gets one
+  // model prime per level instead, sized to the file's modulus growth at that
+  // level (its level-0 modulus, capped at kMaxModelPrimeBits, for level 0).
+  // The file's own primes and level layout go into cheddar.parameter_set,
+  // which the Cheddar backend reads.
   LogicalResult importCheddarParameters(int computeMaxLevel,
                                         bool hasBootstrap) {
     Operation* module = getOperation();
@@ -263,8 +266,8 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
       // that bound conservative. A 32-bit chain's level 0 can hold more
       // bits than one model prime.
       if (level == 0) bits = std::min(bits, kMaxModelPrimeBits);
-      FailureOr<int64_t> prime = modelPrime(
-          bits, "the modulus growth at level " + llvm::Twine(level));
+      FailureOr<int64_t> prime =
+          modelPrime(bits, "the modulus growth at level " + llvm::Twine(level));
       if (failed(prime)) return failure();
       qi.push_back(*prime);
       logqi.push_back(std::log2(*prime));
