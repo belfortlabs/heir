@@ -107,10 +107,13 @@ LogicalResult findLinearOpAndOperand(OpTy op, Operation*& linearOp,
   Value lhs = op.getLhs();
   Value rhs = op.getRhs();
 
+  // The fused op is rewritten in place, so its result must have no other user
+  // that would see the fused scale or addend.
   auto isLinearOp = [](Operation* defOp) {
     return defOp && isa<linalg::LinalgOp>(defOp) &&
            !isa<linalg::BroadcastOp, linalg::FillOp, linalg::TransposeOp>(
-               defOp);
+               defOp) &&
+           defOp->getNumResults() == 1 && defOp->getResult(0).hasOneUse();
   };
 
   auto* lhsOp = lhs.getDefiningOp();
