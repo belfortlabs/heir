@@ -1,6 +1,7 @@
 #ifndef LIB_DIALECT_CHEDDAR_IR_CHEDDAROPS_TD_
 #define LIB_DIALECT_CHEDDAR_IR_CHEDDAROPS_TD_
 
+include "CheddarAttributes.td"
 include "CheddarDialect.td"
 include "CheddarTypes.td"
 include "mlir/IR/OpBase.td"
@@ -174,26 +175,17 @@ def Cheddar_CreateBootContextOp : Cheddar_DpsOp<"create_boot_context"> {
   let summary = "Create a CHEDDAR bootstrapping context from parameters";
   let description = [{
     Creates a `BootContext<word>` from a Parameter object (DPS), for programs
-    that bootstrap. Bootstrapping is parameterized by the CoeffToSlot (CtS) and
-    SlotToCoeff (StC) level budgets -- a depth/rotation trade-off that mirrors
-    OpenFHE's `levelBudgetEncode`/`levelBudgetDecode` -- carried here as the
-    `numCtsLevels`/`numStcLevels` attributes. `$output` is the destination
-    buffer hint; after bufferization the result becomes a
-    `memref<!cheddar.boot_context>` re-typed to `std::shared_ptr<BootContext<word>>&`
-    at the emitc boundary:
-    `ctx_out = BootContext<word>::Create(params, BootParameter(params.max_level_, numCtsLevels, numStcLevels, logMessageRatio))`.
-
-    `logMessageRatio` ~ log2(q0 / scale): the headroom between the bottom modulus
-    and the message scale that CHEDDAR's EvalMod assumes. It governs bootstrap
-    precision -- too small and large messages hit the sine-approximation domain
-    edge, too large and the absolute noise floor (~ q0/scale) dominates small
-    messages. When omitted, the emitter falls back to CHEDDAR's default.
+    that bootstrap. `config` carries the inputs of the runtime's
+    `BootParameter`: the CoeffToSlot/SlotToCoeff level budgets, the EvalMod
+    depth, the message headroom and the EvalMod approximation (see
+    `#cheddar.bootstrap_config`). `$output` is the destination buffer hint;
+    after bufferization the result becomes a `memref<!cheddar.boot_context>`
+    re-typed to `std::shared_ptr<BootContext<word>>&` at the emitc boundary:
+    `ctx_out = BootContext<word>::Create(params, BootParameter(params.max_level_, numCtsLevels, numStcLevels, logMessageRatio[, evalMod]))`.
   }];
   let arguments = (ins
     Cheddar_Parameter:$params,
-    Builtin_IntegerAttr:$numCtsLevels,
-    Builtin_IntegerAttr:$numStcLevels,
-    OptionalAttr<Builtin_IntegerAttr>:$logMessageRatio,
+    Cheddar_BootstrapConfigAttr:$config,
     Cheddar_BootContextLike:$output
   );
   let results = (outs Cheddar_BootContextResult:$result);
@@ -320,33 +312,19 @@ def Cheddar_PrepareLinearTransformKeysOp : Cheddar_ReadWriteDpsOp<
 }
 
 def Cheddar_MakeParameterOp : Cheddar_Op<"make_parameter", [Pure]> {
-  let summary = "Construct a CHEDDAR Parameter from CKKS scheme parameters";
+  let summary = "Construct a CHEDDAR Parameter from a parameter set";
   let description = [{
-    Builds a `cheddar::Parameter<word>` from the CKKS modulus chain. The main
-    primes are the CKKS `Q` limbs and the aux primes are the `P` limbs; the
-    canonical level config is one-main-prime-per-level (`{{1, 0}, {2, 0}, ...}`)
-    and the default encryption level is `#mainPrimes - 1`, both derived from
-    `mainPrimes` by the emitter. `logScale` is the log2 of the default CKKS
-    scale. This is the single setup op that produces the `!cheddar.parameter`
-    consumed by `cheddar.create_context`, so a generated `__configure` is
-    self-contained.
-
-    Bootstrapping programs override the defaults: `defaultEncryptionLevel`
-    pins the encryption level below the chain top (the boot-circuit primes sit
-    above it), and `denseHammingWeight`/`sparseHammingWeight` set the secret-key
-    hamming weights CHEDDAR's BootContext requires. Each is omitted (and the
-    emitter falls back to `#mainPrimes - 1` / not emitting a SetHammingWeight
-    call) for non-bootstrapping programs.
+    Builds a `cheddar::Parameter<word>` from a `#cheddar.parameter_set`: the
+    ring, the base scale, the main/terminal/aux prime pools and the level
+    layout, plus the optional key-switching policy and hamming weights the
+    runtime exposes as setters. The attribute is the single description of the
+    runtime parameters: the emitter prints its constructor call from it and
+    `cheddar-plan-evaluation-keys` builds the identical object at compile time
+    to plan the evaluation keys. This is the single setup op that produces the
+    `!cheddar.parameter` consumed by `cheddar.create_context`, so a generated
+    `__configure` is self-contained.
   }];
-  let arguments = (ins
-    Builtin_IntegerAttr:$logN,
-    Builtin_IntegerAttr:$logScale,
-    DenseI64ArrayAttr:$mainPrimes,
-    DenseI64ArrayAttr:$auxPrimes,
-    OptionalAttr<Builtin_IntegerAttr>:$defaultEncryptionLevel,
-    OptionalAttr<Builtin_IntegerAttr>:$denseHammingWeight,
-    OptionalAttr<Builtin_IntegerAttr>:$sparseHammingWeight
-  );
+  let arguments = (ins Cheddar_ParameterSetAttr:$parameterSet);
   let results = (outs Cheddar_Parameter:$params);
   let assemblyFormat = "attr-dict `:` type($params)";
 }
@@ -583,33 +561,46 @@ def Cheddar_LevelDownOp : Cheddar_DpsOp<"level_down"> {
 // Key-switching operations
 //===----------------------------------------------------------------------===//
 
+// Where a relinearization takes its multiplication key from: the runtime's
+// one default key (`!cheddar.eval_key`, scale-snu CHEDDAR), or the
+// evaluation-key map the Cyclops runtime resolves the key from at the op's
+// `level` (a ring whose key-switching budget holds no default key has one key
+// per level instead).
+def Cheddar_MultKeySource : AnyTypeOf<[Cheddar_EvalKey, Cheddar_EvkMap]>;
+
 def Cheddar_RelinearizeOp : Cheddar_DpsOp<"relinearize"> {
   let summary = "Relinearize a ciphertext (without rescale)";
   let description = [{
-    Calls context->Relinearize(res, a, mult_key).
+    Calls context->Relinearize(res, a, mult_key). With an evaluation-key map
+    as `multKey`, the key is looked up for the input's `level`.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
     Cheddar_CtLike:$input,
-    Cheddar_EvalKey:$multKey,
-    Cheddar_CtLike:$output
+    Cheddar_MultKeySource:$multKey,
+    Cheddar_CtLike:$output,
+    OptionalAttr<Builtin_IntegerAttr>:$level
   );
   let results = (outs Cheddar_CtResult:$result);
+  let hasVerifier = 1;
 }
 
 def Cheddar_RelinearizeRescaleOp : Cheddar_DpsOp<"relinearize_rescale"> {
   let summary = "Fused relinearize + rescale";
   let description = [{
     Calls context->RelinearizeRescale(res, a, mult_key). Faster than
-    separate Relinearize + Rescale.
+    separate Relinearize + Rescale. With an evaluation-key map as `multKey`,
+    the key is looked up for the input's `level`.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
     Cheddar_CtLike:$input,
-    Cheddar_EvalKey:$multKey,
-    Cheddar_CtLike:$output
+    Cheddar_MultKeySource:$multKey,
+    Cheddar_CtLike:$output,
+    OptionalAttr<Builtin_IntegerAttr>:$level
   );
   let results = (outs Cheddar_CtResult:$result);
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
@@ -621,17 +612,20 @@ def Cheddar_HMultOp : Cheddar_DpsOp<"hmult", [IncreasesMulDepthOpInterface]> {
   let description = [{
     Calls context->HMult(res, a, b, mult_key, rescale).
     Single fused GPU kernel launch. The `rescale` attribute controls whether
-    rescaling is included (default: true).
+    rescaling is included (default: true). With an evaluation-key map as
+    `multKey`, the key is looked up for the operands' `level`.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
     Cheddar_CtLike:$lhs,
     Cheddar_CtLike:$rhs,
-    Cheddar_EvalKey:$multKey,
+    Cheddar_MultKeySource:$multKey,
     Cheddar_CtLike:$output,
-    DefaultValuedAttr<BoolAttr, "true">:$rescale
+    DefaultValuedAttr<BoolAttr, "true">:$rescale,
+    OptionalAttr<Builtin_IntegerAttr>:$level
   );
   let results = (outs Cheddar_CtResult:$result);
+  let hasVerifier = 1;
 }
 
 def Cheddar_HRotOp : Cheddar_DpsOp<"hrot", [
@@ -861,7 +855,9 @@ def Cheddar_EvalPolyOp : Cheddar_DpsOp<"eval_poly"> {
     input using CHEDDAR's EvalPoly extension.
     `levelConsumption` is copied from the upstream
     `kernel.eval_chebyshev` level interface and drives CHEDDAR's target-scale
-    recurrence.
+    recurrence. `level` is the input's level: the evaluation relinearizes at
+    the `levelConsumption` levels below it, which is where the Cyclops runtime
+    needs multiplication keys.
   }];
   let arguments = (ins
     Cheddar_AnyContext:$ctx,
@@ -870,7 +866,8 @@ def Cheddar_EvalPolyOp : Cheddar_DpsOp<"eval_poly"> {
     Cheddar_CtLike:$output,
     F64ArrayAttr:$coefficients,
     Builtin_IntegerAttr:$levelConsumption,
-    OptionalAttr<UnitAttr>:$selectMultKeyAtUseLevel
+    OptionalAttr<UnitAttr>:$selectMultKeyAtUseLevel,
+    OptionalAttr<Builtin_IntegerAttr>:$level
   );
   let results = (outs Cheddar_CtResult:$result);
   let hasVerifier = 1;

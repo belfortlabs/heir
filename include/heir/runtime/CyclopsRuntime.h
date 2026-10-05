@@ -20,11 +20,19 @@
 #include "core/EvkRequest.h"
 #include "serialize/Transfer.h"
 
+// Serialization and debugging helpers shared by the generated Cyclops client
+// and server. Everything is generic over the runtime's word type: the
+// generated code fixes it (`using word = std::uint32_t;` or
+// `std::uint64_t;`), and these helpers deduce it from the Parameter they are
+// handed.
 namespace heir::cyclops {
-using Word = std::uint64_t;
+template <typename Word>
 using Parameter = ::cyclops::Parameter<Word>;
+template <typename Word>
 using Ciphertext = ::cyclops::Ciphertext<Word>;
+template <typename Word>
 using Plaintext = ::cyclops::Plaintext<Word>;
+template <typename Word>
 using EvaluationKeys = ::cyclops::EvkMap<Word>;
 using EvaluationKeyRequest = ::cyclops::EvkRequest;
 
@@ -48,15 +56,15 @@ void forEachLeaf(T&& value, Fn&& fn) {
   }
 }
 
-template <typename Aggregate>
-void writeValues(const Parameter& parameter, const Aggregate& values,
+template <typename Word, typename Aggregate>
+void writeValues(const Parameter<Word>& parameter, const Aggregate& values,
                  std::ostream& out) {
   cereal::PortableBinaryOutputArchive ar(out);
   forEachLeaf(values, [&](const auto& value) {
     using T = std::remove_cvref_t<decltype(value)>;
-    if constexpr (std::is_same_v<T, Ciphertext>) {
+    if constexpr (std::is_same_v<T, Ciphertext<Word>>) {
       ar(::cyclops::SendCiphertextCereal(parameter, value));
-    } else if constexpr (std::is_same_v<T, Plaintext>) {
+    } else if constexpr (std::is_same_v<T, Plaintext<Word>>) {
       ar(::cyclops::SendPlaintextCereal(parameter, value,
                                         parameter.NPToLevel(value.GetNP())));
     } else {
@@ -66,19 +74,19 @@ void writeValues(const Parameter& parameter, const Aggregate& values,
   });
 }
 
-template <typename Aggregate>
-Aggregate readValues(const Parameter& parameter, std::istream& in) {
+template <typename Aggregate, typename Word>
+Aggregate readValues(const Parameter<Word>& parameter, std::istream& in) {
   cereal::PortableBinaryInputArchive ar(in);
   Aggregate result{};
   forEachLeaf(result, [&](auto& value) {
     using T = std::remove_cvref_t<decltype(value)>;
-    if constexpr (std::is_same_v<T, Ciphertext>) {
+    if constexpr (std::is_same_v<T, Ciphertext<Word>>) {
       std::string bytes;
       ar(bytes);
       auto received = ::cyclops::ReceiveCiphertextCereal(parameter, bytes);
       require(!received.boosted_deflation, "unsupported ciphertext encoding");
       value = std::move(received.ct);
-    } else if constexpr (std::is_same_v<T, Plaintext>) {
+    } else if constexpr (std::is_same_v<T, Plaintext<Word>>) {
       std::string bytes;
       ar(bytes);
       auto received = ::cyclops::ReceivePlaintextCereal(parameter, bytes);
@@ -91,21 +99,24 @@ Aggregate readValues(const Parameter& parameter, std::istream& in) {
   return result;
 }
 
-inline void writeKeys(const Parameter& parameter, const EvaluationKeys& keys,
-                      std::ostream& out) {
+template <typename Word>
+void writeKeys(const Parameter<Word>& parameter,
+               const EvaluationKeys<Word>& keys, std::ostream& out) {
   cereal::PortableBinaryOutputArchive ar(out);
   ar(static_cast<std::uint32_t>(keys.size()));
   for (const auto& [index, key] : keys) {
-    bool sparse = index.idx == EvaluationKeys::kSparseToDenseKeyIndex;
+    bool sparse = index.idx == EvaluationKeys<Word>::kSparseToDenseKeyIndex;
     ar(sparse ? ::cyclops::SendSparseToDenseKeyCereal(parameter, key)
               : ::cyclops::SendEvaluationKeyCereal(parameter, key, index.idx));
   }
 }
-inline EvaluationKeys readKeys(const Parameter& parameter, std::istream& in) {
+template <typename Word>
+EvaluationKeys<Word> readKeys(const Parameter<Word>& parameter,
+                              std::istream& in) {
   cereal::PortableBinaryInputArchive ar(in);
   std::uint32_t count;
   ar(count);
-  EvaluationKeys result;
+  EvaluationKeys<Word> result;
   for (std::uint32_t i = 0; i < count; ++i) {
     // Decode one key at a time: Cyclops' aggregate API otherwise retains
     // serialized bytes for the entire evaluation-key map.
@@ -121,25 +132,27 @@ inline EvaluationKeys readKeys(const Parameter& parameter, std::istream& in) {
 // Encrypted intermediate values for debugging. The evaluator passes them to
 // the callback for client-side decryption; it does not need the secret key.
 // Ciphertext pointers are valid only for the duration of the callback.
+template <typename Word>
 struct Checkpoint {
   const char* name;
   const char* metadata;
-  std::vector<const Ciphertext*> ciphertexts;
+  std::vector<const Ciphertext<Word>*> ciphertexts;
 };
-using DebugSink = std::function<void(const Checkpoint&)>;
+template <typename Word>
+using DebugSink = std::function<void(const Checkpoint<Word>&)>;
 
-template <typename T>
-void emitCheckpoint(const DebugSink* sink, const T& value, const char* name,
-                    const char* metadata) {
+template <typename Word, typename T>
+void emitCheckpoint(const DebugSink<Word>* sink, const T& value,
+                    const char* name, const char* metadata) {
   if (!sink || !*sink) return;
-  Checkpoint checkpoint{name, metadata, {}};
+  Checkpoint<Word> checkpoint{name, metadata, {}};
   forEachLeaf(value,
               [&](const auto& ct) { checkpoint.ciphertexts.push_back(&ct); });
   (*sink)(checkpoint);
 }
-inline void emitCheckpoint(const DebugSink* sink, const Ciphertext* values,
-                           std::size_t count, const char* name,
-                           const char* metadata) {
+template <typename Word>
+void emitCheckpoint(const DebugSink<Word>* sink, const Ciphertext<Word>* values,
+                    std::size_t count, const char* name, const char* metadata) {
   emitCheckpoint(sink, std::span(values, count), name, metadata);
 }
 }  // namespace heir::cyclops

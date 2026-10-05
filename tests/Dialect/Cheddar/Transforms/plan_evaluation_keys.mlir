@@ -8,6 +8,6 @@
 // CHECK-NOT: cheddar.rotation_keys
 // CHECK-NOT: cheddar.linear_transform_keys
 func.func @setup() attributes {cheddar.rotation_keys = array<i64: 3, 0>, cheddar.linear_transform_keys = [{indices = array<i32: 0, 1, 2>, width = 8 : i64, level = 1 : i64, bs = 0 : i64, gs = 0 : i64}], heir.interface = {roles = ["client.setup"]}} {
-  %p = cheddar.make_parameter {logN = 12 : i64, logScale = 20 : i64, mainPrimes = array<i64: 2013265921, 1811939329>, auxPrimes = array<i64: 469762049, 754974721>} : !cheddar.parameter
+  %p = cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 12, logScale = 20, mainPrimes = [2013265921, 1811939329], auxPrimes = [469762049, 754974721]>} : !cheddar.parameter
   return
 }

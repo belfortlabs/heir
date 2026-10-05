@@ -126,8 +126,9 @@ LogicalResult verifyLinearTransformShape(Operation* op, ShapedType diagonals,
   // value is a malformed grid.
   bool runtimePlans = bs == 0 && gs == 0;
   if (!runtimePlans && (bs <= 0 || gs <= 0))
-    return op->emitOpError("bs and gs must be positive, or both zero to let "
-                           "the runtime plan the split");
+    return op->emitOpError(
+        "bs and gs must be positive, or both zero to let "
+        "the runtime plan the split");
 
   int64_t stride = 0;
   int64_t maxRotation = 0;
@@ -170,6 +171,31 @@ bool supportsMinKs(DenseI32ArrayAttr diagonalIndices, int64_t width, int64_t bs,
 LogicalResult HRotOp::verify() {
   return containsExactlyOneOrEmitError(getOperation(), getDynamicDistance(),
                                        getStaticDistance());
+}
+
+// A multiplication key resolved from an evaluation-key map needs the level
+// to resolve it for.
+static LogicalResult verifyMultKeySource(Operation* op, Value multKey,
+                                         IntegerAttr level) {
+  if (level && level.getInt() < 0)
+    return op->emitOpError("level must be non-negative");
+  if (isa<EvkMapType>(multKey.getType()) && !level)
+    return op->emitOpError(
+        "takes its multiplication key from an evaluation-key map and needs "
+        "the level to look it up for");
+  return success();
+}
+
+LogicalResult RelinearizeOp::verify() {
+  return verifyMultKeySource(getOperation(), getMultKey(), getLevelAttr());
+}
+
+LogicalResult RelinearizeRescaleOp::verify() {
+  return verifyMultKeySource(getOperation(), getMultKey(), getLevelAttr());
+}
+
+LogicalResult HMultOp::verify() {
+  return verifyMultKeySource(getOperation(), getMultKey(), getLevelAttr());
 }
 
 ::llvm::SmallVector<::mlir::OpFoldResult> HRotAddOp::getRotationIndices() {

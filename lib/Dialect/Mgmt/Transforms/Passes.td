@@ -8,6 +8,10 @@ def AnnotateMgmt : Pass<"annotate-mgmt"> {
   let description = [{
   This pass runs the secretness/level/dimension analysis and annotates the IR with the results,
   saving it into each op's attribute dictionary as mgmt.mgmt : <analysis results>
+
+  Levels count down from the program's depth, unless the module's
+  `mgmt.top_level` attribute pins the level fresh ciphertexts and bootstrap
+  outputs sit at (the top of a modulus chain deeper than the program).
   }];
   let dependentDialects = ["mlir::heir::mgmt::MgmtDialect"];
   let options = [
