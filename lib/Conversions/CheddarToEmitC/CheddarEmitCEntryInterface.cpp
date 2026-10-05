@@ -829,14 +829,16 @@ LogicalResult verifyKeyPlanningMetadata(func::FuncOp setup) {
 }
 
 // Emits the planned evaluation keys as a static table and a loop over it.
+// `setup` is the client's setup function, which carries the planned keys on
+// both sides.
 void addKeyRequestDefinition(OpBuilder& builder, Location loc,
-                             const EntryFunctions& functions) {
+                             func::FuncOp setup) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   Type request = OpaqueType::get(ctx, "EvaluationKeyRequest");
 
-  auto keys = functions.setup->getAttrOfType<DenseI64ArrayAttr>(
-      cheddar::kEvaluationKeysAttrName);
+  auto keys =
+      setup->getAttrOfType<DenseI64ArrayAttr>(cheddar::kEvaluationKeysAttrName);
   ArrayRef<int64_t> values = keys ? keys.asArrayRef() : ArrayRef<int64_t>{};
   size_t count = values.size() / kKeyRequestFields;
 
@@ -924,6 +926,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   bool split = side != InterfaceSide::Combined;
   bool client = side != InterfaceSide::Server;
   bool server = side != InterfaceSide::Client;
+  func::FuncOp clientSetup = functions.setup;
   if (side == InterfaceSide::Server) functions.setup = functions.serverSetup;
 
   if (!functions.facadeEvaluate ||
@@ -1123,7 +1126,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
 
   if (failed(addSetupDefinition(builder, loc, functions))) return failure();
   // The server re-plans the client's Galois key upload from the same request.
-  if (split) addKeyRequestDefinition(builder, loc, functions);
+  if (split) addKeyRequestDefinition(builder, loc, clientSetup);
   if (client && (failed(addKeygenDefinition(builder, loc, functions,
                                             keygenDestinations.front(),
                                             serverNeedsSecret, split)) ||
