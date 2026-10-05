@@ -183,6 +183,33 @@ presburger::IntegerRelation getRowMajorLayoutRelation(
   return result;
 }
 
+presburger::IntegerRelation getCompactRowMajorLayoutRelation(
+    RankedTensorType tensorType, int64_t numSlots) {
+  auto domainSize = tensorType.getRank();
+  IntegerRelation result(PresburgerSpace::getRelationSpace(
+      domainSize, /*numRange=*/2, /*numSymbol=*/0, /*numLocals=*/0));
+
+  for (int i = 0; i < tensorType.getRank(); ++i) {
+    addBounds(result, i, 0, tensorType.getDimSize(i) - 1);
+  }
+  auto rangeOffset = result.getVarKindOffset(VarKind::Range);
+  addBounds(result, rangeOffset, 0,
+            llvm::divideCeil(tensorType.getNumElements(), numSlots) - 1);
+  addBounds(result, rangeOffset + 1, 0, numSlots - 1);
+
+  // flattened_expr - numSlots * ct - slot = 0
+  SmallVector<int64_t> coeffs(result.getNumCols(), 0);
+  int64_t product = 1;
+  for (int dim = domainSize - 1; dim >= 0; --dim) {
+    coeffs[dim] = product;
+    product *= tensorType.getDimSize(dim);
+  }
+  coeffs[rangeOffset] = -numSlots;
+  coeffs[rangeOffset + 1] = -1;
+  result.addEquality(coeffs);
+  return result;
+}
+
 presburger::IntegerRelation getDiagonalLayoutRelation(
     RankedTensorType matrixType, int64_t minSlotCount) {
   unsigned int rows = matrixType.getDimSize(0);

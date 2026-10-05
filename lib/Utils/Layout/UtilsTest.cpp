@@ -49,6 +49,32 @@ void runRowMajorTest(RankedTensorType tensorType, int64_t numSlots) {
   }
 }
 
+TEST(UtilsTest, CompactRowMajorLayoutFillsOnlyAPrefix) {
+  MLIRContext context;
+  // 2 * 3 * 5 = 30 elements in 64 slots: the row-major layout repeats them
+  // with period 32, and the compact layout does not.
+  RankedTensorType tensorType =
+      RankedTensorType::get({2, 3, 5}, Float32Type::get(&context));
+  int64_t numSlots = 64;
+  IntegerRelation compact =
+      getCompactRowMajorLayoutRelation(tensorType, numSlots);
+  IntegerRelation rowMajor = getRowMajorLayoutRelation(tensorType, numSlots);
+
+  SmallVector<int64_t> shape = llvm::to_vector(tensorType.getShape());
+  for (int64_t i = 0; i < tensorType.getNumElements(); ++i) {
+    SmallVector<int64_t> indices = getIndicesFromRowMajorShape(i, shape);
+    SmallVector<int64_t> point = indices;
+    point.append({0, i});
+    EXPECT_TRUE(compact.containsPointNoLocal(point).has_value());
+    EXPECT_TRUE(rowMajor.containsPointNoLocal(point).has_value());
+
+    SmallVector<int64_t> copy = indices;
+    copy.append({0, i + 32});
+    EXPECT_FALSE(compact.containsPointNoLocal(copy).has_value());
+    EXPECT_TRUE(rowMajor.containsPointNoLocal(copy).has_value());
+  }
+}
+
 TEST(UtilsTest, TestAddModConstraint) {
   auto maybeRel =
       getIntegerRelationFromIslStr("{ [x] : x >= 0 and 100 - x >= 0 }");

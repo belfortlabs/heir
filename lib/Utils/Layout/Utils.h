@@ -57,6 +57,15 @@ LogicalResult tryProveUnequalByVolume(
 presburger::IntegerRelation getRowMajorLayoutRelation(
     RankedTensorType tensorType, int64_t numSlots);
 
+// Returns an IntegerRelation that packs the tensor in row-major order into
+// consecutive slots, without the periodic copies of getRowMajorLayoutRelation:
+// the element with flattened index i goes to ciphertext i / numSlots and slot
+// i % numSlots, and no other slot holds data. Kernels whose output fills only
+// a prefix of the slots, such as Cyclops' compact max pool, produce this
+// layout.
+presburger::IntegerRelation getCompactRowMajorLayoutRelation(
+    RankedTensorType tensorType, int64_t numSlots);
+
 // Returns an IntegerRelation that represents a diagonalized layout for a matrix
 // such that the ith diagonal of the matrix is in the ith row of the
 // result. The number of rows of the input and output must match.

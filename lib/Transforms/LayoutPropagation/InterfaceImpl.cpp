@@ -106,6 +106,10 @@ void registerOperandLayoutRequirementOpInterface(DialectRegistry& registry) {
         OnlyInputNeedsLayout<linalg::BroadcastOp>>(*ctx);
     linalg::TransposeOp::attachInterface<
         OnlyInputNeedsLayout<linalg::TransposeOp>>(*ctx);
+    // The window operand only carries the window shape, and the -inf init
+    // does not reach the kernel.
+    linalg::PoolingNcwMaxOp::attachInterface<
+        OnlyInputNeedsLayout<linalg::PoolingNcwMaxOp>>(*ctx);
   });
 }
 
