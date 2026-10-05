@@ -4,15 +4,21 @@
 // RUN: heir-translate %t --mlir-to-cpp --file-id=server_header | FileCheck %s --check-prefix=SERVER-H --implicit-check-not=UserInterface --implicit-check-not=SecretKey --implicit-check-not=KeyGen
 // RUN: heir-translate %t --mlir-to-cpp --file-id=server_source | FileCheck %s --check-prefix=SERVER-CPP --implicit-check-not=UserInterface --implicit-check-not=__keygen --implicit-check-not=__decrypt
 
+// CLIENT-H: #include <optional>
 // CLIENT-H: #include "core/ClientContext.h"
 // CLIENT-H: namespace heir::generated::split::client
 // CLIENT-H: using Context = ::cyclops::ClientContext<word>;
 // CLIENT-H: EvaluationKeyRequest GetKeyRequest()
-// CLIENT-H: KeyGen(const std::shared_ptr<Context>&)
+// CLIENT-H: KeyPair KeyGen(const std::shared_ptr<Context>&, const std::optional<::cyclops::prng::Seed>&);
+// CLIENT-H-NEXT: inline KeyPair KeyGen(const std::shared_ptr<Context>& ctx) { return KeyGen(ctx, std::nullopt); }
 // CLIENT-CPP: #include "split_client.h"
 // CLIENT-CPP: ClientContext<word>::Create
+// CLIENT-CPP: void split__keygen(const std::shared_ptr<ClientContext<word>>& [[CTX:v[0-9]+]], const std::optional<::cyclops::prng::Seed>& [[SEED:v[0-9]+]], std::unique_ptr<UserInterface<word>>& [[UI:v[0-9]+]]) {
+// CLIENT-CPP-NEXT: [[UI]] = std::make_unique<UserInterface<word>>([[CTX]], true, ::cyclops::prng::Backend::kShake128, true, [[SEED]]);
 // CLIENT-CPP: namespace heir::generated::split::client
 // CLIENT-CPP: EvaluationKeyRequest GetKeyRequest
+// CLIENT-CPP: KeyPair KeyGen(const std::shared_ptr<Context>& [[KCTX:v[0-9]+]], const std::optional<::cyclops::prng::Seed>& [[KSEED:v[0-9]+]]) {
+// CLIENT-CPP: split__keygen([[KCTX]], [[KSEED]], {{v[0-9]+}}.storage);
 // CLIENT-CPP: PrepareRotationKey(GetKeyRequest(
 // SERVER-H: namespace heir::generated::split::server
 // SERVER-CPP: #include "split_server.h"

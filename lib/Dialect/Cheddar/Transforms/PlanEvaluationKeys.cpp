@@ -1,16 +1,9 @@
 #include "lib/Dialect/Cheddar/Transforms/PlanEvaluationKeys.h"
 
 #include <cstdint>
-#include <exception>
-#include <span>
-#include <utility>
-#include <vector>
+#include <memory>
 
-#include "core/EvkRequest.h"                             // from @cyclops
-#include "core/Parameter.h"                              // from @cyclops
-#include "extension/boot/BootKeyPlanner.h"               // from @cyclops
-#include "extension/boot/BootParameter.h"                // from @cyclops
-#include "extension/linalg/LinearTransformKeyPlanner.h"  // from @cyclops
+#include "cyclops_planner.h"  // from @cyclops
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/ModuleAttributes.h"
@@ -43,7 +36,7 @@ struct PlanEvaluationKeysPass
     : impl::CheddarPlanEvaluationKeysBase<PlanEvaluationKeysPass> {
   using CheddarPlanEvaluationKeysBase::CheddarPlanEvaluationKeysBase;
 
-  void runOnOperation() override try {
+  void runOnOperation() override {
     auto module = cast<ModuleOp>(getOperation());
     func::FuncOp setup = findClientSetup(module);
     if (!setup) return;
@@ -108,28 +101,55 @@ struct PlanEvaluationKeysPass
       parameterOp.emitOpError("log_scale must be between 0 and 63");
       return signalPassFailure();
     }
-    std::vector<std::pair<int, int>> levels;
+    SmallVector<int32_t> levels;
     for (size_t i = 0; i < mainPrimes.size(); ++i)
-      levels.emplace_back(i + 1, 0);
+      levels.append({static_cast<int32_t>(i + 1), 0});
     int defaultLevel =
         parameterOp.getDefaultEncryptionLevel()
             ? parameterOp.getDefaultEncryptionLevelAttr().getInt()
             : static_cast<int>(mainPrimes.size()) - 1;
-    // Match the Parameter constructed in the generated client.
-    cyclops::Parameter<uint64_t> params(
-        parameterOp.getLogN().getInt(), double(uint64_t{1} << logScale),
-        defaultLevel, levels,
-        std::vector<uint64_t>(mainPrimes.begin(), mainPrimes.end()),
-        std::vector<uint64_t>(auxPrimes.begin(), auxPrimes.end()));
-    if (auto weight = parameterOp.getDenseHammingWeightAttr())
-      params.SetDenseHammingWeight(weight.getInt());
-    if (auto weight = parameterOp.getSparseHammingWeightAttr())
-      params.SetSparseHammingWeight(weight.getInt());
 
-    cyclops::EvkRequest request;
+    char* error = nullptr;
+    // Reports a failed planner call; NULL error means allocation failed.
+    auto failed = [&](bool ok) {
+      if (ok) return false;
+      getOperation()->emitError() << "Cyclops key planning failed: "
+                                  << (error ? error : "out of memory");
+      cyclops_free_error(error);
+      signalPassFailure();
+      return true;
+    };
+
+    // Match the Parameter constructed in the generated client.
+    std::unique_ptr<cyclops_params, decltype(&cyclops_params_free)> params(
+        cyclops_params_create(
+            parameterOp.getLogN().getInt(), double(uint64_t{1} << logScale),
+            defaultLevel, levels.data(), mainPrimes.size(),
+            reinterpret_cast<const uint64_t*>(mainPrimes.data()),
+            mainPrimes.size(),
+            reinterpret_cast<const uint64_t*>(auxPrimes.data()),
+            auxPrimes.size(), nullptr, 0, nullptr, -1, CYCLOPS_RING_STANDARD,
+            &error),
+        cyclops_params_free);
+    if (failed(params != nullptr)) return;
+    if (auto weight = parameterOp.getDenseHammingWeightAttr())
+      if (failed(cyclops_params_set_dense_hamming_weight(
+                     params.get(), weight.getInt(), &error) == 0))
+        return;
+    if (auto weight = parameterOp.getSparseHammingWeightAttr())
+      if (failed(cyclops_params_set_sparse_hamming_weight(
+                     params.get(), weight.getInt(), &error) == 0))
+        return;
+
+    std::unique_ptr<cyclops_evk_request, decltype(&cyclops_evk_request_free)>
+        request(cyclops_evk_request_create(), cyclops_evk_request_free);
+    if (failed(request != nullptr)) return;
     ArrayRef<int64_t> pairs = rotationKeys.asArrayRef();
     for (size_t i = 0; i + 1 < pairs.size(); i += 2)
-      request.AddRequest(pairs[i], pairs[i + 1]);
+      if (failed(cyclops_evk_request_add_request(
+                     request.get(), pairs[i], pairs[i + 1],
+                     CYCLOPS_KEY_MODE_INHERIT, -1, &error) == 0))
+        return;
 
     if (shapes) {
       for (auto [index, attr] : llvm::enumerate(shapes)) {
@@ -156,10 +176,12 @@ struct PlanEvaluationKeysPass
           }
         }
         auto diagonals = indices.asArrayRef();
-        cyclops::AddLinearTransformRequiredKeys(
-            request, params, width.getInt(),
-            std::span<const int>(diagonals.data(), diagonals.size()),
-            level.getInt(), bs.getInt(), gs.getInt());
+        if (failed(cyclops_add_linear_transform_required_keys(
+                       request.get(), params.get(), width.getInt(),
+                       diagonals.data(), diagonals.size(), level.getInt(),
+                       bs.getInt(), gs.getInt(), CYCLOPS_KEY_MODE_INHERIT,
+                       &error) == 0))
+          return;
       }
     }
 
@@ -170,36 +192,26 @@ struct PlanEvaluationKeysPass
       auto ratio =
           setup->getAttrOfType<IntegerAttr>(kBootstrapLogMessageRatioAttrName);
       // The emitter hard-codes the imaginary-removing variant.
-      cyclops::BootParameter bootstrap(params.max_level_, cts.getInt(),
-                                       stc.getInt(), ratio.getInt());
-      cyclops::AddBootstrapRequiredRotations(
-          request, params, bootstrap, slots.getInt(),
-          cyclops::BootVariant::kImaginaryRemoving);
+      if (failed(cyclops_add_bootstrap_required_rotations(
+                     request.get(), params.get(), cts.getInt(), stc.getInt(),
+                     ratio.getInt(), nullptr, slots.getInt(),
+                     CYCLOPS_BOOT_VARIANT_IMAGINARY_REMOVING,
+                     CYCLOPS_KEY_MODE_INHERIT, &error) == 0))
+        return;
     }
 
+    SmallVector<cyclops_key> keys(
+        cyclops_evk_request_keys(request.get(), nullptr, 0));
+    cyclops_evk_request_keys(request.get(), keys.data(), keys.size());
     SmallVector<int64_t> flattened;
-    auto append = [&](int family, int rotation, const auto& key) {
-      flattened.append({family, rotation, key.level,
-                        static_cast<int64_t>(key.key_mode),
+    for (const cyclops_key& key : keys)
+      flattened.append({key.family, key.rotation, key.level, key.key_mode,
                         key.required_num_aux});
-    };
-    for (const auto& [key, count] : request.AllRequests())
-      append(0, key.rot_idx, key);
-    for (const auto& [key, count] : request.ConjugationRequests())
-      append(1, 0, key);
-    for (const auto& [key, count] : request.MultiplicationRequests())
-      append(2, 0, key);
-    for (const auto& [key, count] : request.RotatedMultiplicationRequests())
-      append(3, key.rot_idx, key);
 
     OpBuilder builder(module.getContext());
     setup->setAttr(kEvaluationKeysAttrName,
                    builder.getDenseI64ArrayAttr(flattened));
     for (StringRef name : planningAttrs) setup->removeAttr(name);
-  } catch (const std::exception& error) {
-    getOperation()->emitError()
-        << "Cyclops key planning failed: " << error.what();
-    signalPassFailure();
   }
 };
 
