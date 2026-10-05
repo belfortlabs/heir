@@ -6,7 +6,9 @@
 #include <utility>
 
 #include "lib/Transforms/LinalgCanonicalizations/ConvPoolFusion.h"
+#include "lib/Utils/MaxPoolUtils.h"
 #include "lib/Utils/TensorUtils.h"
+#include "llvm/include/llvm/ADT/APFloat.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/DenseSet.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"           // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallBitVector.h"      // from @llvm-project
@@ -1359,6 +1361,136 @@ struct UndilateConv2DNchwFchw
   }
 };
 
+// Replaces the -inf padding of a max pool by the lower bound of its domain.
+//
+// torch-mlir lowers a ceil-mode (or padded) max pool to a pool over a
+// tensor.pad whose padding value is -inf. Every window holds at least one real
+// element, and no real element is less than `domain_lower`, so padding with
+// `domain_lower` gives the same maxima. An FHE max pool cannot compare against
+// -inf, and Cyclops' MaxPool accepts only values in [-value_bound,
+// value_bound], which `domain_lower` satisfies.
+//
+// Layout propagation supports only zero padding. Thus a negative lower bound
+// becomes a zero pad plus a constant that holds the lower bound in the padded
+// positions. The plaintext addition consumes no level. With a lower bound of
+// zero or more, the zero pad alone is correct, because zero is less than or
+// equal to each real element.
+struct ReplaceMaxPoolNegativeInfinityPad
+    : public OpRewritePattern<linalg::PoolingNcwMaxOp> {
+ public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::PoolingNcwMaxOp poolOp,
+                                PatternRewriter& rewriter) const override {
+    auto lowerAttr = poolOp->getAttrOfType<FloatAttr>("domain_lower");
+    if (!lowerAttr)
+      return rewriter.notifyMatchFailure(poolOp, "no float domain_lower");
+    if (!isNegativeInfinityTensor(poolOp.getOutputs()[0]))
+      return rewriter.notifyMatchFailure(poolOp, "init is not -inf");
+
+    auto padOp = poolOp.getInputs()[0].getDefiningOp<tensor::PadOp>();
+    if (!padOp || !isNegativeInfinity(padOp.getConstantPaddingValue()))
+      return rewriter.notifyMatchFailure(poolOp, "input is not a -inf pad");
+    RankedTensorType paddedType = padOp.getResultType();
+    RankedTensorType sourceType = padOp.getSourceType();
+    if (!paddedType.hasStaticShape() || !sourceType.hasStaticShape() ||
+        !padOp.getLow().empty() || !padOp.getHigh().empty())
+      return rewriter.notifyMatchFailure(poolOp, "padding is not static");
+
+    Location loc = padOp.getLoc();
+    auto elementType = cast<FloatType>(paddedType.getElementType());
+    Value zero = arith::ConstantOp::create(
+        rewriter, loc, rewriter.getFloatAttr(elementType, 0.0));
+    Value padded =
+        tensor::PadOp::create(rewriter, loc, paddedType, padOp.getSource(),
+                              padOp.getMixedLowPad(), padOp.getMixedHighPad(),
+                              zero, padOp.getNofold())
+            .getResult();
+
+    double lower = lowerAttr.getValueAsDouble();
+    if (lower < 0.0) {
+      // Round down, so that the padding never exceeds a real element.
+      APFloat lowerValue(lower);
+      bool losesInfo;
+      lowerValue.convert(elementType.getFloatSemantics(),
+                         APFloat::rmTowardNegative, &losesInfo);
+      APFloat zeroValue = APFloat::getZero(elementType.getFloatSemantics());
+
+      ArrayRef<int64_t> low = padOp.getStaticLow();
+      ArrayRef<int64_t> shape = paddedType.getShape();
+      SmallVector<APFloat> values(paddedType.getNumElements(), zeroValue);
+      SmallVector<int64_t> index(shape.size(), 0);
+      for (APFloat& value : values) {
+        bool isPadding = false;
+        for (auto [dim, position] : llvm::enumerate(index)) {
+          if (position < low[dim] ||
+              position >= low[dim] + sourceType.getDimSize(dim))
+            isPadding = true;
+        }
+        if (isPadding) value = lowerValue;
+        // Advance the row-major index.
+        for (int64_t dim = shape.size() - 1; dim >= 0; --dim) {
+          if (++index[dim] < shape[dim]) break;
+          index[dim] = 0;
+        }
+      }
+      Value padding = arith::ConstantOp::create(
+          rewriter, loc, DenseElementsAttr::get(paddedType, values));
+      padded = arith::AddFOp::create(rewriter, loc, padded, padding);
+    }
+
+    rewriter.modifyOpInPlace(poolOp,
+                             [&] { poolOp.getInputsMutable()[0].set(padded); });
+    return success();
+  }
+};
+
+// Drops the input elements of a max pool that no window reads.
+//
+// A floor-mode pool over L elements reads only the first
+// (Lout - 1) * stride + dilation * (k - 1) + 1 of them. Slicing the rest off
+// lets every channel start at a multiple of the stride in a flat layout, so
+// that one Cyclops MaxPool call can pool all channels without a window that
+// crosses into the next channel.
+struct TrimMaxPoolTail : public OpRewritePattern<linalg::PoolingNcwMaxOp> {
+ public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::PoolingNcwMaxOp poolOp,
+                                PatternRewriter& rewriter) const override {
+    Value input = poolOp.getInputs()[0];
+    auto inputType = dyn_cast<RankedTensorType>(input.getType());
+    auto windowType =
+        dyn_cast<RankedTensorType>(poolOp.getInputs()[1].getType());
+    auto outputType =
+        dyn_cast<RankedTensorType>(poolOp.getOutputs()[0].getType());
+    if (!inputType || !windowType || !outputType ||
+        !inputType.hasStaticShape() || !windowType.hasStaticShape() ||
+        !outputType.hasStaticShape())
+      return rewriter.notifyMatchFailure(poolOp, "shapes are not static");
+
+    int64_t stride = poolOp.getStrides().getValues<int64_t>()[0];
+    int64_t dilation = poolOp.getDilations().getValues<int64_t>()[0];
+    int64_t span = dilation * (windowType.getDimSize(0) - 1) + 1;
+    int64_t readLength = (outputType.getDimSize(2) - 1) * stride + span;
+    int64_t length = inputType.getDimSize(2);
+    if (readLength >= length)
+      return rewriter.notifyMatchFailure(poolOp, "every element is read");
+
+    SmallVector<OpFoldResult> offsets(3, rewriter.getIndexAttr(0));
+    SmallVector<OpFoldResult> sizes = {
+        rewriter.getIndexAttr(inputType.getDimSize(0)),
+        rewriter.getIndexAttr(inputType.getDimSize(1)),
+        rewriter.getIndexAttr(readLength)};
+    SmallVector<OpFoldResult> strides(3, rewriter.getIndexAttr(1));
+    Value trimmed = tensor::ExtractSliceOp::create(
+        rewriter, poolOp.getLoc(), input, offsets, sizes, strides);
+    rewriter.modifyOpInPlace(
+        poolOp, [&] { poolOp.getInputsMutable()[0].set(trimmed); });
+    return success();
+  }
+};
+
 struct LinalgCanonicalizations
     : public impl::LinalgCanonicalizationsBase<LinalgCanonicalizations> {
   void runOnOperation() override {
@@ -1370,8 +1502,9 @@ struct LinalgCanonicalizations
         BroadcastToExpandShape, DropCfAssertInLinalg, FoldBroadcastExtractSlice,
         FoldConstantBroadcast, FoldConstantFill, FoldConstantLinalgTranspose,
         FuseConv2DPooling, LinalgGenericToElementwise, LinalgMapToElementwise,
-        MaterializeBroadcasts, RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D,
-        RewriteTransposedMatvec, RewriteTransposedVecmat, UndilateConv1DNcwFcw,
+        MaterializeBroadcasts, ReplaceMaxPoolNegativeInfinityPad,
+        RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D, RewriteTransposedMatvec,
+        RewriteTransposedVecmat, TrimMaxPoolTail, UndilateConv1DNcwFcw,
         UndilateConv2DNchwFchw>(context);
 
     mlir::linalg::populateDecomposeProjectedPermutationPatterns(patterns);
