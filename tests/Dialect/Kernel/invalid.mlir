@@ -118,3 +118,67 @@ func.func @test_apply_level_mismatch(%ct: !ct) -> !ct {
   %0 = kernel.apply_linear_transform %ct, %lt : !ct, !kernel.prepared_linear_transform<level = 1, slots = 512, log_bsgs_ratio = 0> -> !ct
   return %0 : !ct
 }
+
+// -----
+
+func.func @test_max_pool_type_mismatch(%arg0: tensor<1x1024xf32>) -> tensor<1x1024xf64> {
+  // expected-error@below {{input and output types must match}}
+  %0 = kernel.max_pool %arg0 {num_slots = 1024 : i64, input_length = 1024 : i64, window_size = 4 : i64, stride = 4 : i64, value_bound = 0.5 : f64} : tensor<1x1024xf32> -> tensor<1x1024xf64>
+  return %0 : tensor<1x1024xf64>
+}
+
+// -----
+
+func.func @test_max_pool_two_ciphertexts(%arg0: tensor<2x1024xf32>) -> tensor<2x1024xf32> {
+  // expected-error@below {{input must be a single ciphertext}}
+  %0 = kernel.max_pool %arg0 {num_slots = 1024 : i64, input_length = 1024 : i64, window_size = 4 : i64, stride = 4 : i64, value_bound = 0.5 : f64} : tensor<2x1024xf32> -> tensor<2x1024xf32>
+  return %0 : tensor<2x1024xf32>
+}
+
+// -----
+
+func.func @test_max_pool_slots_not_power_of_two(%arg0: tensor<1x24xf32>) -> tensor<1x24xf32> {
+  // expected-error@below {{num_slots must be a power of two, but got 24}}
+  %0 = kernel.max_pool %arg0 {num_slots = 24 : i64, input_length = 24 : i64, window_size = 4 : i64, stride = 4 : i64, value_bound = 0.5 : f64} : tensor<1x24xf32> -> tensor<1x24xf32>
+  return %0 : tensor<1x24xf32>
+}
+
+// -----
+
+func.func @test_max_pool_slot_dimension_mismatch(%arg0: tensor<1x1024xf32>) -> tensor<1x1024xf32> {
+  // expected-error@below {{the slot dimension (1024) must equal num_slots (2048)}}
+  %0 = kernel.max_pool %arg0 {num_slots = 2048 : i64, input_length = 1024 : i64, window_size = 4 : i64, stride = 4 : i64, value_bound = 0.5 : f64} : tensor<1x1024xf32> -> tensor<1x1024xf32>
+  return %0 : tensor<1x1024xf32>
+}
+
+// -----
+
+func.func @test_max_pool_zero_window(%arg0: tensor<1x1024xf32>) -> tensor<1x1024xf32> {
+  // expected-error@below {{window_size, stride and dilation must be at least 1}}
+  %0 = kernel.max_pool %arg0 {num_slots = 1024 : i64, input_length = 1024 : i64, window_size = 0 : i64, stride = 4 : i64, value_bound = 0.5 : f64} : tensor<1x1024xf32> -> tensor<1x1024xf32>
+  return %0 : tensor<1x1024xf32>
+}
+
+// -----
+
+func.func @test_max_pool_input_too_long(%arg0: tensor<1x1024xf32>) -> tensor<1x1024xf32> {
+  // expected-error@below {{input_length must lie in [4, 1024], but got 1025}}
+  %0 = kernel.max_pool %arg0 {num_slots = 1024 : i64, input_length = 1025 : i64, window_size = 4 : i64, stride = 4 : i64, value_bound = 0.5 : f64} : tensor<1x1024xf32> -> tensor<1x1024xf32>
+  return %0 : tensor<1x1024xf32>
+}
+
+// -----
+
+func.func @test_max_pool_input_shorter_than_window(%arg0: tensor<1x1024xf32>) -> tensor<1x1024xf32> {
+  // expected-error@below {{input_length must lie in [7, 1024], but got 6}}
+  %0 = kernel.max_pool %arg0 {num_slots = 1024 : i64, input_length = 6 : i64, window_size = 4 : i64, stride = 4 : i64, dilation = 2 : i64, value_bound = 0.5 : f64} : tensor<1x1024xf32> -> tensor<1x1024xf32>
+  return %0 : tensor<1x1024xf32>
+}
+
+// -----
+
+func.func @test_max_pool_overlapping_dilated_windows(%arg0: tensor<1x1024xf32>) -> tensor<1x1024xf32> {
+  // expected-error@below {{dilated windows must not overlap, but stride 4 is less than the window span 7}}
+  %0 = kernel.max_pool %arg0 {num_slots = 1024 : i64, input_length = 1000 : i64, window_size = 4 : i64, stride = 4 : i64, dilation = 2 : i64, value_bound = 0.5 : f64} : tensor<1x1024xf32> -> tensor<1x1024xf32>
+  return %0 : tensor<1x1024xf32>
+}

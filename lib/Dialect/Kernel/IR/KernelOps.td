@@ -39,6 +39,79 @@ def Kernel_EvalChebyshevOp : Kernel_Op<"eval_chebyshev", [
   let assemblyFormat = "$input attr-dict `:` type($input) `->` type($output)";
 }
 
+def Kernel_MaxPoolOp : Kernel_Op<"max_pool", [
+  Pure,
+  IncreasesMulDepthOpInterface
+]> {
+  let summary = "Max pools a sequence that fills the first slots of one ciphertext.";
+  let description = [{
+    The `kernel.max_pool` operation is a 1-D max pool with PyTorch
+    `MaxPool1d` semantics and no padding. The input sequence is the first
+    `input_length` slots of one ciphertext with `num_slots` slots. The output
+    holds the maximum of window `w` in slot `w`, for every window, and zero in
+    the other slots.
+
+    The slots at and after `input_length` may hold any values in
+    `[-value_bound, value_bound]`, for example a periodic copy of the
+    sequence, if no window reads them. This is the case when `input_length` is
+    a multiple of `stride` and `ceil_mode` is false.
+
+    `num_slots` is the slot count of the ciphertext. It can be less than half
+    the ring degree, so the op keeps it after `--secret-to-ckks` converts the
+    cleartext tensor to an LWE type.
+
+    Window `w` reads the slots `w * stride + j * dilation`, for
+    `0 <= j < window_size`, that are less than `input_length`. With
+    `ceil_mode`, a last window that starts inside the input but extends past
+    it is kept; without it, the op drops that window.
+
+    The slot values must lie in `[-value_bound, value_bound]`. Cyclops scales
+    them into the domain of its comparison polynomial, and pads the windows
+    that it gathers with `-value_bound`, which does not change a maximum.
+
+    The op lowers to one call of Cyclops' `MaxPool<word>::EvaluateMax`, with
+    compact output, a padding value of `-value_bound` and no league level cap.
+    That call bootstraps only its comparisons, so the result level is the input
+    level less `getLevelsToDrop()`. Cyclops folds the scaling for a
+    `value_bound` other than 0.5 into the first gather and compaction stages.
+    A pool without gather stages, or without compaction stages, uses one more
+    level for each scaling that it cannot fold. The input must have at least
+    `getRequiredInputLevels()` levels left, which can be more than the op
+    drops.
+
+    The level costs come from the Cyclops planner library. So that this
+    dialect does not depend on Cyclops, it only promises
+    `ReducesLevelOpInterface` and `BootstrapsInternallyOpInterface` for this
+    op. The Cheddar target attaches them, see
+    `lib/Target/Cheddar/MaxPoolInterfaces.h`.
+
+    Example:
+
+    ```mlir
+    %0 = kernel.max_pool %ct {num_slots = 1024 : i64, input_length = 74 : i64, window_size = 2 : i64, stride = 2 : i64, value_bound = 4.0 : f64}
+        : tensor<1x1024xf32> -> tensor<1x1024xf32>
+    ```
+  }];
+
+  let arguments = (ins
+    AnyType:$input,
+    I64Attr:$num_slots,
+    I64Attr:$input_length,
+    I64Attr:$window_size,
+    I64Attr:$stride,
+    DefaultValuedAttr<I64Attr, "1">:$dilation,
+    DefaultValuedAttr<BoolAttr, "false">:$ceil_mode,
+    F64Attr:$value_bound
+  );
+
+  let results = (outs
+    AnyType:$output
+  );
+
+  let hasVerifier = 1;
+  let assemblyFormat = "$input attr-dict `:` type($input) `->` type($output)";
+}
+
 def Kernel_LinearTransformOp : Kernel_Op<"linear_transform", [
   Pure,
   DeclareOpInterfaceMethods<ReducesLevelOpInterface, ["getLevelsToDrop", "getOperandsToReduce"]>,

@@ -4,6 +4,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -19,6 +20,7 @@
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/OpImplementation.h"       // from @llvm-project
+#include "mlir/include/mlir/IR/TypeUtilities.h"          // from @llvm-project
 #include "mlir/include/mlir/IR/Value.h"                  // from @llvm-project
 #include "mlir/include/mlir/Support/LLVM.h"              // from @llvm-project
 #include "mlir/include/mlir/Support/LogicalResult.h"     // from @llvm-project
@@ -150,6 +152,74 @@ int EvalChebyshevOp::getLevelsToDrop() {
 ::llvm::SmallVector<::mlir::OpOperand*> EvalChebyshevOp::getOperandsToReduce(
     const ::mlir::DataFlowSolver* solver) {
   return {&getOperation()->getOpOperand(0)};
+}
+
+// MaxPoolOp's ReducesLevelOpInterface and BootstrapsInternallyOpInterface
+// come from the Cyclops planner, so the Cheddar target attaches them as
+// external models (lib/Target/Cheddar/MaxPoolInterfaces.h).
+
+LogicalResult MaxPoolOp::verify() {
+  // An LWE result is at a lower level than its input, so its type differs;
+  // only the shape must match.
+  Type inputType = getInput().getType(), outputType = getOutput().getType();
+  bool isCiphertext =
+      isa<lwe::LWECiphertextType>(getElementTypeOrSelf(inputType));
+  auto inputShaped = dyn_cast<ShapedType>(inputType);
+  auto outputShaped = dyn_cast<ShapedType>(outputType);
+  bool shapesMatch = (!inputShaped && !outputShaped) ||
+                     (inputShaped && outputShaped &&
+                      inputShaped.getShape() == outputShaped.getShape());
+  if (isCiphertext ? !shapesMatch : inputType != outputType)
+    return emitOpError("input and output types must match");
+
+  int64_t numSlots = getNumSlots();
+  if (!isPowerOfTwo(numSlots))
+    return emitOpError("num_slots must be a power of two, but got ")
+           << numSlots;
+
+  // The op works on one ciphertext. A cleartext tensor in ciphertext
+  // semantics holds its slots in the last dimension.
+  if (auto tensorType = dyn_cast<RankedTensorType>(getInput().getType())) {
+    ArrayRef<int64_t> ciphertextDims = tensorType.getShape();
+    bool isCleartext =
+        !isa<lwe::LWECiphertextType>(tensorType.getElementType());
+    if (isCleartext && !ciphertextDims.empty())
+      ciphertextDims = ciphertextDims.drop_back();
+    if (!tensorType.hasStaticShape() ||
+        !llvm::all_of(ciphertextDims, [](int64_t dim) { return dim == 1; }))
+      return emitOpError("input must be a single ciphertext, but got ")
+             << tensorType;
+    if (isCleartext && tensorType.getRank() > 0 &&
+        tensorType.getShape().back() != numSlots)
+      return emitOpError("the slot dimension (")
+             << tensorType.getShape().back() << ") must equal num_slots ("
+             << numSlots << ")";
+  }
+
+  int64_t windowSize = getWindowSize(), stride = getStride();
+  int64_t dilation = getDilation(), inputLength = getInputLength();
+  if (windowSize < 1 || stride < 1 || dilation < 1)
+    return emitOpError("window_size, stride and dilation must be at least 1");
+  // Cyclops takes these fields as int.
+  constexpr int64_t kMaxInt = std::numeric_limits<int32_t>::max();
+  if (numSlots > kMaxInt || inputLength > kMaxInt || windowSize > kMaxInt ||
+      stride > kMaxInt || dilation > kMaxInt)
+    return emitOpError(
+        "num_slots, input_length, window_size, stride and dilation must fit "
+        "a 32-bit integer");
+  int64_t span = dilation * (windowSize - 1) + 1;
+  if (inputLength < span || inputLength > numSlots)
+    return emitOpError("input_length must lie in [")
+           << span << ", " << numSlots << "], but got " << inputLength;
+  // Cyclops' staged gather collides when dilated windows overlap.
+  if (dilation > 1 && stride < span)
+    return emitOpError("dilated windows must not overlap, but stride ")
+           << stride << " is less than the window span " << span;
+  double valueBound = getValueBound().convertToDouble();
+  if (!std::isfinite(valueBound) || !(valueBound > 0.0))
+    return emitOpError("value_bound must be positive and finite, but got ")
+           << valueBound;
+  return success();
 }
 
 int LinearTransformOp::getLevelsToDrop() { return 1; }
