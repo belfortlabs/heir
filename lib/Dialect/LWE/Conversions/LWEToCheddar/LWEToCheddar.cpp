@@ -14,6 +14,7 @@
 #include "lib/Dialect/Cheddar/IR/CheddarDialect.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
+#include "lib/Dialect/HEIRInterfaces.h"
 #include "lib/Dialect/Kernel/IR/KernelOps.h"
 #include "lib/Dialect/Kernel/IR/KernelTypes.h"
 #include "lib/Dialect/LWE/IR/LWEAttributes.h"
@@ -859,6 +860,72 @@ struct ConvertKernelEvalChebyshevOp
   bool useCyclopsRuntime;
 };
 
+// kernel.max_pool -> cheddar.max_pool, a call of Cyclops' MaxPool. The kernel
+// bootstraps internally, so it runs on the boot context.
+struct ConvertKernelMaxPoolOp : public OpConversionPattern<kernel::MaxPoolOp> {
+  ConvertKernelMaxPoolOp(const TypeConverter& converter, MLIRContext* context,
+                         bool useCyclopsRuntime)
+      : OpConversionPattern(converter, context),
+        useCyclopsRuntime(useCyclopsRuntime) {}
+
+  LogicalResult matchAndRewrite(
+      kernel::MaxPoolOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    if (!useCyclopsRuntime)
+      return op.emitOpError(
+          "requires the Cyclops runtime (use-cyclops-runtime=true)");
+    auto bootCtx =
+        getContextualArg<cheddar::BootContextType>(op.getOperation());
+    if (failed(bootCtx)) return bootCtx;
+    auto evkMap = getContextualArg<cheddar::EvkMapType>(op.getOperation());
+    if (failed(evkMap)) return evkMap;
+
+    auto inputType = dyn_cast<lwe::LWECiphertextType>(
+        getElementTypeOrSelf(op.getInput().getType()));
+    auto outputType = dyn_cast<lwe::LWECiphertextType>(
+        getElementTypeOrSelf(op.getOutput().getType()));
+    if (!inputType || !inputType.getModulusChain() || !outputType ||
+        !outputType.getModulusChain())
+      return op.emitOpError(
+          "cannot lower to cheddar.max_pool without input and output modulus "
+          "chains; run CKKS level analysis first");
+    int64_t inputLevel = inputType.getModulusChain().getCurrent();
+    int64_t outputLevel = outputType.getModulusChain().getCurrent();
+    // The Cheddar target attaches the level model, which comes from the
+    // Cyclops planner (lib/Target/Cheddar/MaxPoolInterfaces.h).
+    auto levelModel = dyn_cast<ReducesLevelOpInterface>(op.getOperation());
+    if (!levelModel)
+      return op.emitOpError(
+          "has no level model; register the Cheddar max pool interfaces");
+    int64_t levelsToDrop = levelModel.getLevelsToDrop();
+    int64_t requiredInputLevels = levelModel.getRequiredInputLevels();
+    if (inputLevel < requiredInputLevels)
+      return op.emitOpError()
+             << "requires an input level of at least " << requiredInputLevels
+             << " but got " << inputLevel;
+    if (outputLevel != inputLevel - levelsToDrop)
+      return op.emitOpError()
+             << "drops " << levelsToDrop << " levels; expected output level "
+             << inputLevel - levelsToDrop << " but got " << outputLevel;
+
+    Type resultType = typeConverter->convertType(op.getOutput().getType());
+    Value dest =
+        makeReusableDest(rewriter, op.getLoc(), resultType, adaptor.getInput());
+    auto result = cheddar::MaxPoolOp::create(
+        rewriter, op.getLoc(), resultType, bootCtx.value(), adaptor.getInput(),
+        evkMap.value(), dest, op.getNumSlotsAttr(), op.getInputLengthAttr(),
+        op.getWindowSizeAttr(), op.getStrideAttr(), op.getDilationAttr(),
+        op.getCeilModeAttr(), op.getValueBoundAttr(),
+        rewriter.getI64IntegerAttr(inputLevel),
+        rewriter.getI64IntegerAttr(levelsToDrop));
+    rewriter.replaceOp(op, result.getResult());
+    return success();
+  }
+
+ private:
+  bool useCyclopsRuntime;
+};
+
 //===----------------------------------------------------------------------===//
 // Payload packing: scalar-index tensor ops -> rank-reducing slice ops
 //===----------------------------------------------------------------------===//
@@ -1004,12 +1071,13 @@ SmallVector<Type> getDirectSupportTypes(func::FuncOp function,
     // Context derives from it, so server preprocessing passes its own).
     if (useCyclopsRuntime && isa<lwe::RLWEEncodeOp>(op))
       add(cheddar::ClientContextType::get(context));
-    if (isa<ckks::BootstrapOp>(op)) add(bootType);
+    if (isa<ckks::BootstrapOp, kernel::MaxPoolOp>(op)) add(bootType);
     if (isa<lwe::RLWEEncodeOp, lwe::RLWEDecodeOp>(op)) add(encoderType);
     if (isa<lwe::RLWEEncryptOp, lwe::RLWEDecryptOp>(op)) add(uiType);
     if (isa<ckks::RelinearizeOp>(op)) add(keyType);
     if (isa<ckks::RotateOp, ckks::BootstrapOp, kernel::LinearTransformOp,
-            kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>(op))
+            kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp,
+            kernel::MaxPoolOp>(op))
       add(mapType);
     if (auto call = dyn_cast<func::CallOp>(op);
         call && isDebugPort(call.getCallee())) {
@@ -1266,10 +1334,13 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     // Preparing twice the CKKS slot capacity wastes FFT transforms and rotation
     // keys, and some backends reject it as exceeding the ring maximum.
     std::optional<int64_t> bootstrapSlots;
+    // A max pool bootstraps its comparisons on the same boot context.
     WalkResult slotWalk =
-        module->walk([&](ckks::BootstrapOp op) {
+        module->walk([&](Operation* op) {
+          if (!isa<ckks::BootstrapOp, kernel::MaxPoolOp>(op))
+            return WalkResult::advance();
           auto ctType = dyn_cast<lwe::LWECiphertextType>(
-              getElementTypeOrSelf(op.getInput().getType()));
+              getElementTypeOrSelf(op->getOperand(0).getType()));
           if (!ctType) return WalkResult::advance();
           // CKKS packs N / 2 complex slots in an RLWE ring with polynomial
           // modulus x^N + 1. SecretToCKKS currently uses that RLWE polynomial
@@ -1282,7 +1353,7 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
                                    .getDegree();
           int64_t slots = ringDegree / 2;
           if (bootstrapSlots && *bootstrapSlots != slots) {
-            op.emitOpError()
+            op->emitOpError()
                 << "mixed bootstrap slot counts are not yet supported: "
                 << *bootstrapSlots << " and " << slots;
             return WalkResult::interrupt();
@@ -1313,9 +1384,10 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
     target.addLegalDialect<cheddar::CheddarDialect>();
     target.addLegalDialect<bufferization::BufferizationDialect>();
     target.addIllegalDialect<ckks::CKKSDialect, lwe::LWEDialect>();
-    target.addIllegalOp<
-        kernel::LinearTransformOp, kernel::PrepareLinearTransformOp,
-        kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp>();
+    target.addIllegalOp<kernel::LinearTransformOp,
+                        kernel::PrepareLinearTransformOp,
+                        kernel::ApplyLinearTransformOp, kernel::EvalChebyshevOp,
+                        kernel::MaxPoolOp>();
     // preprocessing.* ops are legal once their plaintext element types have
     // been converted to cheddar's; --preprocessing-to-cheddar lowers them
     // after.
@@ -1363,8 +1435,8 @@ struct LWEToCheddar : public impl::LWEToCheddarBase<LWEToCheddar> {
                  ConvertKernelPrepareLinearTransformOp,
                  ConvertKernelApplyLinearTransformOp>(
         typeConverter, context, enableMinKs, useCyclopsRuntime, ringDegree);
-    patterns.add<ConvertKernelEvalChebyshevOp>(typeConverter, context,
-                                               useCyclopsRuntime);
+    patterns.add<ConvertKernelEvalChebyshevOp, ConvertKernelMaxPoolOp>(
+        typeConverter, context, useCyclopsRuntime);
     // Payload packing ops -> rank-reducing slice ops (benefit 2 so they win
     // over the structural tensor conversion for payload-typed tensors).
     patterns.add<ConvertPayloadExtract, ConvertPayloadInsert,

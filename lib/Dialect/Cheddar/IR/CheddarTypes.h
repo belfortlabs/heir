@@ -47,6 +47,11 @@ constexpr ::llvm::StringLiteral kBootstrapLogMessageRatioAttrName =
     "cheddar.bootstrap_log_message_ratio";
 constexpr ::llvm::StringLiteral kLinearTransformKeysAttrName =
     "cheddar.linear_transform_keys";
+constexpr ::llvm::StringLiteral kMaxPoolKeysAttrName = "cheddar.max_pool_keys";
+
+// Module marker that cheddar-to-emitc leaves when it emits a Cyclops MaxPool
+// call, so that the entry interface includes extension/max/MaxPool.h.
+constexpr ::llvm::StringLiteral kUsesMaxPoolAttrName = "cheddar.uses_max_pool";
 
 // What cheddar-plan-evaluation-keys leaves in place of the attributes above:
 // the resolved key list, as flat (family, rot_idx, level, key_mode,

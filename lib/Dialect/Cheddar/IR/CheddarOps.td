@@ -871,4 +871,35 @@ def Cheddar_EvalPolyOp : Cheddar_DpsOp<"eval_poly"> {
   let hasVerifier = 1;
 }
 
+def Cheddar_MaxPoolOp : Cheddar_DpsOp<"max_pool"> {
+  let summary = "Max pool the slots of a ciphertext with Cyclops' MaxPool";
+  let description = [{
+    Calls Cyclops' `MaxPool<word>::EvaluateMax` (Cyclops runtime only) with a
+    `MaxPoolConfig` built from the attributes, compact output, a padding value
+    of `-value_bound` and no league level cap. See `kernel.max_pool` for the
+    semantics.
+
+    The kernel bootstraps its comparisons, so it requires a
+    `!cheddar.boot_context`. `level` is the input level, and
+    `levelConsumption` is copied from the `kernel.max_pool` level interface:
+    the result is that many levels below the input. The key planner reads both.
+  }];
+  let arguments = (ins
+    Cheddar_BootContext:$ctx,
+    Cheddar_CtLike:$input,
+    Cheddar_EvkMap:$evkMap,
+    Cheddar_CtLike:$output,
+    I64Attr:$num_slots,
+    I64Attr:$input_length,
+    I64Attr:$window_size,
+    I64Attr:$stride,
+    I64Attr:$dilation,
+    BoolAttr:$ceil_mode,
+    F64Attr:$value_bound,
+    I64Attr:$level,
+    I64Attr:$levelConsumption
+  );
+  let results = (outs Cheddar_CtResult:$result);
+}
+
 #endif  // LIB_DIALECT_CHEDDAR_IR_CHEDDAROPS_TD_
