@@ -22,7 +22,12 @@ cmake(
         "BUILD_PLANNER_TEST": "OFF",
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CXX_STANDARD": "20",
+        # BigInt.h includes <tommath.h>; find_library finds only the library.
+        "CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES": "$$EXT_BUILD_DEPS/include",
     },
+    # The planner's BigInt primality checks need libtommath (Cyclops e997f4b9
+    # and later). The hermetic toolchain cannot see a system copy.
+    deps = ["@libtommath//:tommath"],
     # CMake links try-compiles from scratch directories, outside the execroot.
     env = {"LLVM_CLANGXX": "$$EXT_BUILD_ROOT$$/$(execpath @llvm//tools:clang++)"},
     generate_args = ["-GNinja"],

@@ -15,6 +15,10 @@ cc_library(
         ["*.h"],
         allow_empty = True,
     ),
+    # bn_s_mp_rand_platform.c calls the random sources of other platforms
+    # behind constant-false MP_HAS() checks, and relies on the optimizer to
+    # drop those calls. Without it (fastbuild), a link fails on s_read_*.
+    copts = ["-O2"],
     includes = ["."],
     visibility = ["//visibility:public"],
 )
