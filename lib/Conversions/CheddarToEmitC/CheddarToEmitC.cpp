@@ -1011,6 +1011,98 @@ struct ConvertApplyPreparedLinearTransform
   }
 };
 
+// cheddar.max_pool -> one call of Cyclops' MaxPool:
+//   MaxPoolConfig cfg; (fields from the attributes; compact output, padding
+//                       -value_bound, no league level cap)
+//   MaxPool<word> mp(cfg, input level, input scale);
+//   mp.Compile(cp, boot_ctx);
+//   mp.EvaluateMax(cp, out, in, evk, boot_ctx);
+// cheddar-plan-evaluation-keys checks the levels against PlanMaxPool at compile
+// time; the level checks here fail fast if the compiled MaxPool disagrees.
+// The module is marked so that the entry interface includes MaxPool.h.
+struct ConvertMaxPool : public OpConversionPattern<cheddar::MaxPoolOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      cheddar::MaxPoolOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    Location loc = op.getLoc();
+    Value ctxV = adaptor.getCtx();
+    Value in = adaptor.getInput();
+    Value out = adaptor.getOutput();
+    Value evk = adaptor.getEvkMap();
+    std::string inRef = linearTransformPayloadRef(op.getInput().getType());
+    std::string outRef = linearTransformPayloadRef(op.getOutput().getType());
+    std::string level = std::to_string(op.getLevel());
+    std::string outLevel =
+        std::to_string(op.getLevel() - op.getLevelConsumption());
+
+    auto emit = [&](const Twine& fmt, ValueRange operands) {
+      return VerbatimOp::create(rewriter, loc,
+                                rewriter.getStringAttr(fmt.str()), operands);
+    };
+
+    emit("{", {});
+    // Compile/Evaluate take shared pointers; wrap the raw BootContext* in
+    // non-owning aliases.
+    emit("ConstContextPtr<word> _mp_cp(ConstContextPtr<word>(), {});", {ctxV});
+    emit(
+        "std::shared_ptr<BootContext<word>> "
+        "_mp_bc(std::shared_ptr<BootContext<word>>(), {});",
+        {ctxV});
+    // Field assignments, not a brace list: emitc.verbatim reads `{}` as an
+    // operand placeholder.
+    emit("MaxPoolConfig _mp_cfg;", {});
+    emit("_mp_cfg.total_slots = " + std::to_string(op.getNumSlots()) + ";", {});
+    emit("_mp_cfg.input_length = " + std::to_string(op.getInputLength()) + ";",
+         {});
+    emit("_mp_cfg.window_size = " + std::to_string(op.getWindowSize()) + ";",
+         {});
+    emit("_mp_cfg.stride = " + std::to_string(op.getStride()) + ";", {});
+    emit("_mp_cfg.dilation = " + std::to_string(op.getDilation()) + ";", {});
+    std::string valueBound = floatLit(op.getValueBoundAttr());
+    emit("_mp_cfg.value_bound = " + valueBound + ";", {});
+    emit("_mp_cfg.pad_value = -" + valueBound + ";", {});
+    emit("_mp_cfg.compact_output = true;", {});
+    emit(Twine("_mp_cfg.ceil_mode = ") + (op.getCeilMode() ? "true" : "false") +
+             ";",
+         {});
+    // Disable the small-window league level cap, which HEIR's level model
+    // leaves out (requirement R2 in cyclops_maxpool_requirements.md), when
+    // this Cyclops revision has the option. Without it, the key planner
+    // rejects the pools whose levels the cap changes. No operands, so the
+    // braces are not placeholders.
+    emit(
+        "[](auto& _c) { if constexpr (requires { _c.cap_league_level; }) "
+        "_c.cap_league_level = false; }(_mp_cfg);",
+        {});
+    emit("int _mp_lvl = {}->param_.NPToLevel(" + inRef + ".GetNP());",
+         {ctxV, in});
+    emit("AssertTrue(_mp_lvl == " + level +
+             ", \"MaxPool: the input is not at the level HEIR planned\");",
+         {});
+    emit("MaxPool<word> _mp(_mp_cfg, _mp_lvl, " + inRef + ".GetScale());",
+         {in});
+    emit("_mp.Compile(_mp_cp, _mp_bc);", {});
+    emit("AssertTrue(_mp.GetOutputLevel() == " + outLevel +
+             ", \"MaxPool: the output level differs from HEIR's level "
+             "model\");",
+         {});
+    markDestination(emit("_mp.EvaluateMax(_mp_cp, " + outRef + ", " + inRef +
+                             ", {}, _mp_bc);",
+                         ValueRange{out, in, evk}),
+                    0);
+    emit("}", {});
+
+    // Set directly, not through the rewriter: a modified module would be
+    // legalized again, which the EmitC conversion rejects. If the conversion
+    // rolls back, the marker only adds an unused include.
+    if (auto module = op->getParentOfType<ModuleOp>())
+      module->setAttr(cheddar::kUsesMaxPoolAttrName, rewriter.getUnitAttr());
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // cheddar.eval_poly -> CHEDDAR's EvalPoly<word> class, used like EvalMod does:
 // the level and the input scale come from the input ciphertext, and the target
 // scale is the canonical scale of the level the evaluation lands on. Emitted as
@@ -1771,8 +1863,8 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
         ConvertEncodeConstant, ConvertDecode, ConvertHRot, ConvertHRotAdd,
         ConvertHConj, ConvertHConjAdd, ConvertLinearTransform,
         ConvertPrepareLinearTransform, ConvertApplyPreparedLinearTransform,
-        ConvertEvalPoly, ConvertPrepareLinearTransformKeys, ConvertGetEvkMap>(
-        typeConverter, ctx);
+        ConvertEvalPoly, ConvertMaxPool, ConvertPrepareLinearTransformKeys,
+        ConvertGetEvkMap>(typeConverter, ctx);
     patterns.add<ConvertRuntimeAccessor<cheddar::GetEncoderOp>>(
         typeConverter, ctx, "heir::getEncoder");
     patterns.add<ConvertRuntimeAccessor<cheddar::GetMultKeyOp>>(

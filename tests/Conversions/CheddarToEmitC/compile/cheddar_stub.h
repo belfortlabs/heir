@@ -320,6 +320,40 @@ class BootContext : public Context<word> {
   void AddRequiredRotations(EvkRequest& req, int num_slots) const;
 };
 
+#ifdef HEIR_CYCLOPS_STUB
+// (common/Assert.h)
+void AssertTrue(bool expr, const char* msg);
+
+// 1-D max pooling over the slots of one ciphertext. cap_league_level is the
+// option HEIR requests in cyclops_maxpool_requirements.md (R2).
+// (extension/max/MaxPoolPlanner.h, extension/max/MaxPool.h)
+struct MaxPoolConfig {
+  int total_slots;
+  int input_length;
+  int window_size;
+  int stride;
+  int dilation = 1;
+  double value_bound = 0.5;
+  double pad_value = -0.5;
+  bool compact_output = true;
+  bool ceil_mode = true;
+  bool cap_league_level = true;
+};
+
+template <typename word>
+class MaxPool {
+ public:
+  MaxPool(MaxPoolConfig config, int input_level, double input_scale,
+          KeyMode key_mode = KeyMode::kInherit);
+  void Compile(ConstContextPtr<word> context,
+               std::shared_ptr<BootContext<word>> boot_context);
+  int GetOutputLevel() const;
+  void EvaluateMax(ConstContextPtr<word> context, Ciphertext<word>& maximum,
+                   const Ciphertext<word>& input, const EvkMap<word>& keys,
+                   std::shared_ptr<BootContext<word>> boot_context) const;
+};
+#endif
+
 }  // namespace cheddar
 
 #endif  // TESTS_CONVERSIONS_CHEDDARTOEMITC_COMPILE_CHEDDAR_STUB_H_

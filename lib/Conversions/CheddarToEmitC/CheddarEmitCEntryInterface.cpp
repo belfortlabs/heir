@@ -1194,7 +1194,12 @@ struct CheddarEmitCEntryInterfacePass
       extensionIncludes = {"extension/boot/BootContext.h",
                            "extension/poly/EvalPoly.h",
                            "extension/linalg/LinearTransform.h"};
+      // Older Cyclops revisions have no MaxPool, so include it only when the
+      // program uses it.
+      if (module->hasAttr(cheddar::kUsesMaxPoolAttrName))
+        extensionIncludes.push_back("extension/max/MaxPool.h");
     }
+    module->removeAttr(cheddar::kUsesMaxPoolAttrName);
     for (InterfaceSide side : sides)
       if (failed(buildInterface(module, *functions, runtime, extensionIncludes,
                                 side)))
