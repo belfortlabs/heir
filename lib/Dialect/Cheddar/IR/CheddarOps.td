@@ -159,10 +159,15 @@ def Cheddar_CreateUserInterfaceOp : Cheddar_DpsOp<"create_user_interface"> {
     owning user_interface; `$output` is the destination buffer hint (becomes a
     `std::unique_ptr<UserInterface<word>>&` out-param at the boundary):
     `ui_out = std::make_unique<UserInterface<word>>(ctx)`.
+
+    The optional `$secret_seed` (Cyclops client contexts only) is passed to
+    the constructor, which derives the secrets from it when it holds a value.
   }];
   let arguments = (ins Cheddar_AnyOwningContextLike:$ctx,
+                       Optional<Cheddar_SecretSeed>:$secret_seed,
                        Cheddar_UserInterfaceLike:$output);
   let results = (outs Cheddar_UserInterfaceResult:$result);
+  let hasVerifier = 1;
 }
 
 def Cheddar_CreateBootContextOp : Cheddar_DpsOp<"create_boot_context"> {
