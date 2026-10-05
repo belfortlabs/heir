@@ -13,6 +13,15 @@ module attributes {cheddar.runtime = "cyclops"} {
     return %ui : tensor<!cheddar.user_interface>
   }
 
+  // CHECK: func.func @keygen_from_seed
+  // CHECK-SAME: !emitc.opaque<"const std::optional<::cyclops::prng::Seed>&">
+  // CHECK: emitc.verbatim "{} = std::make_unique<UserInterface<word>>({}, true, ::cyclops::prng::Backend::kShake128, true, {});"
+  func.func @keygen_from_seed(%ctx: tensor<!cheddar.client_context>, %seed: !cheddar.secret_seed) -> tensor<!cheddar.user_interface> {
+    %dest = tensor.empty() : tensor<!cheddar.user_interface>
+    %ui = cheddar.create_user_interface %ctx, %seed, %dest : (tensor<!cheddar.client_context>, !cheddar.secret_seed, tensor<!cheddar.user_interface>) -> tensor<!cheddar.user_interface>
+    return %ui : tensor<!cheddar.user_interface>
+  }
+
   // CHECK: func.func @hrot
   // CHECK: emitc.verbatim "{}->HRot({}, {}, {}.GetRotationKey(5, {}->NativeSecretId(), {}->param_, 4, KeyMode::kInherit), 5);"
   func.func @hrot(%ctx: !context, %evk: !evk_map, %ct: tensor<!ciphertext>) -> tensor<!ciphertext> {

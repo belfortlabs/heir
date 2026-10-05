@@ -171,6 +171,7 @@ cc_library(
         "@llvm-project//mlir:BufferizationTransforms",
         "@llvm-project//mlir:ConvertToEmitC",
         "@llvm-project//mlir:LinalgTransforms",
+        "@llvm-project//mlir:MathTransforms",
         "@llvm-project//mlir:MemRefTransforms",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:ReconcileUnrealizedCasts",
