@@ -93,6 +93,7 @@
 #include "lib/Pipelines/BooleanPipelineRegistration.h"
 // This comment includes internal pipelines
 #include "lib/Pipelines/PipelineRegistration.h"
+#include "lib/Target/Cheddar/MaxPoolInterfaces.h"
 #include "lib/Target/CompilationTarget/RegisterAllBackends.h"
 #include "lib/Target/SCIFRBool/SCIFRBoolEmitter.h"
 #include "lib/Transforms/ActivationCanonicalizations/ActivationCanonicalizations.h"
@@ -543,6 +544,7 @@ int main(int argc, char** argv) {
   secret::registerBufferizableOpInterfaceExternalModels(registry);
   lattigo::registerBufferizableOpInterfaceExternalModels(registry);
   cheddar::registerBufferizableOpInterfaceExternalModels(registry);
+  cheddar::registerMaxPoolInterfaceExternalModels(registry);
   preprocessing::registerBufferizableOpInterfaceExternalModels(registry);
   registerIncreasesMulDepthOpInterface(registry);
   registerLayoutConversionHoistableInterface(registry);
