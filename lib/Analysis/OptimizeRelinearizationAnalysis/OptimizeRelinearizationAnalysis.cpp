@@ -232,11 +232,13 @@ LogicalResult OptimizeRelinearizationAnalysis::solve() {
 
     bool requireLinear = false;
     // A linear transform is a bundle of rotations under Galois keys, and a
-    // Chebyshev evaluation multiplies its input, so like rotation both need a
-    // linear operand; without this the model may defer a relinearization past
-    // them and leave it applied to an already-linear result.
+    // Chebyshev evaluation and a max pool multiply their input, so like
+    // rotation they need a linear operand; without this the model may defer a
+    // relinearization past them and leave it applied to an already-linear
+    // result.
     if (isa<tensor_ext::RotateOp, secret::YieldOp, mgmt::ModReduceOp,
-            kernel::LinearTransformOp, kernel::EvalChebyshevOp>(op)) {
+            kernel::LinearTransformOp, kernel::EvalChebyshevOp,
+            kernel::MaxPoolOp>(op)) {
       requireLinear = true;
     } else {
       SmallVector<OpOperand*, 4> secretOperands;

@@ -318,7 +318,8 @@ void insertModReduceBeforeOrAfterMult(Operation* top, bool afterMul,
     if (includeFloats) {
       patterns.add<ModReduceBefore<arith::MulFOp>>(
           ctx, beforeMulIncludeFirstMul, top, &solver);
-      patterns.add<ModReduceBefore<kernel::EvalChebyshevOp>>(
+      patterns.add<ModReduceBefore<kernel::EvalChebyshevOp>,
+                   ModReduceBefore<kernel::MaxPoolOp>>(
           ctx, beforeMulIncludeFirstMul, top, &solver);
     }
     // includeFirstMul = false here
@@ -917,7 +918,8 @@ void insertBootstrapWaterLine(Operation* top, int bootstrapWaterline,
         } else {
           continue;
         }
-        if (!(levelVal + reduceOp.getLevelsToDrop() > bootstrapWaterline)) {
+        if (!(levelVal + reduceOp.getRequiredInputLevels() >
+              bootstrapWaterline)) {
           continue;
         }
 
