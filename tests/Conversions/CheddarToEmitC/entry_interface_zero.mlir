@@ -8,6 +8,8 @@
 // The module records the runtime it was lowered for, so the pass needs no
 // option; an option that disagrees is an error.
 // CONTRADICT: contradicts the recorded runtime 'cyclops'
+// The server re-plans the client's Galois key upload from the same request.
+// SERVER-H: EvaluationKeyRequest GetKeyRequest();
 // SERVER-H: EncryptedOutputs Evaluate(Context&, const EvaluationKeys*, const PreparedInputs&, const EncryptedInputs&, const DebugSink*);
 // CLIENT-H: EvaluationKeyRequest GetKeyRequest();
 
@@ -27,7 +29,7 @@
 // CHECK: case 1: {{.*}}.RequestConjugationKey(key.level, mode, key.num_aux);
 // CHECK: case 2: {{.*}}.RequestMultiplicationKey(key.level, mode, key.num_aux);
 // CHECK: default: {{.*}}.RequestRotatedMultiplicationKey(
-// CHECK: PrepareRotationKey(GetKeyRequest(),
+// CHECK: PrepareRotationKey({{v[0-9]+}} ? GetKeyRequest() : ::heir::cyclops::withoutRotationKeys(GetKeyRequest()),
 
 !ctx = !emitc.ptr<!emitc.opaque<"Context<word>">>
 !client_ctx = !emitc.ptr<!emitc.opaque<"ClientContext<word>">>
