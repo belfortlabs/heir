@@ -216,17 +216,21 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry, int64_t logN,
 
   builder.setInsertionPointToEnd(moduleOp.getBody());
   std::string keygenName = (entry.getSymName() + "__keygen").str();
-  auto keygenType = FunctionType::get(ctx, {ctxTensor}, {ctxTensor, uiTensor});
+  // The Cyclops keygen also takes the optional seed to derive secrets from.
+  SmallVector<Type> keygenInputs{ctxTensor};
+  if (useCyclopsRuntime) keygenInputs.push_back(SecretSeedType::get(ctx));
+  auto keygenType = FunctionType::get(ctx, keygenInputs, {ctxTensor, uiTensor});
   auto keygenFunc = func::FuncOp::create(builder, loc, keygenName, keygenType);
   keygenFunc.setPublic();
   setInterfaceRole(keygenFunc, kClientKeygenRole, roleAttr);
   bodyBlock = keygenFunc.addEntryBlock();
   builder.setInsertionPointToStart(bodyBlock);
   context = keygenFunc.getArgument(0);
+  Value secretSeed = useCyclopsRuntime ? keygenFunc.getArgument(1) : Value();
   Value uiInit = tensor::EmptyOp::create(builder, loc, uiTensor.getShape(),
                                          uiTensor.getElementType());
   Value ui = CreateUserInterfaceOp::create(builder, loc, TypeRange{uiTensor},
-                                           ValueRange{context, uiInit})
+                                           context, secretSeed, uiInit)
                  ->getResult(0);
   // With the Cyclops runtime the client derives the complete compiled key
   // request from setup metadata, so this lowered keygen prepares nothing here.

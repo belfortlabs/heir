@@ -29,7 +29,7 @@ needs no secret key.
 
 This standalone coverage test builds the generated client and checks ciphertext
 serialization and decryption without evaluating the model. It needs no CUDA
-toolkit or GPU. Use the Cyclops revision pinned in `bazel/cyclops/version.bzl`.
+toolkit or GPU. It needs Cyclops 3d8fa671 or later, for seeded key generation.
 
 ```sh
 CC=clang CXX=clang++ cmake -S tests/Examples/cyclops -B /tmp/heir-cyclops-client \
