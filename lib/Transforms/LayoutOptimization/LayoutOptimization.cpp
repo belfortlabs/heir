@@ -260,6 +260,11 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
     }
   }
 
+  if (hoistingOptions.empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "Skipping op, no valid hoisting results\n");
+    return UNHOISTABLE;
+  }
+
   // Select the least costly layout conversion to hoist.
   auto* minHoistingCost = llvm::min_element(
       hoistingOptions, [](const HoistOption& a, const HoistOption& b) {
