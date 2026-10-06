@@ -249,6 +249,32 @@ struct PointPairCollector {
 void enumeratePoints(const presburger::IntegerRelation& relation,
                      PointPairCollector& collector);
 
+// Call `onPair(domainPoint, rangePoint)` for every point of the relation, in
+// the order enumeratePoints lists them, without storing them.
+void forEachPointPair(
+    const presburger::IntegerRelation& relation,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair);
+
+// Call `onPoint(domainPoint, rangePoint)` for every point of the relation,
+// without ISL: candidates come from the constraints over earlier variables and
+// each is checked exactly. Fails without calling `onPoint` when the relation
+// has symbols, a local variable has no division representation, or a variable
+// has no bounds from constraints over earlier variables. Also fails after a
+// budget of complete candidates, after calling `onPoint` for the points
+// visited so far.
+LogicalResult forEachRelationPoint(
+    const presburger::IntegerRelation& relation,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint);
+
+// Call `onPoint(domainPoint, rangePoint)` for every point of the composition
+// of `stages` (the first stage's domain to the last stage's range), following
+// each point through the stages one at a time. A composed relation has the
+// intermediate coordinates as locals, so forEachRelationPoint may have nothing
+// to narrow the range variables with; each stage on its own does.
+LogicalResult forEachComposedRelationPoint(
+    ArrayRef<presburger::IntegerRelation> stages,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint);
+
 // Get a list of points in the range of the relation by enumerating all
 // possible values.
 void getRangePoints(const presburger::IntegerRelation& relation,
