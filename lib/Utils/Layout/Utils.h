@@ -249,6 +249,12 @@ struct PointPairCollector {
 void enumeratePoints(const presburger::IntegerRelation& relation,
                      PointPairCollector& collector);
 
+// Call `onPair(domainPoint, rangePoint)` for every point of the relation, in
+// the order enumeratePoints lists them, without storing them.
+void forEachPointPair(
+    const presburger::IntegerRelation& relation,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair);
+
 // Get a list of points in the range of the relation by enumerating all
 // possible values.
 void getRangePoints(const presburger::IntegerRelation& relation,

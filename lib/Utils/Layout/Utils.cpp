@@ -932,7 +932,7 @@ void forEachDomainImagePoint(
 }  // namespace
 
 struct WrapCallbackCtx {
-  PointPairCollector* collector;
+  llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair;
   int numDomain;
   int numRange;
 };
@@ -956,21 +956,18 @@ static isl_stat enumeratePointsCallback(__isl_take isl_point* pnt, void* user) {
     }
     isl_val_free(coord);
   }
-  ctx->collector->points.emplace_back(std::move(domainPoint),
-                                      std::move(rangePoint));
+  ctx->onPair(domainPoint, rangePoint);
   isl_point_free(pnt);
   return isl_stat_ok;
 }
 
-void enumeratePoints(const presburger::IntegerRelation& relation,
-                     PointPairCollector& collector) {
-  assert(relation.getNumDomainVars() ==
-             static_cast<unsigned>(collector.domainDims) &&
-         "collector domainDims must match the relation's domain rank");
-  assert(relation.getNumRangeVars() ==
-             static_cast<unsigned>(collector.rangeDims) &&
-         "collector rangeDims must match the relation's range rank");
-  isl_basic_map* bmap = convertRelationToBasicMap(relation, collector.ctx);
+void forEachPointPair(
+    const presburger::IntegerRelation& relation,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair) {
+  int domainDims = relation.getNumDomainVars();
+  int rangeDims = relation.getNumRangeVars();
+  isl_ctx* islCtx = isl_ctx_alloc();
+  isl_basic_map* bmap = convertRelationToBasicMap(relation, islCtx);
 
   SmallVector<int64_t> lb, ub;
   getDomainBox(relation, lb, ub);
@@ -1001,20 +998,35 @@ void enumeratePoints(const presburger::IntegerRelation& relation,
     forEachDomainImagePoint(
         bmap, lb, ub,
         [&](ArrayRef<int64_t> domainPoint, __isl_keep isl_point* imagePoint) {
-          std::vector<int64_t> rangePoint(collector.rangeDims);
-          extractCoords(imagePoint, collector.rangeDims, rangePoint);
-          collector.points.emplace_back(
-              std::vector<int64_t>(domainPoint.begin(), domainPoint.end()),
-              std::move(rangePoint));
+          std::vector<int64_t> rangePoint(rangeDims);
+          extractCoords(imagePoint, rangeDims, rangePoint);
+          onPair(domainPoint, rangePoint);
         });
     isl_basic_map_free(bmap);
   } else {
     isl_basic_set* bset = isl_basic_map_wrap(bmap);
     isl_set* set = isl_set_from_basic_set(bset);
-    WrapCallbackCtx ctx{&collector, collector.domainDims, collector.rangeDims};
+    WrapCallbackCtx ctx{onPair, domainDims, rangeDims};
     isl_set_foreach_point(set, enumeratePointsCallback, &ctx);
     isl_set_free(set);
   }
+  isl_ctx_free(islCtx);
+}
+
+void enumeratePoints(const presburger::IntegerRelation& relation,
+                     PointPairCollector& collector) {
+  assert(relation.getNumDomainVars() ==
+             static_cast<unsigned>(collector.domainDims) &&
+         "collector domainDims must match the relation's domain rank");
+  assert(relation.getNumRangeVars() ==
+             static_cast<unsigned>(collector.rangeDims) &&
+         "collector rangeDims must match the relation's range rank");
+  forEachPointPair(relation, [&](ArrayRef<int64_t> domainPoint,
+                                 ArrayRef<int64_t> rangePoint) {
+    collector.points.emplace_back(
+        std::vector<int64_t>(domainPoint.begin(), domainPoint.end()),
+        std::vector<int64_t>(rangePoint.begin(), rangePoint.end()));
+  });
 }
 
 std::vector<int64_t> anyRangePoint(
