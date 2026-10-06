@@ -2,8 +2,6 @@ name: PR format requirements
 permissions: read-all
 on:
   pull_request:
-    branches:
-      - main
 
 jobs:
   pre-commit-style:

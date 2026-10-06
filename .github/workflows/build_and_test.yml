@@ -3,10 +3,8 @@ permissions: read-all
 on:
   push:
     branches:
-      - main
+      - ml-pipeline
   pull_request:
-    branches:
-      - main
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -15,8 +13,8 @@ jobs:
     runs-on:
       labels: ubuntu-latest
     env:
-      BUILDBUDDY_API_KEY: ${{ github.repository == 'google/heir' && secrets.BUILDBUDDY_API_KEY || 'SEVzwPt2S7PHhY1OxD3u' }}
-      BAZEL_CONFIG_FLAG: ${{ github.repository == 'google/heir' && '--config=ci --config=remote' || '--config=ci' }}
+      BUILDBUDDY_API_KEY: ${{ (github.repository == 'google/heir' || github.repository == 'belfortlabs/heir') && secrets.BUILDBUDDY_API_KEY || 'SEVzwPt2S7PHhY1OxD3u' }}
+      BAZEL_CONFIG_FLAG: ${{ (github.repository == 'google/heir' || github.repository == 'belfortlabs/heir') && '--config=ci --config=remote' || '--config=ci' }}
     steps:
       - name: Check out repository code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1

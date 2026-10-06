@@ -25,6 +25,8 @@ repos:
     hooks:
     -   id: clang-format
         args: ["--style=Google"]
+        # JSON-with-comments parameter files; clang-format mangles the comments.
+        exclude: '^tests/Parameters/.*\.json$'
 
 # Starlark
 -   repo: https://github.com/keith/pre-commit-buildifier
