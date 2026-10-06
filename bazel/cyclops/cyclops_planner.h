@@ -5,6 +5,7 @@
 // c4b4d20487ff855811f3d8de0592ab6871d70ff3), and the constants HEIR uses, for
 // loading the planner at run time.
 // The constants keep Cyclops' values; the structs keep its layout.
+// header_check.py checks this copy against a Cyclops checkout or release.
 
 #include <stddef.h>
 #include <stdint.h>
