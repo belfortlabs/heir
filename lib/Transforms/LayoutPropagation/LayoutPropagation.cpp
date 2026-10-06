@@ -690,10 +690,10 @@ LogicalResult LayoutPropagation::visitOperation(VecmatOp op) {
   LayoutAttr vecLayout = getComposedLayoutAttr(vec);
   if (!isRelationRowMajor(vecType, minSlotCount,
                           vecLayout.getIntegerRelation())) {
-    // Insert a layout conversion op to make the vec layout per-row
+    // Insert a layout conversion op to make the vec layout row major
     auto [toReplace, newVecLayoutAttr] =
         convertToLayout(ctx, builder, op, vec, vecLayout,
-                        getPerRowLayoutRelation(vecType, minSlotCount));
+                        getRowMajorLayoutRelation(vecType, minSlotCount));
     debugAssignLayout(toReplace, newVecLayoutAttr);
     assignedLayouts.insert({toReplace, newVecLayoutAttr});
     vec = toReplace;
