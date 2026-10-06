@@ -142,6 +142,7 @@ cc_binary(
         "@heir//lib/Transforms/DropUnitDims",
         "@heir//lib/Transforms/ElementwiseToAffine",
         "@heir//lib/Transforms/EmitCInterface",
+        "@heir//lib/Transforms/EqualizeActivationRanges",
         "@heir//lib/Transforms/ExternalizeConstants",
         "@heir//lib/Transforms/FoldConstantTensors",
         "@heir//lib/Transforms/FoldPlaintextMasks",

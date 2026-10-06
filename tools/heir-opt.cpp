@@ -114,6 +114,7 @@
 #include "lib/Transforms/DropUnitDims/DropUnitDims.h"
 #include "lib/Transforms/ElementwiseToAffine/ElementwiseToAffine.h"
 #include "lib/Transforms/EmitCInterface/EmitCInterface.h"
+#include "lib/Transforms/EqualizeActivationRanges/EqualizeActivationRanges.h"
 #include "lib/Transforms/ExternalizeConstants/ExternalizeConstants.h"
 #include "lib/Transforms/FoldConstantTensors/FoldConstantTensors.h"
 #include "lib/Transforms/FoldPlaintextMasks/FoldPlaintextMasks.h"
@@ -434,6 +435,7 @@ int main(int argc, char** argv) {
   registerConvertSecretInsertToStaticInsertPasses();
   registerConvertToCiphertextSemanticsPasses();
   registerDropUnitDims();
+  registerEqualizeActivationRangesPasses();
   registerAnnotateModulePasses();
   registerAnnotatePreprocessingPasses();
   registerAnnotateSecretnessPasses();
