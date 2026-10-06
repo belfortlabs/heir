@@ -5,8 +5,6 @@ on:
     branches:
       - ml-pipeline
   pull_request:
-    branches:
-      - ml-pipeline
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
