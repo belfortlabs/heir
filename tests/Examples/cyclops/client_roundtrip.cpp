@@ -44,6 +44,9 @@ int main() {
                                  galoisWire);
   api::EvaluationKeys derived;
   heir::cyclops::readGaloisKeys(context->param_, request, galoisWire, derived);
+  // Layouts whose Galois plan would upload more keep their keys in KeyGen.
+  for (auto& [index, value] : galoisKeys.storage->MutableEvkMap())
+    derived.insert_or_assign(index, std::move(value));
   for (const auto& [key, count] : request.AllRequests())
     if (key.rot_idx != 0)
       (void)derived.GetRotationKey(key.rot_idx, context->NativeSecretId(),
