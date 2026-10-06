@@ -995,17 +995,20 @@ TEST(ConvolutionTest, TestConv1dCwFcwDiagonalizedPaddingExceedsStride) {
 
 // Checks that the filter layout LayoutPropagation assigns to a 2-D conv
 // encodes exactly the reference Toeplitz matrix for the given conv parameters.
+// `inputGap` is the gap of pixel-shuffled data from an earlier strided conv.
 void checkConv2dChwFchwDiagonalized(
     MLIRContext& context, int64_t outputChannels, int64_t inputChannels,
     int64_t filterSize, int64_t dataH, int64_t dataW, int64_t stride,
-    int64_t padding, int64_t ciphertextSize, bool interchangeRows) {
+    int64_t padding, int64_t ciphertextSize, bool interchangeRows,
+    int64_t inputGap = 1) {
   SCOPED_TRACE("f=" + std::to_string(outputChannels) +
                " c=" + std::to_string(inputChannels) +
                " k=" + std::to_string(filterSize) +
                " h=" + std::to_string(dataH) + " w=" + std::to_string(dataW) +
                " stride=" + std::to_string(stride) +
                " padding=" + std::to_string(padding) +
-               " interchangeRows=" + std::to_string(interchangeRows));
+               " interchangeRows=" + std::to_string(interchangeRows) +
+               " inputGap=" + std::to_string(inputGap));
 
   ConvTensor4D filter = deterministicConvFilter(outputChannels, inputChannels,
                                                 filterSize, filterSize);
@@ -1023,7 +1026,7 @@ void checkConv2dChwFchwDiagonalized(
   SmallVector<int64_t> strides = {stride, stride};
 
   auto expandedType = get2dConvChwFchwFilterExpandedType(
-      filterType, dataType, padding, strides, interchangeRows);
+      filterType, dataType, padding, strides, interchangeRows, inputGap);
   auto expected =
       reference2dConvChwFchwMatrix(filter, dataH, dataW, stride, padding);
   int64_t rows = expandedType.getDimSize(0);
@@ -1032,16 +1035,43 @@ void checkConv2dChwFchwDiagonalized(
   // can hold more rows than the reference has: the extra rows belong to the
   // padding channels and stay zero.
   int64_t referenceRows = (int64_t)expected.size();
+  int64_t referenceCols = (int64_t)expected[0].size();
+  int64_t g2 = inputGap * inputGap;
   ASSERT_GE(rows, referenceRows);
-  ASSERT_EQ(cols, (int64_t)expected[0].size());
+  ASSERT_EQ(cols, getPaddedConvChannels(inputChannels, g2) * dataH * dataW);
 
   // The non-diagonalized relation must agree with the reference Toeplitz
   // matrix. It is not interchanged, so it has no padding rows.
   auto expandedRelation =
       get2dConvChwFchwFilterRelation(filterType, dataType, strides, padding);
   EXPECT_EQ(evaluateLayout(expandedRelation, getFilterValueFn,
-                           SmallVector<int64_t>{referenceRows, cols}),
+                           SmallVector<int64_t>{referenceRows, referenceCols}),
             expected);
+
+  // Gapped data is pixel-shuffled by `inputGap`, so the columns follow the
+  // same shuffle: (c, h, w) row-major over (inputChannels, dataH, dataW)
+  // becomes (c / g^2, h * g + (c % g^2) / g, w * g + c % g) row-major over
+  // (paddedInputChannels / g^2, dataH * g, dataW * g). The columns of the
+  // empty input channels stay zero.
+  if (inputGap > 1) {
+    std::vector<std::vector<int>> shuffled(referenceRows,
+                                           std::vector<int>(cols, 0));
+    int64_t gw = dataW * inputGap;
+    for (int64_t r = 0; r < referenceRows; ++r) {
+      for (int64_t c = 0; c < inputChannels; ++c) {
+        for (int64_t h = 0; h < dataH; ++h) {
+          for (int64_t w = 0; w < dataW; ++w) {
+            int64_t from = (c * dataH + h) * dataW + w;
+            int64_t to = (c / g2) * (dataH * inputGap) * gw +
+                         (h * inputGap + (c % g2) / inputGap) * gw +
+                         w * inputGap + c % inputGap;
+            shuffled[r][to] = expected[r][from];
+          }
+        }
+      }
+    }
+    expected = shuffled;
+  }
 
   // Row interchange permutes the matrix rows into the pixel-shuffled order the
   // gapped output layout uses, i.e. the order get2dConvRowInterchangeRelation
@@ -1050,7 +1080,7 @@ void checkConv2dChwFchwDiagonalized(
   // (outputChannels / g^2, outputH * g, outputW * g).
   std::vector<std::vector<int>> expectedRows = expected;
   if (interchangeRows) {
-    int64_t g = stride;
+    int64_t g = stride * inputGap;
     int64_t outputH = convOutputExtent(dataH, filterSize, stride, padding);
     int64_t outputW = convOutputExtent(dataW, filterSize, stride, padding);
     int64_t wOut = outputW * g;
@@ -1072,7 +1102,8 @@ void checkConv2dChwFchwDiagonalized(
   }
 
   auto maybeRels = get2dConvChwFchwFilterAsSequence(
-      filterType, dataType, strides, padding, ciphertextSize, interchangeRows);
+      filterType, dataType, strides, padding, ciphertextSize, interchangeRows,
+      inputGap);
   ASSERT_TRUE(succeeded(maybeRels));
   IntegerRelation composed = maybeRels->front();
   for (const auto& rel : llvm::drop_begin(maybeRels.value())) {
@@ -1158,6 +1189,20 @@ TEST(ConvolutionTest, TestConv2dChwFchwDiagonalizedInterchangedNonSquare) {
                                    /*dataH=*/6, /*dataW=*/8, /*stride=*/2,
                                    padding, /*ciphertextSize=*/128,
                                    /*interchangeRows=*/true);
+  }
+}
+
+TEST(ConvolutionTest, TestConv2dChwFchwDiagonalizedGappedInput) {
+  // Data pixel-shuffled by a gap of 2, as an earlier stride-2 conv leaves it.
+  // 3 input channels leave one channel of the 2x2 block empty. The result is
+  // shuffled by the stride times the input gap.
+  MLIRContext context;
+  for (int64_t stride : {1, 2}) {
+    checkConv2dChwFchwDiagonalized(context, /*outputChannels=*/2,
+                                   /*inputChannels=*/3, /*filterSize=*/2,
+                                   /*dataH=*/4, /*dataW=*/4, stride,
+                                   /*padding=*/0, /*ciphertextSize=*/128,
+                                   /*interchangeRows=*/true, /*inputGap=*/2);
   }
 }
 

@@ -88,9 +88,12 @@ RankedTensorType get1dConvCwFcwFilterExpandedType(RankedTensorType filterType,
                                                   int64_t padding,
                                                   bool interchangeRows = true);
 
+// `inputGap` is the gap of pixel-shuffled data, as produced by an earlier
+// strided conv; the result is then shuffled by `inputGap` times the stride.
 RankedTensorType get2dConvChwFchwFilterExpandedType(
     RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
-    ArrayRef<int64_t> strides = {1, 1}, bool interchangeRows = true);
+    ArrayRef<int64_t> strides = {1, 1}, bool interchangeRows = true,
+    int64_t inputGap = 1);
 
 // Returns an IntegerRelation that represents a diagonalized 2-D Toeplitz matrix
 // that is used to compute a 1-D multichannel convolution filter such that the
@@ -111,7 +114,8 @@ get2dConvChwFchwFilterAsSequence(RankedTensorType filterType,
                                  RankedTensorType dataType,
                                  ArrayRef<int64_t> strides, int64_t padding,
                                  int64_t minSlotCount,
-                                 bool interchangeRows = true);
+                                 bool interchangeRows = true,
+                                 int64_t inputGap = 1);
 
 // Returns an IntegerRelation for a row-interchange map that optimizes the
 // diagonal structure of a convolution's Toeplitz matrix.
