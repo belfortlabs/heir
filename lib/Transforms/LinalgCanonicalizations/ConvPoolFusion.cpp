@@ -172,6 +172,8 @@ FailureOr<ScalingFactorInfo> matchScalingFactor(
     if (matchPattern(arg1, m_Constant(&cstAttr))) {
       if (auto valOpt = extractFloatAttr(cstAttr)) {
         llvm::APFloat val = *valOpt;
+        bool losesInfo;
+        val.convert(semantics, llvm::APFloat::rmNearestTiesToEven, &losesInfo);
         if (isa<arith::DivFOp>(op)) {
           return llvm::APFloat::getOne(semantics) / val;
         } else {
@@ -195,7 +197,8 @@ FailureOr<ScalingFactorInfo> matchScalingFactor(
 
   // Case 2: linalg.generic
   if (auto genericOp = dyn_cast<linalg::GenericOp>(user)) {
-    if (genericOp.getNumDpsInputs() == 1 && genericOp.getNumDpsInits() == 1) {
+    if (genericOp.getNumDpsInputs() == 1 && genericOp.getNumDpsInits() == 1 &&
+        genericOp.getDpsInputOperand(0)->get() == poolResult) {
       Block* body = genericOp.getBody();
       if (body->getOperations().size() == 2) {
         Operation& op = body->getOperations().front();
