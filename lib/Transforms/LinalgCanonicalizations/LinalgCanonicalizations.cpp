@@ -22,6 +22,7 @@
 #include "mlir/include/mlir/Dialect/Utils/StaticValueUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Utils/StructuredOpsUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/AffineExpr.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/AsmState.h"    // from @llvm-project
 #include "mlir/include/mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
@@ -884,6 +885,159 @@ struct RewriteAvgPoolAsConv2D
   }
 };
 
+static bool isZeroInit(Value value) {
+  if (auto fillOp = value.getDefiningOp<linalg::FillOp>())
+    return matchPattern(fillOp.getInputs()[0], m_AnyZeroFloat());
+  return matchPattern(value, m_AnyZeroFloat());
+}
+
+// Returns the [rows, cols] matrix `attr` with each element along `repeatDim`
+// repeated `repeats` times and multiplied by `scale`, as a dense resource when
+// `attr` is one so that assign_layout can fold it into packed constants.
+template <typename T>
+static TypedAttr repeatAndScale(ElementsAttr attr, int64_t repeatDim,
+                                int64_t repeats, double scale) {
+  auto dense = dyn_cast<DenseElementsAttr>(attr);
+  if (auto resource = dyn_cast<DenseResourceElementsAttr>(attr))
+    dense = DenseElementsAttr::getFromRawBuffer(resource.getType(),
+                                                resource.getData());
+  if (!dense) return {};
+  SmallVector<T> values = llvm::to_vector(dense.getValues<T>());
+
+  auto type = cast<ShapedType>(attr.getType());
+  SmallVector<int64_t> shape(type.getShape());
+  int64_t oldCols = shape[1];
+  shape[repeatDim] *= repeats;
+  SmallVector<T> result;
+  result.reserve(shape[0] * shape[1]);
+  for (int64_t i = 0; i < shape[0]; ++i) {
+    for (int64_t j = 0; j < shape[1]; ++j) {
+      int64_t row = repeatDim == 0 ? i / repeats : i;
+      int64_t col = repeatDim == 1 ? j / repeats : j;
+      result.push_back(static_cast<T>(values[row * oldCols + col] * scale));
+    }
+  }
+
+  auto resultType = RankedTensorType::get(shape, type.getElementType());
+  if (isa<DenseResourceElementsAttr>(attr))
+    return DenseResourceElementsAttr::get(
+        resultType, "folded_pool_weights",
+        HeapAsmResourceBlob::allocateAndCopyInferAlign<T>(result));
+  return DenseElementsAttr::get(resultType, ArrayRef<T>(result));
+}
+
+/// Folds a sum or average pool over the whole spatial extent, whose flattened
+/// result feeds a matmul with constant weights, into one matmul over the
+/// flattened pool input. The weights of each channel are repeated once per
+/// pooled element and divided by the pool's divisor. This is the global average
+/// pool and linear layer at the head of a ResNet, for which the pool would
+/// otherwise become a C x C x H x W convolution.
+struct FoldGlobalPoolIntoMatmul
+    : public OpRewritePattern<linalg::PoolingNchwSumOp> {
+ public:
+  FoldGlobalPoolIntoMatmul(MLIRContext* context)
+      : OpRewritePattern<linalg::PoolingNchwSumOp>(context, /*benefit=*/3) {}
+
+  LogicalResult matchAndRewrite(linalg::PoolingNchwSumOp poolOp,
+                                PatternRewriter& rewriter) const override {
+    Value input = poolOp.getInputs()[0];
+    auto inputTy = cast<RankedTensorType>(input.getType());
+    auto filterTy = cast<RankedTensorType>(poolOp.getInputs()[1].getType());
+    if (!inputTy.hasStaticShape() ||
+        filterTy.getShape() != inputTy.getShape().drop_front(2) ||
+        !llvm::all_of(poolOp.getDilations().getValues<int64_t>(),
+                      [](int64_t d) { return d == 1; }))
+      return rewriter.notifyMatchFailure(poolOp,
+                                         "pool window is not the whole input");
+    if (!isZeroInit(poolOp.getOutputs()[0]))
+      return rewriter.notifyMatchFailure(poolOp, "pool init is not zero");
+
+    Value pooled = poolOp.getResult(0);
+    Operation* divOp = nullptr;
+    double scale = 1.0;
+    if (pooled.hasOneUse()) {
+      FailureOr<ScalingFactorInfo> scaleInfo = matchScalingFactor(
+          *pooled.getUsers().begin(), pooled, APFloat::IEEEdouble());
+      if (succeeded(scaleInfo)) {
+        auto genericOp = dyn_cast<linalg::GenericOp>(scaleInfo->op);
+        if (genericOp &&
+            !llvm::all_of(genericOp.getIndexingMapsArray(),
+                          [](AffineMap map) { return map.isIdentity(); }))
+          return rewriter.notifyMatchFailure(poolOp,
+                                             "rescale is not elementwise");
+        divOp = scaleInfo->op;
+        pooled = divOp->getResult(0);
+        scale = scaleInfo->scale.convertToDouble();
+      }
+    }
+
+    if (!pooled.hasOneUse())
+      return rewriter.notifyMatchFailure(poolOp, "pool has multiple users");
+    auto collapseOp =
+        dyn_cast<tensor::CollapseShapeOp>(*pooled.getUsers().begin());
+    SmallVector<ReassociationIndices> flatten = {{0}, {1, 2, 3}};
+    if (!collapseOp || collapseOp.getReassociationIndices() != flatten ||
+        !collapseOp->hasOneUse())
+      return rewriter.notifyMatchFailure(poolOp, "pool is not flattened");
+    auto matmulOp = dyn_cast<linalg::MatmulOp>(*collapseOp->getUsers().begin());
+    if (!matmulOp || matmulOp.hasUserDefinedMaps() ||
+        matmulOp.getInputs()[0] != collapseOp.getResult())
+      return rewriter.notifyMatchFailure(
+          poolOp, "flattened pool does not feed a matmul");
+
+    // The weights are [C, O], or [O, C] under a transpose.
+    Value weights = matmulOp.getInputs()[1];
+    auto transposeOp = weights.getDefiningOp<linalg::TransposeOp>();
+    if (transposeOp) {
+      if (transposeOp.getPermutation() != ArrayRef<int64_t>{1, 0})
+        return rewriter.notifyMatchFailure(poolOp, "unsupported transpose");
+      weights = transposeOp.getInput();
+    }
+    ElementsAttr weightsAttr;
+    if (!matchPattern(weights, m_Constant(&weightsAttr)))
+      return rewriter.notifyMatchFailure(poolOp, "weights are not constant");
+
+    int64_t channelDim = transposeOp ? 1 : 0;
+    int64_t area = inputTy.getDimSize(2) * inputTy.getDimSize(3);
+    Type weightsElementType = weightsAttr.getElementType();
+    TypedAttr newWeightsAttr;
+    if (weightsElementType.isF32())
+      newWeightsAttr =
+          repeatAndScale<float>(weightsAttr, channelDim, area, scale);
+    else if (weightsElementType.isF64())
+      newWeightsAttr =
+          repeatAndScale<double>(weightsAttr, channelDim, area, scale);
+    if (!newWeightsAttr)
+      return rewriter.notifyMatchFailure(poolOp, "unsupported weights");
+
+    Location loc = matmulOp.getLoc();
+    rewriter.setInsertionPoint(matmulOp);
+    auto flatTy = RankedTensorType::get(
+        {inputTy.getDimSize(0),
+         inputTy.getNumElements() / inputTy.getDimSize(0)},
+        inputTy.getElementType());
+    Value flat =
+        tensor::CollapseShapeOp::create(rewriter, loc, flatTy, input, flatten);
+    Value newWeights = arith::ConstantOp::create(rewriter, loc, newWeightsAttr);
+    if (transposeOp) {
+      auto shape = cast<ShapedType>(newWeightsAttr.getType()).getShape();
+      Value empty = tensor::EmptyOp::create(
+          rewriter, loc, ArrayRef<int64_t>{shape[1], shape[0]},
+          weightsElementType);
+      newWeights = linalg::TransposeOp::create(rewriter, loc, newWeights, empty,
+                                               transposeOp.getPermutation())
+                       .getResult()[0];
+    }
+    rewriter.replaceOpWithNewOp<linalg::MatmulOp>(
+        matmulOp, matmulOp.getResultTypes(), ValueRange{flat, newWeights},
+        matmulOp.getOutputs());
+    rewriter.eraseOp(collapseOp);
+    if (divOp) rewriter.eraseOp(divOp);
+    rewriter.eraseOp(poolOp);
+    return success();
+  }
+};
+
 /// A rewrite pattern that fuses a 2D convolution operation followed by a 2D
 /// sum pooling operation (and optional average-pooling division/multiplication)
 /// into a single, equivalent 2D convolution operation.
@@ -1411,10 +1565,11 @@ struct LinalgCanonicalizations
     patterns.add<
         BroadcastToExpandShape, DropCfAssertInLinalg, FoldBroadcastExtractSlice,
         FoldConstantBroadcast, FoldConstantFill, FoldConstantLinalgTranspose,
-        FuseConv2DPooling, LinalgGenericToElementwise, LinalgMapToElementwise,
-        MaterializeBroadcasts, RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D,
-        RewriteTransposedMatvec, RewriteTransposedVecmat, UndilateConv1DNcwFcw,
-        UndilateConv2DNchwFchw>(context);
+        FoldGlobalPoolIntoMatmul, FuseConv2DPooling, LinalgGenericToElementwise,
+        LinalgMapToElementwise, MaterializeBroadcasts, RewriteAvgPoolAsConv1D,
+        RewriteAvgPoolAsConv2D, RewriteTransposedMatvec,
+        RewriteTransposedVecmat, UndilateConv1DNcwFcw, UndilateConv2DNchwFchw>(
+        context);
 
     mlir::linalg::populateDecomposeProjectedPermutationPatterns(patterns);
 
