@@ -1,6 +1,7 @@
 // Verify Cyclops bootstrap configuration and generated evaluation-key requests.
 // RUN: heir-opt --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=8192 greedy-level-budget=6 greedy-bootstrap-waterline=3" --scheme-to-cheddar="entry-function=bootstrap runtime=cyclops" %s | FileCheck %s --check-prefix=CYCLOPS
 // RUN: heir-opt --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=8192 greedy-level-budget=6 greedy-bootstrap-waterline=3" --scheme-to-cheddar="entry-function=bootstrap runtime=cyclops" --cheddar-to-emitc --cheddar-emitc-entry-interface=runtime=cyclops %s | heir-translate --mlir-to-cpp --file-id=client_source | FileCheck %s --check-prefix=CLIENT --implicit-check-not=AddBootstrapRequiredRotations
+// REQUIRES: cyclops-planner
 
 // Exercise parameter generation and context configuration together. The
 // generated Q chain must be deep enough for 4 CtS + 8 EvalMod + 2 StC levels;
