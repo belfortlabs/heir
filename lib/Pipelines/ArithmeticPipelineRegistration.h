@@ -98,6 +98,13 @@ struct MlirToRLWEPipelineOptions : public LoopOptions {
                      "instead of a single-polynomial max(x,0) fit. More "
                      "accurate for deep nets; needs more depth/bootstrapping."),
       llvm::cl::init(false)};
+  PassOptions::Option<double> rangeEqualizationTarget{
+      *this, "range-equalization-target",
+      llvm::cl::desc("With use-composite-relu, fold scale factors into the "
+                     "linear ops of a torch-linalg program so that the "
+                     "calibrated ReLU domains lie within [-target, target] "
+                     "(see --equalize-activation-ranges). 0 disables it."),
+      llvm::cl::init(0.5)};
   PassOptions::Option<bool> debug{
       *this, "debug",
       llvm::cl::desc("Insert debug ports after every secret operation."),

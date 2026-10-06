@@ -52,6 +52,7 @@
 #include "lib/Transforms/ConvertToCiphertextSemantics/ConvertToCiphertextSemantics.h"
 #include "lib/Transforms/DropUnitDims/DropUnitDims.h"
 #include "lib/Transforms/ElementwiseToAffine/ElementwiseToAffine.h"
+#include "lib/Transforms/EqualizeActivationRanges/EqualizeActivationRanges.h"
 #include "lib/Transforms/ExternalizeConstants/ExternalizeConstants.h"
 #include "lib/Transforms/FoldConstantTensors/FoldConstantTensors.h"
 #include "lib/Transforms/FoldPlaintextMasks/FoldPlaintextMasks.h"
@@ -862,6 +863,11 @@ void linalgPreprocessingBuilder(OpPassManager& manager) {
 void torchLinalgToCkksBuilder(OpPassManager& manager,
                               const MlirToRLWEPipelineOptions& options) {
   manager.addPass(debug::createDebugValidateNames());
+  if (options.useCompositeRelu && options.rangeEqualizationTarget > 0) {
+    EqualizeActivationRangesOptions equalizeOptions;
+    equalizeOptions.target = options.rangeEqualizationTarget;
+    manager.addPass(createEqualizeActivationRanges(equalizeOptions));
+  }
   linalgPreprocessingBuilder(manager);
   MlirToRLWEPipelineOptions suboptions;
 
