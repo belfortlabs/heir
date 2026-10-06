@@ -80,9 +80,10 @@ func.func @fuse_conv_2d(%arg0: tensor<1x3x16x16xf32>, %arg1: tensor<8x3x3x3xf32>
 // CHECK: %[[EMPTY_W:.*]] = tensor.empty() : tensor<3x4xf32>
 // CHECK: %[[BROADCAST_W:.*]] = linalg.broadcast ins(%arg2 : tensor<4xf32>) outs(%[[EMPTY_W]] : tensor<3x4xf32>) dimensions = [0]
 // CHECK: %[[SCALED_W:.*]] = arith.mulf %arg1, %[[BROADCAST_W]] : tensor<3x4xf32>
+// CHECK: %[[SCALED_OUTS:.*]] = arith.mulf %arg4, %{{.*}} : tensor<2x4xf32>
 // CHECK: %[[EMPTY_OUT:.*]] = tensor.empty() : tensor<2x4xf32>
 // CHECK: %[[BROADCAST_OUT:.*]] = linalg.broadcast ins(%arg3 : tensor<4xf32>) outs(%[[EMPTY_OUT]] : tensor<2x4xf32>) dimensions = [0]
-// CHECK: %[[NEW_OUTS:.*]] = arith.addf %arg4, %[[BROADCAST_OUT]] : tensor<2x4xf32>
+// CHECK: %[[NEW_OUTS:.*]] = arith.addf %[[SCALED_OUTS]], %[[BROADCAST_OUT]] : tensor<2x4xf32>
 // CHECK: %[[RESULT:.*]] = linalg.matmul ins(%arg0, %[[SCALED_W]] : tensor<2x3xf32>, tensor<3x4xf32>) outs(%[[NEW_OUTS]] : tensor<2x4xf32>)
 // CHECK: return %[[RESULT]]
 func.func @fuse_matmul_with_bias(%arg0: tensor<2x3xf32>, %arg1: tensor<3x4xf32>, %arg2: tensor<4xf32>, %arg3: tensor<4xf32>, %arg4: tensor<2x4xf32>) -> tensor<2x4xf32> {
