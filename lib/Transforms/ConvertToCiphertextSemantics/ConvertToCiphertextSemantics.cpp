@@ -551,10 +551,17 @@ class ConvertConvertLayout
   LogicalResult matchAndRewrite(
       tensor_ext::ConvertLayoutOp op, OpAdaptor adaptor,
       ContextAwareConversionPatternRewriter& rewriter) const final {
-    LayoutAttr fromLayout = dyn_cast<LayoutAttr>(op.getFromLayout());
-    LayoutAttr toLayout = dyn_cast<LayoutAttr>(op.getToLayout());
+    // A strided conv records its result layout as a list of steps; convert
+    // from (or to) the layout the list composes to.
+    auto asLayout = [&](Attribute attr) -> LayoutAttr {
+      if (auto arrayAttr = dyn_cast<ArrayAttr>(attr))
+        return LayoutAttr::composeLayouts(arrayAttr, getContext());
+      return dyn_cast<LayoutAttr>(attr);
+    };
+    LayoutAttr fromLayout = asLayout(op.getFromLayout());
+    LayoutAttr toLayout = asLayout(op.getToLayout());
     if (!fromLayout || !toLayout) {
-      return failure();
+      return rewriter.notifyMatchFailure(op, "unsupported layout attribute");
     }
 
     // This is persisted as an operation rather than lowered eagerly to a shift
