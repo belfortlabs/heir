@@ -20,6 +20,8 @@ int fail(char** error) {
 
 }  // namespace
 
+extern "C" {
+
 void cyclops_free_error(char* error) { std::free(error); }
 
 cyclops_params* cyclops_params_create(int, double, int, const int32_t*, size_t,
@@ -115,3 +117,5 @@ int cyclops_add_mod1_required_keys(cyclops_evk_request*, const cyclops_mod1*,
                                    int, int, int, char** error) {
   return fail(error);
 }
+
+}  // extern "C"
