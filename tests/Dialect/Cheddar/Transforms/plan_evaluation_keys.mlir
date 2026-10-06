@@ -1,4 +1,5 @@
 // RUN: heir-opt %s --cheddar-plan-evaluation-keys | FileCheck %s
+// REQUIRES: cyclops-planner
 
 // The requested rotation by 3 at level 0, and the rotations the width-8
 // linear transform at level 1 needs, as (family, rotation, level, key mode,

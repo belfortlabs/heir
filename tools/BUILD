@@ -29,7 +29,6 @@ cc_binary(
         "HEIR_YOSYS_SCRIPTS_DIR=\\\"" + WORKSPACE_PATH + "lib/Transforms/YosysOptimizer/yosys\\\"",
     ],
     includes = ["include"],
-    tags = ["no-remote"],
     deps = [
         "@heir//lib/Analysis/NoiseAnalysis",  # buildcleaner: keep
         "@heir//lib/Analysis/NoiseAnalysis/BFV:NoiseAnalysis",  # buildcleaner: keep

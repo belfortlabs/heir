@@ -80,12 +80,14 @@ cc_library(
     name = "PlanEvaluationKeys",
     srcs = ["PlanEvaluationKeys.cpp"],
     hdrs = ["PlanEvaluationKeys.h"],
-    implementation_deps = ["@cyclops//:planner"],
+    implementation_deps = ["@heir//bazel/cyclops:planner"],
     linkopts = select({
         "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
-        "//conditions:default": ["-Wl,-rpath,$$ORIGIN"],
+        "//conditions:default": [
+            "-ldl",
+            "-Wl,-rpath,$$ORIGIN",
+        ],
     }),
-    tags = ["no-remote"],
     deps = [
         ":plan_evaluation_keys_inc_gen",
         "@heir//lib/Dialect:ModuleAttributes",

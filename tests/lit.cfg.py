@@ -65,3 +65,12 @@ substitutions = {
     "%mlir_lib_dir": str(mlir_tools_path),
 }
 config.substitutions.extend(substitutions.items())
+
+# Tests that plan Cyclops evaluation keys need the planner library, which
+# heir-opt loads from the library path. They run when CYCLOPS_PLANNER_DIR names
+# a directory with libcyclops_planner, e.g.
+# bazel test --test_env=CYCLOPS_PLANNER_DIR=/path/to/dir //tests/...
+if planner_dir := os.environ.get("CYCLOPS_PLANNER_DIR"):
+  config.available_features.add("cyclops-planner")
+  for name in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+    config.environment[name] = planner_dir

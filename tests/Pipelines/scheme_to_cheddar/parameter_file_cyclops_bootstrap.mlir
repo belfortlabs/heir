@@ -1,5 +1,6 @@
 // RUN: heir-opt --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=8192 greedy-level-budget=15 greedy-bootstrap-waterline=1 cheddar-parameter-file=%S/../../Parameters/cyclops/bootparam_35bit_14lvl.json" --scheme-to-cheddar="entry-function=bootstrap runtime=cyclops" %s | FileCheck %s
 // RUN: heir-opt --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=8192 greedy-level-budget=15 greedy-bootstrap-waterline=1 cheddar-parameter-file=%S/../../Parameters/cyclops/bootparam_35bit_14lvl.json" --scheme-to-cheddar="entry-function=bootstrap runtime=cyclops" --cheddar-to-emitc --cheddar-emitc-entry-interface=runtime=cyclops %s | heir-translate --mlir-to-cpp --file-id=server_source | FileCheck %s --check-prefix=SERVER
+// REQUIRES: cyclops-planner
 
 // A bootstrapping program on the 32-bit chain: the level budget of 15 spans
 // the file's residual levels 0..14, so the bootstrap lands where HEIR expects

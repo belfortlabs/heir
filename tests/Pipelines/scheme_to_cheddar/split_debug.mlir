@@ -1,4 +1,5 @@
 // RUN: heir-opt %s --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=4096" --scheme-to-cheddar="entry-function=split runtime=cyclops" --cheddar-to-emitc --cheddar-emitc-entry-interface="runtime=cyclops" | heir-translate --mlir-to-cpp --file-id=server_source | FileCheck %s --implicit-check-not=UserInterface --implicit-check-not=SecretKey
+// REQUIRES: cyclops-planner
 
 // CHECK: const heir::cyclops::DebugSink<word>*
 // CHECK: heir::cyclops::emitCheckpoint
