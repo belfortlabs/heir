@@ -11,6 +11,7 @@
 #include <istream>
 #include <map>
 #include <ostream>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -184,63 +185,33 @@ rotationKeyShapes(const Parameter<Word>& parameter,
   return shapes;
 }
 
+// The Galois key plans for a request's rotation keys: one PlanGaloisKeys call
+// over every (rotation, layout) pair, whose layouts share tiers where that
+// uploads fewer bytes. A layout whose tiers would cost more gets a plan without
+// tiers, whose seeds are its rotation keys. Plans in the parameter's ring only:
+// a Parameter alone has no 2N profile. Client and server plan alike, from the
+// same request and parameter.
 template <typename Word>
-std::map<KeySwitchShape, std::vector<int>> galoisKeyGroups(
+std::vector<::cyclops::GaloisKeyPlan<Word>> galoisKeyPlans(
     const Parameter<Word>& parameter, const EvaluationKeyRequest& request) {
-  std::map<KeySwitchShape, std::vector<int>> groups;
+  std::set<std::pair<int, KeySwitchShape>> pairs;
   for (const auto& [key, shape] : rotationKeyShapes(parameter, request))
-    groups[shape].push_back(key.rot_idx);
-  for (auto& [shape, rotations] : groups) {
-    std::sort(rotations.begin(), rotations.end());
-    rotations.erase(std::unique(rotations.begin(), rotations.end()),
-                    rotations.end());
+    pairs.insert({key.rot_idx, shape});
+  std::vector<std::pair<int, ::cyclops::KeySwitchLayout<Word>>> requests;
+  for (const auto& [rotation, shape] : pairs) {
+    const auto [numMain, numTer, numAux] = shape;
+    requests.emplace_back(
+        rotation, ::cyclops::KeySwitchLayout<Word>(
+                      parameter, ::cyclops::NPInfo(numMain, numTer, numAux)));
   }
-  return groups;
+  return ::cyclops::PlanGaloisKeys<Word>(parameter, parameter, requests);
 }
 
-// Plans in the parameter's ring only: a Parameter alone has no 2N profile.
-template <typename Word>
-::cyclops::GaloisKeyPlan<Word> planGaloisKeys(
-    const Parameter<Word>& parameter, const KeySwitchShape& shape,
-    const std::vector<int>& rotations) {
-  const auto [numMain, numTer, numAux] = shape;
-  return ::cyclops::PlanGaloisKeys<Word>(
-      parameter,
-      ::cyclops::KeySwitchLayout<Word>(
-          parameter, ::cyclops::NPInfo(numMain, numTer, numAux)),
-      rotations);
-}
-
-// The layouts whose Galois plan uploads fewer bytes than their rotation keys
-// as seeds, with their plans. The other layouts' rotation keys stay in KeyGen.
-// Client and server decide alike, from the same request and parameter.
-template <typename Word>
-std::map<KeySwitchShape, ::cyclops::GaloisKeyPlan<Word>> galoisKeyPlans(
-    const Parameter<Word>& parameter, const EvaluationKeyRequest& request) {
-  std::map<KeySwitchShape, ::cyclops::GaloisKeyPlan<Word>> plans;
-  for (const auto& [shape, rotations] : galoisKeyGroups(parameter, request)) {
-    auto plan = planGaloisKeys(parameter, shape, rotations);
-    const auto& hot = plan.hot.layout;
-    const std::size_t direct = rotations.size() * hot.NumDigits() *
-                               (hot.Basis().PolynomialSize() * sizeof(Word) +
-                                ::cyclops::prng::Seed::kBytes);
-    if (plan.cost.upload_bytes < direct) plans.emplace(shape, std::move(plan));
-  }
-  return plans;
-}
-
-// A request without the rotation keys the Galois key upload carries: KeyGen
-// generates the rest, including the rotation keys of layouts whose Galois plan
-// would upload more than they do.
-template <typename Word>
-EvaluationKeyRequest withoutRotationKeys(const EvaluationKeyRequest& request,
-                                         const Parameter<Word>& parameter) {
-  const auto plans = galoisKeyPlans(parameter, request);
+// A request without the rotation keys, which the Galois key upload carries:
+// KeyGen generates the rest.
+inline EvaluationKeyRequest withoutRotationKeys(
+    const EvaluationKeyRequest& request) {
   EvaluationKeyRequest result;
-  for (const auto& [key, shape] : rotationKeyShapes(parameter, request))
-    if (!plans.count(shape))
-      result.AddRequest(key.rot_idx, key.level, key.key_mode,
-                        key.required_num_aux);
   for (const auto& [key, count] : request.ConjugationRequests())
     for (int i = 0; i < count; ++i)
       result.RequestConjugationKey(key.level, key.key_mode,
@@ -256,7 +227,7 @@ EvaluationKeyRequest withoutRotationKeys(const EvaluationKeyRequest& request,
   return result;
 }
 
-// Client: one Galois key upload per layout galoisKeyPlans keeps.
+// Client: one Galois key upload per plan.
 // `client` is the UserInterface of the KeyPair from KeyGen(..., false).
 template <typename UserInterface, typename Word>
 void writeGaloisKeys(const UserInterface& client,
@@ -265,7 +236,7 @@ void writeGaloisKeys(const UserInterface& client,
   cereal::PortableBinaryOutputArchive ar(out);
   const auto plans = galoisKeyPlans(parameter, request);
   ar(static_cast<std::uint32_t>(plans.size()));
-  for (const auto& [shape, plan] : plans)
+  for (const auto& plan : plans)
     ar(::cyclops::SendGaloisKeyUpload<Word>(
         ::cyclops::WireSerializer::kCereal,
         client.GenerateGaloisKeyUpload(plan)));
@@ -284,7 +255,7 @@ void readGaloisKeys(const Parameter<Word>& parameter,
   ar(count);
   require(count == plans.size(),
           "readGaloisKeys: the upload does not match the planned layouts");
-  for (const auto& [shape, plan] : plans) {
+  for (const auto& plan : plans) {
     std::string bytes;
     ar(bytes);
     auto cold = ::cyclops::DeriveGaloisColdStorage(

@@ -21,7 +21,7 @@
 // CLIENT-CPP: EvaluationKeyRequest GetKeyRequest
 // CLIENT-CPP: KeyPair KeyGen(const std::shared_ptr<Context>& [[KCTX:v[0-9]+]], const std::optional<::cyclops::prng::Seed>& [[KSEED:v[0-9]+]], bool [[KROT:v[0-9]+]]) {
 // CLIENT-CPP: split__keygen([[KCTX]], [[KSEED]], {{v[0-9]+}}.storage);
-// CLIENT-CPP: PrepareRotationKey([[KROT]] ? GetKeyRequest() : ::heir::cyclops::withoutRotationKeys(GetKeyRequest(), [[KCTX]]->param_),
+// CLIENT-CPP: PrepareRotationKey([[KROT]] ? GetKeyRequest() : ::heir::cyclops::withoutRotationKeys(GetKeyRequest()),
 // SERVER-H: namespace heir::generated::split::server
 // SERVER-CPP: #include "split_server.h"
 // SERVER-CPP: Context<word>::Create
