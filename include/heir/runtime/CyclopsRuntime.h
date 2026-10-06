@@ -141,62 +141,55 @@ EvaluationKeys<Word> readKeys(const Parameter<Word>& parameter,
 
 // A request with every key except the rotation keys, for a KeyGen whose
 // rotation keys the server derives.
-inline EvaluationKeyRequest withoutRotationKeys(
-    const EvaluationKeyRequest& request) {
-  EvaluationKeyRequest result;
-  for (const auto& [key, count] : request.ConjugationRequests())
-    for (int i = 0; i < count; ++i)
-      result.RequestConjugationKey(key.level, key.key_mode,
-                                   key.required_num_aux);
-  for (const auto& [key, count] : request.MultiplicationRequests())
-    for (int i = 0; i < count; ++i)
-      result.RequestMultiplicationKey(key.level, key.key_mode,
-                                      key.required_num_aux);
-  for (const auto& [key, count] : request.RotatedMultiplicationRequests())
-    for (int i = 0; i < count; ++i)
-      result.RequestRotatedMultiplicationKey(
-          key.rot_idx, key.level, key.key_mode, key.required_num_aux);
-  return result;
-}
-
 // (num_main, num_ter, num_aux) of a key-switching layout.
 using KeySwitchShape = std::tuple<int, int, int>;
 
-// The rotation keys of a request, grouped by the key-switching layout
-// UserInterface::PrepareRotationKey would build each at: a request whose
-// level resolves to the default key gets that rotation's default key, as wide
-// as its widest such request, and every other request its level's exact key.
+// The rotation keys of a request, each with the key-switching layout
+// UserInterface::PrepareRotationKey would build it at: a request whose level
+// resolves to the default key gets that rotation's default key, as wide as its
+// widest such request, and every other request its level's exact key.
 // PrepareRotationKey also drops an exact key a default or wider key serves as
 // well; the derivation keeps it, so the evaluator may find a better fit.
 template <typename Word>
-std::map<KeySwitchShape, std::vector<int>> galoisKeyGroups(
-    const Parameter<Word>& parameter, const EvaluationKeyRequest& request) {
+std::vector<std::pair<::cyclops::EvkRequestKey, KeySwitchShape>>
+rotationKeyShapes(const Parameter<Word>& parameter,
+                  const EvaluationKeyRequest& request) {
   const ::cyclops::SecretId secret = parameter.NativeSecretId();
   std::map<int, int> defaultMain;
-  std::map<KeySwitchShape, std::vector<int>> groups;
+  std::vector<std::pair<::cyclops::EvkRequestKey, ::cyclops::KeySwitchConfig>>
+      resolved;
   for (const auto& [key, count] : request.AllRequests()) {
     if (key.rot_idx == 0) continue;
-    require(key.rot_idx > 0, "galoisKeyGroups: negative rotation index");
+    require(key.rot_idx > 0, "rotationKeyShapes: negative rotation index");
     const auto config = parameter.ResolveKeySwitchConfig(
         key.level, key.key_mode, /*is_relin=*/false, secret);
     require(key.required_num_aux < 0 || config.num_aux == key.required_num_aux,
-            "galoisKeyGroups: planned key aux count does not match request "
+            "rotationKeyShapes: planned key aux count does not match request "
             "constraint");
     if (config.use_default) {
       auto [it, inserted] =
           defaultMain.try_emplace(key.rot_idx, config.num_main);
       if (!inserted) it->second = std::max(it->second, config.num_main);
-      continue;
     }
-    groups[{config.num_main, config.num_ter, config.num_aux}].push_back(
-        key.rot_idx);
+    resolved.push_back({key, config});
   }
-  for (const auto& [rotation, numMain] : defaultMain) {
-    const auto config =
-        parameter.DefaultKeySwitchConfigForMain(numMain, secret);
-    groups[{config.num_main, config.num_ter, config.num_aux}].push_back(
-        rotation);
+  std::vector<std::pair<::cyclops::EvkRequestKey, KeySwitchShape>> shapes;
+  for (const auto& [key, config] : resolved) {
+    const auto used = config.use_default
+                          ? parameter.DefaultKeySwitchConfigForMain(
+                                defaultMain.at(key.rot_idx), secret)
+                          : config;
+    shapes.push_back({key, {used.num_main, used.num_ter, used.num_aux}});
   }
+  return shapes;
+}
+
+template <typename Word>
+std::map<KeySwitchShape, std::vector<int>> galoisKeyGroups(
+    const Parameter<Word>& parameter, const EvaluationKeyRequest& request) {
+  std::map<KeySwitchShape, std::vector<int>> groups;
+  for (const auto& [key, shape] : rotationKeyShapes(parameter, request))
+    groups[shape].push_back(key.rot_idx);
   for (auto& [shape, rotations] : groups) {
     std::sort(rotations.begin(), rotations.end());
     rotations.erase(std::unique(rotations.begin(), rotations.end()),
@@ -218,20 +211,64 @@ template <typename Word>
       rotations);
 }
 
-// Client: one Galois key upload per layout of the request's rotation keys.
+// The layouts whose Galois plan uploads fewer bytes than their rotation keys
+// as seeds, with their plans. The other layouts' rotation keys stay in KeyGen.
+// Client and server decide alike, from the same request and parameter.
+template <typename Word>
+std::map<KeySwitchShape, ::cyclops::GaloisKeyPlan<Word>> galoisKeyPlans(
+    const Parameter<Word>& parameter, const EvaluationKeyRequest& request) {
+  std::map<KeySwitchShape, ::cyclops::GaloisKeyPlan<Word>> plans;
+  for (const auto& [shape, rotations] : galoisKeyGroups(parameter, request)) {
+    auto plan = planGaloisKeys(parameter, shape, rotations);
+    const auto& hot = plan.hot.layout;
+    const std::size_t direct = rotations.size() * hot.NumDigits() *
+                               (hot.Basis().PolynomialSize() * sizeof(Word) +
+                                ::cyclops::prng::Seed::kBytes);
+    if (plan.cost.upload_bytes < direct) plans.emplace(shape, std::move(plan));
+  }
+  return plans;
+}
+
+// A request without the rotation keys the Galois key upload carries: KeyGen
+// generates the rest, including the rotation keys of layouts whose Galois plan
+// would upload more than they do.
+template <typename Word>
+EvaluationKeyRequest withoutRotationKeys(const EvaluationKeyRequest& request,
+                                         const Parameter<Word>& parameter) {
+  const auto plans = galoisKeyPlans(parameter, request);
+  EvaluationKeyRequest result;
+  for (const auto& [key, shape] : rotationKeyShapes(parameter, request))
+    if (!plans.count(shape))
+      result.AddRequest(key.rot_idx, key.level, key.key_mode,
+                        key.required_num_aux);
+  for (const auto& [key, count] : request.ConjugationRequests())
+    for (int i = 0; i < count; ++i)
+      result.RequestConjugationKey(key.level, key.key_mode,
+                                   key.required_num_aux);
+  for (const auto& [key, count] : request.MultiplicationRequests())
+    for (int i = 0; i < count; ++i)
+      result.RequestMultiplicationKey(key.level, key.key_mode,
+                                      key.required_num_aux);
+  for (const auto& [key, count] : request.RotatedMultiplicationRequests())
+    for (int i = 0; i < count; ++i)
+      result.RequestRotatedMultiplicationKey(
+          key.rot_idx, key.level, key.key_mode, key.required_num_aux);
+  return result;
+}
+
+// Client: one Galois key upload per layout galoisKeyPlans keeps.
 // `client` is the UserInterface of the KeyPair from KeyGen(..., false).
 template <typename UserInterface, typename Word>
 void writeGaloisKeys(const UserInterface& client,
                      const Parameter<Word>& parameter,
                      const EvaluationKeyRequest& request, std::ostream& out) {
   cereal::PortableBinaryOutputArchive ar(out);
-  const auto groups = galoisKeyGroups(parameter, request);
-  ar(static_cast<std::uint32_t>(groups.size()));
-  for (const auto& [shape, rotations] : groups)
+  const auto plans = galoisKeyPlans(parameter, request);
+  ar(static_cast<std::uint32_t>(plans.size()));
+  for (const auto& [shape, plan] : plans)
     ar(::cyclops::SendGaloisKeyUpload<Word>(
         ::cyclops::WireSerializer::kCereal,
-        client.GenerateGaloisKeyUpload(
-            planGaloisKeys(parameter, shape, rotations))));
+        client.GenerateGaloisKeyUpload(plan)));
 }
 
 // Server: derive the request's rotation keys from the client's uploads into
@@ -242,13 +279,12 @@ void readGaloisKeys(const Parameter<Word>& parameter,
                     const EvaluationKeyRequest& request, std::istream& in,
                     EvaluationKeys<Word>& keys) {
   cereal::PortableBinaryInputArchive ar(in);
-  const auto groups = galoisKeyGroups(parameter, request);
+  const auto plans = galoisKeyPlans(parameter, request);
   std::uint32_t count;
   ar(count);
-  require(count == groups.size(),
+  require(count == plans.size(),
           "readGaloisKeys: the upload does not match the planned layouts");
-  for (const auto& [shape, rotations] : groups) {
-    const auto plan = planGaloisKeys(parameter, shape, rotations);
+  for (const auto& [shape, plan] : plans) {
     std::string bytes;
     ar(bytes);
     auto cold = ::cyclops::DeriveGaloisColdStorage(

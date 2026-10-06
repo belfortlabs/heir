@@ -32,7 +32,7 @@
 // CHECK: case 1: {{.*}}.RequestConjugationKey(key.level, mode, key.num_aux);
 // CHECK: case 2: {{.*}}.RequestMultiplicationKey(key.level, mode, key.num_aux);
 // CHECK: default: {{.*}}.RequestRotatedMultiplicationKey(
-// CHECK: PrepareRotationKey({{v[0-9]+}} ? GetKeyRequest() : ::heir::cyclops::withoutRotationKeys(GetKeyRequest()),
+// CHECK: PrepareRotationKey({{v[0-9]+}} ? GetKeyRequest() : ::heir::cyclops::withoutRotationKeys(GetKeyRequest(), {{v[0-9]+}}->param_),
 
 !ctx = !emitc.ptr<!emitc.opaque<"Context<word>">>
 !client_ctx = !emitc.ptr<!emitc.opaque<"ClientContext<word>">>
