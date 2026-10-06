@@ -520,9 +520,10 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
     VerbatimOp::create(
         builder, loc,
         "{}.storage->PrepareRotationKey({} ? GetKeyRequest() : "
-        "::heir::cyclops::withoutRotationKeys(GetKeyRequest()), "
+        "::heir::cyclops::withoutRotationKeys(GetKeyRequest(), {}->param_), "
         "{}->NativeSecretId());",
-        ValueRange{keyPair, function.getArgument(2), function.getArgument(0)});
+        ValueRange{keyPair, function.getArgument(2), function.getArgument(0),
+                   function.getArgument(0)});
   for (StringRef field : {"secret_key", "public_key"}) {
     if (split && field == "public_key") continue;
     Type aliasType =
