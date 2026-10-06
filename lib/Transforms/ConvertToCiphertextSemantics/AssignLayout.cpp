@@ -498,7 +498,8 @@ static FailureOr<Value> implementAssignLayoutStep(
         if (!srcIsSplat) written[dstFlat] = true;
         std::memcpy(dst, src, byteWidth);
       };
-      forEachPointPair(rel, packPoint);
+      if (failed(forEachRelationPoint(rel, packPoint)))
+        forEachPointPair(rel, packPoint);
       if (conflictingSlot >= 0) {
         return builder.emitError()
                << "layout maps two distinct data values to the same slot "
