@@ -1,5 +1,6 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_import", "cc_library")
+load("@rules_python//python:py_test.bzl", "py_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -79,5 +80,46 @@ genrule(
     cmd = select({
         ":use_real_planner": "echo real > $@",
         "//conditions:default": "echo stub > $@",
+    }),
+)
+
+# The stub defines every function of HEIR's header copy.
+py_test(
+    name = "stub_header_test",
+    srcs = ["header_check.py"],
+    args = [
+        "$(rootpath cyclops_planner.h)",
+        "--stub",
+        "$(rootpath planner_stub.cc)",
+    ],
+    data = [
+        "cyclops_planner.h",
+        "planner_stub.cc",
+    ],
+    main = "header_check.py",
+)
+
+# HEIR's header copy matches Cyclops' header at version.bzl's commit; needs the
+# Cyclops source, so it runs with --//bazel/cyclops:real_planner.
+py_test(
+    name = "cyclops_header_test",
+    srcs = ["header_check.py"],
+    # Selected, so default builds never see the @cyclops label.
+    args = select({
+        ":use_real_planner": [
+            "$(rootpath cyclops_planner.h)",
+            "--cyclops",
+            "$(rootpath @cyclops//:planner/include/cyclops_planner.h)",
+        ],
+        "//conditions:default": [],
+    }),
+    data = ["cyclops_planner.h"] + select({
+        ":use_real_planner": ["@cyclops//:planner/include/cyclops_planner.h"],
+        "//conditions:default": [],
+    }),
+    main = "header_check.py",
+    target_compatible_with = select({
+        ":use_real_planner": [],
+        "//conditions:default": ["@platforms//:incompatible"],
     }),
 )
