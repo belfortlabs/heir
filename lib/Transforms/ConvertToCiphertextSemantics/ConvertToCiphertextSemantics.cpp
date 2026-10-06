@@ -1757,11 +1757,15 @@ struct ConvertLinalgConv2DNchwFchw
         foldedConvMatrixOperand(op, dataType);
     if (failed(matrixOperand)) return failure();
     auto strides = llvm::to_vector(op.getStrides().getValues<int64_t>());
-    // Rows only interchange for a strided conv; keep this in step with
-    // LayoutPropagation, which sizes the filter layout the same way.
+    // Rows only interchange for a gapped result, whose gap is the stride times
+    // the gap of the data; keep this in step with LayoutPropagation, which
+    // sizes the filter layout the same way.
+    assert((!info || info->gapFactor % strides[0] == 0) &&
+           "gap factor must be a multiple of the stride");
+    int64_t inputGap = info ? info->gapFactor / strides[0] : 1;
     return get2dConvChwFchwFilterExpandedType(
         filterType, matrixOperand->dataType, matrixOperand->padding, strides,
-        /*interchangeRows=*/strides[0] > 1);
+        /*interchangeRows=*/strides[0] * inputGap > 1, inputGap);
   }
 
   LogicalResult haleviShoupKernel(

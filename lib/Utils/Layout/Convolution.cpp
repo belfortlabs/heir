@@ -292,11 +292,9 @@ RankedTensorType get1dConvCwFcwFilterExpandedType(RankedTensorType filterType,
   return RankedTensorType::get({rows, cols}, filterType.getElementType());
 }
 
-RankedTensorType get2dConvChwFchwFilterExpandedType(RankedTensorType filterType,
-                                                    RankedTensorType dataType,
-                                                    int64_t padding,
-                                                    ArrayRef<int64_t> strides,
-                                                    bool interchangeRows) {
+RankedTensorType get2dConvChwFchwFilterExpandedType(
+    RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
+    ArrayRef<int64_t> strides, bool interchangeRows, int64_t inputGap) {
   // Get the filter relation for a single input and output channel and multiply
   // the dimensions by the number of input and output channels for the row and
   // column dimensions respectively.
@@ -309,13 +307,16 @@ RankedTensorType get2dConvChwFchwFilterExpandedType(RankedTensorType filterType,
   auto singleResultType = get2dConvFilterExpandedType(
       singleFilterType, singleDataType, padding, strides);
 
-  int64_t inputChannels = dataType.getDimSize(1);
+  // Gapped data holds whole channel blocks of the input gap, so the matrix has
+  // columns for the input's empty channels too. Those columns stay zero.
+  int64_t inputChannels =
+      getPaddedConvChannels(dataType.getDimSize(1), inputGap * inputGap);
   int64_t outputChannels = filterType.getDimSize(0);
   // An interchanged layout reserves whole g x g channel blocks, so the matrix
   // also has rows for the padding channels. Those rows stay zero.
   if (interchangeRows) {
-    outputChannels =
-        getPaddedConvChannels(outputChannels, strides[0] * strides[0]);
+    int64_t gap = strides[0] * inputGap;
+    outputChannels = getPaddedConvChannels(outputChannels, gap * gap);
   }
 
   int64_t rows = outputChannels * singleResultType.getDimSize(0);
@@ -520,7 +521,9 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
 FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
     RankedTensorType filterType, RankedTensorType dataType,
     ArrayRef<int64_t> strides, int64_t padding, int64_t minSlotCount,
-    bool interchangeRows) {
+    bool interchangeRows, int64_t inputGap) {
+  assert((inputGap == 1 || padding == 0) &&
+         "gapped data cannot fold a pad into the conv");
   auto inputChannels = dataType.getDimSize(1);
   auto outputChannels = filterType.getDimSize(0);
   auto filterRowSize = filterType.getDimSize(2);
@@ -529,7 +532,8 @@ FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
   auto dataColSize = dataType.getDimSize(3);
   auto strideRow = strides[0];
   auto strideCol = strides[1];
-  auto g = strides[0];
+  // The result is shuffled by the input's gap times the stride.
+  auto g = strides[0] * inputGap;
 
   auto outputH = (dataRowSize + 2 * padding - filterRowSize) / strideRow + 1;
   auto outputW = (dataColSize + 2 * padding - filterColSize) / strideCol + 1;
@@ -552,7 +556,8 @@ FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
                       : outputChannels;
 
   int64_t maxRow = paddedOutputChannels * totalRowSize;
-  int64_t maxCol = inputChannels * totalColSize;
+  int64_t maxCol =
+      getPaddedConvChannels(inputChannels, inputGap * inputGap) * totalColSize;
 
   int64_t paddedRows = isPowerOfTwo(maxRow) ? maxRow : nextPowerOfTwo(maxRow);
   int64_t paddedCols = isPowerOfTwo(maxCol) ? maxCol : nextPowerOfTwo(maxCol);
@@ -608,13 +613,31 @@ FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
   if (failed(step3Rel)) return failure();
   relations.push_back(step3Rel.value());
 
-  // Step 4: Flatten Columns (3D -> 2D)
-  std::string step4Str = llvm::formatv(
-      "{{ [row, c, col] -> [row_out, col_out] : "
-      "0 <= row < {0} and 0 <= c < {1} and 0 <= col < {2} and "
-      "row_out = row and "
-      "col_out = c * {2} + col }}",
-      maxRow, inputChannels, totalColSize);
+  // Step 4: Flatten Columns (3D -> 2D). Gapped data is pixel-shuffled like
+  // the result of the conv that produced it, so the column of input channel c
+  // at (h, w) is its position in that shuffle; see
+  // get2dConvRowInterchangeRelation.
+  std::string step4Str =
+      inputGap == 1
+          ? llvm::formatv(
+                "{{ [row, c, col] -> [row_out, col_out] : "
+                "0 <= row < {0} and 0 <= c < {1} and 0 <= col < {2} and "
+                "row_out = row and "
+                "col_out = c * {2} + col }}",
+                maxRow, inputChannels, totalColSize)
+                .str()
+          : llvm::formatv(
+                "{{ [row, c, col] -> [row_out, col_out] : "
+                "exists h, w : "
+                "0 <= row < {0} and 0 <= c < {1} and 0 <= col < {2} and "
+                "0 <= h < {3} and 0 <= w < {4} and col = h * {4} + w and "
+                "row_out = row and 0 <= col_out < {6} and "
+                "col_out = (c // {5}^2) * {3} * {4} * {5}^2 + "
+                "(h * {5} + (c % {5}^2) // {5}) * {4} * {5} + "
+                "w * {5} + (c % {5}) }}",
+                maxRow, inputChannels, totalColSize, dataRowSize, dataColSize,
+                inputGap, maxCol)
+                .str();
   auto step4Rel = getIntegerRelationFromIslStr(step4Str);
   if (failed(step4Rel)) return failure();
   relations.push_back(step4Rel.value());
