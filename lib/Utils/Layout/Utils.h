@@ -266,6 +266,15 @@ LogicalResult forEachRelationPoint(
     const presburger::IntegerRelation& relation,
     llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint);
 
+// Call `onPoint(domainPoint, rangePoint)` for every point of the composition
+// of `stages` (the first stage's domain to the last stage's range), following
+// each point through the stages one at a time. A composed relation has the
+// intermediate coordinates as locals, so forEachRelationPoint may have nothing
+// to narrow the range variables with; each stage on its own does.
+LogicalResult forEachComposedRelationPoint(
+    ArrayRef<presburger::IntegerRelation> stages,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint);
+
 // Get a list of points in the range of the relation by enumerating all
 // possible values.
 void getRangePoints(const presburger::IntegerRelation& relation,

@@ -1224,6 +1224,38 @@ TEST(UtilsTest, ForEachRelationPointFailsWithoutCallingOnPoint) {
   }
 }
 
+TEST(UtilsTest, ForEachComposedRelationPoint) {
+  // Two stages, an expansion then a diagonal packing, followed stage by stage.
+  presburger::IntegerRelation first =
+      getIntegerRelationFromIslStr(
+          "{ [i0, i1] -> [a, b] : a = i0 and b = 2i1 + 1 and 0 <= i0 <= 3 and "
+          "0 <= i1 <= 3 }")
+          .value();
+  presburger::IntegerRelation second =
+      getIntegerRelationFromIslStr(
+          "{ [a, b] -> [ct, slot] : (a - b + ct) mod 8 = 0 and (-a + slot) "
+          "mod 8 = 0 and 0 <= a <= 7 and 0 <= b <= 7 and 0 <= ct <= 7 and 0 "
+          "<= slot <= 15 }")
+          .value();
+  presburger::IntegerRelation composed = first;
+  composed.compose(second);
+
+  using Pair = std::pair<std::vector<int64_t>, std::vector<int64_t>>;
+  std::set<Pair> expected, actual;
+  PointPairCollector collector(composed.getNumDomainVars(),
+                               composed.getNumRangeVars());
+  enumeratePoints(composed, collector);
+  for (const auto& [domain, range] : collector.points)
+    expected.insert({domain, range});
+  ASSERT_TRUE(succeeded(forEachComposedRelationPoint(
+      {first, second}, [&](ArrayRef<int64_t> domain, ArrayRef<int64_t> range) {
+        actual.insert({std::vector<int64_t>(domain.begin(), domain.end()),
+                       std::vector<int64_t>(range.begin(), range.end())});
+      })));
+  EXPECT_FALSE(expected.empty());
+  EXPECT_EQ(actual, expected);
+}
+
 }  // namespace
 }  // namespace heir
 }  // namespace mlir

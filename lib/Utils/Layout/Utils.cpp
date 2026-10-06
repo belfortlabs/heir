@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -1135,6 +1136,18 @@ class RelationPointEnumerator {
     return success(visit(0, onPoint));
   }
 
+  // Visits the points whose domain is `domainPoint`. The budget carries over
+  // between calls.
+  LogicalResult runWithDomain(
+      ArrayRef<int64_t> domainPoint,
+      llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint) {
+    unsigned numDomain = rel.getNumDomainVars();
+    point.assign(numVars, 0);
+    llvm::copy(domainPoint, point.begin());
+    for (unsigned v = 0; v < numDomain; ++v) computeLocals(v);
+    return success(visit(numDomain, onPoint));
+  }
+
  private:
   static constexpr int64_t kMaxCandidates = 200'000'000;
 
@@ -1287,6 +1300,43 @@ LogicalResult forEachRelationPoint(
   RelationPointEnumerator enumerator(relation);
   if (failed(enumerator.init())) return failure();
   return enumerator.run(onPoint);
+}
+
+LogicalResult forEachComposedRelationPoint(
+    ArrayRef<presburger::IntegerRelation> stages,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint) {
+  if (stages.empty()) return failure();
+  std::vector<RelationPointEnumerator> enumerators;
+  enumerators.reserve(stages.size());
+  for (const presburger::IntegerRelation& stage : stages) {
+    enumerators.emplace_back(stage);
+    if (failed(enumerators.back().init())) return failure();
+  }
+  // Follows each point of the first stage through the later ones, each with
+  // its domain fixed to the previous stage's range point.
+  bool exhausted = false;
+  std::function<void(unsigned, ArrayRef<int64_t>, ArrayRef<int64_t>)> follow =
+      [&](unsigned stage, ArrayRef<int64_t> origin, ArrayRef<int64_t> at) {
+        if (exhausted) return;
+        if (stage == stages.size()) {
+          onPoint(origin, at);
+          return;
+        }
+        // `origin` and `at` point into earlier stages' enumerators, which the
+        // later stages leave alone.
+        if (failed(enumerators[stage].runWithDomain(
+                at, [&](ArrayRef<int64_t>, ArrayRef<int64_t> range) {
+                  follow(stage + 1, origin, range);
+                })))
+          exhausted = true;
+      };
+  if (failed(enumerators[0].run(
+          [&](ArrayRef<int64_t> domain, ArrayRef<int64_t> range) {
+            follow(1, domain, range);
+          })) ||
+      exhausted)
+    return failure();
+  return success();
 }
 
 std::vector<int64_t> anyRangePoint(

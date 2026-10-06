@@ -337,7 +337,8 @@ static FailureOr<Value> implementAssignLayoutStep(
     ImplicitLocOpBuilder& builder,
     const std::function<void(Operation*)>& createdOpCallback,
     ArrayRef<int64_t> domainSchedule = {},
-    CodegenStrategy strategy = CodegenStrategy::AUTO) {
+    CodegenStrategy strategy = CodegenStrategy::AUTO,
+    ArrayRef<presburger::IntegerRelation> stages = {}) {
   presburger::IntegerRelation rel = layout.getIntegerRelation();
   RankedTensorType targetType = cast<RankedTensorType>(targetTypeTy);
   auto elementType = getElementTypeOrSelf(input.getType());
@@ -498,7 +499,11 @@ static FailureOr<Value> implementAssignLayoutStep(
         if (!srcIsSplat) written[dstFlat] = true;
         std::memcpy(dst, src, byteWidth);
       };
-      if (failed(forEachRelationPoint(rel, packPoint)))
+      // `stages` are the layouts `layout` was composed from. Following the
+      // points through them one at a time avoids the locals the composition
+      // introduces for the intermediate coordinates.
+      if (failed(forEachComposedRelationPoint(stages, packPoint)) &&
+          failed(forEachRelationPoint(rel, packPoint)))
         forEachPointPair(rel, packPoint);
       if (conflictingSlot >= 0) {
         return builder.emitError()
@@ -690,10 +695,13 @@ FailureOr<Value> implementAssignLayout(
       auto lastLayout = cast<LayoutAttr>(arrayAttr[arrayAttr.size() - 1]);
       Type targetType = materializeLayout(getElementTypeOrSelf(input.getType()),
                                           lastLayout, minSlotCount);
+      std::vector<presburger::IntegerRelation> stages;
+      for (Attribute attr : arrayAttr)
+        stages.push_back(cast<LayoutAttr>(attr).getIntegerRelation());
       return implementAssignLayoutStep(
           input, LayoutAttr::composeLayouts(arrayAttr, builder.getContext()),
           targetType, builder, createdOpCallback, /*domainSchedule=*/{},
-          strategy);
+          strategy, stages);
     }
 
     Value currentInput = input;
