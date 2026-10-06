@@ -752,6 +752,43 @@ struct RewriteAvgPoolAsConv1D
   }
 };
 
+// A global pool has one window that covers the whole image, so the output is
+// 1x1 per channel.
+static bool isGlobalPool(RankedTensorType inputTy, RankedTensorType filterTy,
+                         RankedTensorType outputTy) {
+  return inputTy.hasStaticShape() && filterTy.hasStaticShape() &&
+         inputTy.getDimSize(0) == 1 && outputTy.getDimSize(2) == 1 &&
+         outputTy.getDimSize(3) == 1 &&
+         filterTy.getDimSize(0) == inputTy.getDimSize(2) &&
+         filterTy.getDimSize(1) == inputTy.getDimSize(3);
+}
+
+// The pooling kernel of a global pool, flattened to c x (c*h*w), is the matrix
+// of a matvec on the flattened input.
+static Value rewriteGlobalPoolAsMatvec(linalg::PoolingNchwSumOp poolOp,
+                                       DenseElementsAttr kernel,
+                                       PatternRewriter& rewriter) {
+  Location loc = poolOp.getLoc();
+  auto outputTy = cast<RankedTensorType>(poolOp.getResultTypes()[0]);
+  int64_t c = kernel.getType().getDimSize(0);
+  auto matrixTy = RankedTensorType::get({c, kernel.getNumElements() / c},
+                                        kernel.getType().getElementType());
+  Value matrix =
+      arith::ConstantOp::create(rewriter, loc, kernel.reshape(matrixTy));
+
+  SmallVector<ReassociationIndices> flatten = {{0, 1, 2, 3}};
+  Value vec = tensor::CollapseShapeOp::create(rewriter, loc,
+                                              poolOp.getInputs()[0], flatten);
+  Value init = tensor::CollapseShapeOp::create(rewriter, loc,
+                                               poolOp.getOutputs()[0], flatten);
+  Value matvec =
+      linalg::MatvecOp::create(rewriter, loc, init.getType(),
+                               ValueRange{matrix, vec}, ValueRange{init})
+          .getResult(0);
+  return tensor::ExpandShapeOp::create(rewriter, loc, outputTy, matvec,
+                                       flatten);
+}
+
 struct RewriteAvgPoolAsConv2D
     : public OpRewritePattern<mlir::linalg::PoolingNchwSumOp> {
  public:
@@ -823,15 +860,20 @@ struct RewriteAvgPoolAsConv2D
       }
     }
 
-    TypedAttr kernelVals = DenseElementsAttr::get(kernelTy, values);
-    auto kernel =
-        arith::ConstantOp::create(rewriter, poolOp.getLoc(), kernelVals);
-    Value conv = linalg::Conv2DNchwFchwOp::create(
-                     rewriter, poolOp.getLoc(), outputTy,
-                     ValueRange{poolOp.getInputs()[0], kernel},
-                     ValueRange{poolOp.getOutputs()[0]}, poolOp.getStrides(),
-                     poolOp.getDilations())
-                     .getResult(0);
+    auto kernelVals = DenseElementsAttr::get(kernelTy, values);
+    Value conv;
+    if (isGlobalPool(inputTy, filterTy, outputTy)) {
+      conv = rewriteGlobalPoolAsMatvec(poolOp, kernelVals, rewriter);
+    } else {
+      auto kernel =
+          arith::ConstantOp::create(rewriter, poolOp.getLoc(), kernelVals);
+      conv = linalg::Conv2DNchwFchwOp::create(
+                 rewriter, poolOp.getLoc(), outputTy,
+                 ValueRange{poolOp.getInputs()[0], kernel},
+                 ValueRange{poolOp.getOutputs()[0]}, poolOp.getStrides(),
+                 poolOp.getDilations())
+                 .getResult(0);
+    }
 
     if (avgPoolOutput) {
       rewriter.replaceAllUsesWith(avgPoolOutput, conv);
