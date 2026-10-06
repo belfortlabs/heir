@@ -65,9 +65,3 @@ substitutions = {
     "%mlir_lib_dir": str(mlir_tools_path),
 }
 config.substitutions.extend(substitutions.items())
-
-# Tests that plan Cyclops evaluation keys need the real planner, not the stub
-# heir-opt links by default (see bazel/cyclops/BUILD).
-planner_kind = runfiles_dir / "_main/bazel/cyclops/planner_kind.txt"
-if planner_kind.read_text().strip() == "real":
-  config.available_features.add("cyclops-planner")

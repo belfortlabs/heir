@@ -4,7 +4,7 @@
 #include <memory>
 #include <optional>
 
-#include "cyclops_planner.h"  // from @heir//bazel/cyclops:planner
+#include "cyclops_planner.h"  // from @cyclops
 #include "lib/Dialect/Cheddar/IR/CheddarAttributes.h"
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"

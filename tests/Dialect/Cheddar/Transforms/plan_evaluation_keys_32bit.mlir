@@ -1,5 +1,4 @@
 // RUN: heir-opt %s --cheddar-plan-evaluation-keys | FileCheck %s
-// REQUIRES: cyclops-planner
 
 // A 32-bit chain whose levels mix main and terminal primes: the planner builds
 // the runtime's 32-bit Parameter from the level layout.

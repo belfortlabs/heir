@@ -1,6 +1,5 @@
 // RUN: heir-opt --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=1024 cheddar-parameter-file=%S/../../Parameters/cyclops/bootparam_35bit_14lvl.json" --scheme-to-cheddar="entry-function=main runtime=cyclops" %s | FileCheck %s
 // RUN: heir-opt --annotate-module="backend=cheddar scheme=ckks" --mlir-to-ckks="min-slot-count=1024 cheddar-parameter-file=%S/../../Parameters/cyclops/bootparam_35bit_14lvl.json" --scheme-to-cheddar="entry-function=main runtime=cyclops" --cheddar-to-emitc --cheddar-emitc-entry-interface=runtime=cyclops %s | heir-translate --mlir-to-cpp --file-id=client_source | FileCheck %s --check-prefix=CLIENT
-// REQUIRES: cyclops-planner
 
 // A 32-bit word chain from a Cyclops parameter file, end to end: the two
 // multiplications need three levels, which the logN 13 ring of the file

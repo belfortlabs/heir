@@ -2,8 +2,6 @@ load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["planner/include/cyclops_planner.h"])
-
 filegroup(
     name = "planner_sources",
     srcs = ["CMakeLists.txt"] + glob([

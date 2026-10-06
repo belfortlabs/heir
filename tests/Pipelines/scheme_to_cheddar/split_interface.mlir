@@ -3,7 +3,6 @@
 // RUN: heir-translate %t --mlir-to-cpp --file-id=client_source | FileCheck %s --check-prefix=CLIENT-CPP --implicit-check-not=BootContext --implicit-check-not=" Context<word>::Create" --implicit-check-not=__server_setup --implicit-check-not=cuda
 // RUN: heir-translate %t --mlir-to-cpp --file-id=server_header | FileCheck %s --check-prefix=SERVER-H --implicit-check-not=UserInterface --implicit-check-not=SecretKey --implicit-check-not=KeyGen
 // RUN: heir-translate %t --mlir-to-cpp --file-id=server_source | FileCheck %s --check-prefix=SERVER-CPP --implicit-check-not=UserInterface --implicit-check-not=__keygen --implicit-check-not=__decrypt
-// REQUIRES: cyclops-planner
 
 // CLIENT-H: #include <optional>
 // CLIENT-H: #include "core/ClientContext.h"

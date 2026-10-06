@@ -80,7 +80,7 @@ cc_library(
     name = "PlanEvaluationKeys",
     srcs = ["PlanEvaluationKeys.cpp"],
     hdrs = ["PlanEvaluationKeys.h"],
-    implementation_deps = ["@heir//bazel/cyclops:planner"],
+    implementation_deps = ["@cyclops//:planner"],
     linkopts = select({
         "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
         "//conditions:default": ["-Wl,-rpath,$$ORIGIN"],
