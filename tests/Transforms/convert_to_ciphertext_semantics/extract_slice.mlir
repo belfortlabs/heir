@@ -23,3 +23,27 @@ module {
     return %1 : !secret.secret<tensor<4x4xf32>>
   }
 }
+
+// -----
+
+// The first slice's result must carry #mid, not the ct-to-ct remap relation;
+// otherwise the second slice's remap composes to the empty relation (1 = 0).
+
+#src = #tensor_ext.layout<"{ [i0, i1] -> [ct, slot] : ct = 0 and (-8i0 - i1 + slot) mod 32 = 0 and 0 <= i0 <= 3 and 0 <= i1 <= 7 and 0 <= slot <= 31 }">
+#mid = #tensor_ext.layout<"{ [i0, i1] -> [ct, slot] : ct = 0 and (-8i0 - i1 + slot) mod 32 = 0 and 0 <= i0 <= 1 and 0 <= i1 <= 7 and 0 <= slot <= 31 }">
+#dst = #tensor_ext.layout<"{ [i0, i1] -> [ct, slot] : ct = 0 and (-4i0 - i1 + slot) mod 8 = 0 and 0 <= i0 <= 1 and 0 <= i1 <= 3 and 0 <= slot <= 31 }">
+module {
+  // CHECK: func.func @nested_extract_slice
+  // CHECK-NOT: 1 = 0
+  // CHECK: tensor_ext.remap
+  // CHECK: tensor_ext.remap
+  func.func @nested_extract_slice(%arg0: !secret.secret<tensor<4x8xf32>> {tensor_ext.layout = #src}) -> (!secret.secret<tensor<2x4xf32>> {tensor_ext.layout = #dst}) {
+    %0 = secret.generic(%arg0: !secret.secret<tensor<4x8xf32>> {tensor_ext.layout = #src}) {
+    ^body(%input0: tensor<4x8xf32>):
+      %rows = tensor.extract_slice %input0 [2, 0] [2, 8] [1, 1] {tensor_ext.layout = #mid} : tensor<4x8xf32> to tensor<2x8xf32>
+      %patch = tensor.extract_slice %rows [0, 4] [2, 4] [1, 1] {tensor_ext.layout = #dst} : tensor<2x8xf32> to tensor<2x4xf32>
+      secret.yield %patch : tensor<2x4xf32>
+    } -> (!secret.secret<tensor<2x4xf32>> {tensor_ext.layout = #dst})
+    return %0 : !secret.secret<tensor<2x4xf32>>
+  }
+}
