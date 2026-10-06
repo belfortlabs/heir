@@ -386,10 +386,15 @@ LogicalResult RotateAndReduceOp::verify() {
 
   if (getPlaintexts()) {
     auto numPlaintexts = getPlaintexts().getType().getDimSize(0);
-    if (numPlaintexts != numSteps) {
+    // Compact plaintexts hold only the diagonals listed in diagonal_indices.
+    auto diagonalIndices = (*this)->getAttrOfType<DenseI32ArrayAttr>(
+        TensorExtDialect::kDiagonalIndicesAttrName);
+    bool isCompact = diagonalIndices && numPlaintexts == diagonalIndices.size();
+    if (numPlaintexts != numSteps && !isCompact) {
       return emitOpError()
              << "requires plaintext tensor to have the same number of "
-                "elements as steps, but found numPlaintexts="
+                "elements as steps or as diagonal_indices, but found "
+                "numPlaintexts="
              << numPlaintexts << " and steps=" << numSteps;
     }
   }
