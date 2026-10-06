@@ -3,7 +3,7 @@ permissions: read-all
 on:
   pull_request:
     branches:
-      - main
+      - ml-pipeline
 
 jobs:
   pre-commit-style:
