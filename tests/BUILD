@@ -11,6 +11,7 @@ filegroup(
     testonly = True,
     data = [
         ":lit.cfg.py",
+        "@heir//bazel/cyclops:planner_kind",
         "@heir//tools:heir-opt",
         "@heir//tools:heir-translate",
         "@heir//lib/Tablegen:heir-tblgen",
