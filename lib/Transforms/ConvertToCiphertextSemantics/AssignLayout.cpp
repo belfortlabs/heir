@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -336,7 +337,8 @@ static FailureOr<Value> implementAssignLayoutStep(
     ImplicitLocOpBuilder& builder,
     const std::function<void(Operation*)>& createdOpCallback,
     ArrayRef<int64_t> domainSchedule = {},
-    CodegenStrategy strategy = CodegenStrategy::AUTO) {
+    CodegenStrategy strategy = CodegenStrategy::AUTO,
+    ArrayRef<presburger::IntegerRelation> stages = {}) {
   presburger::IntegerRelation rel = layout.getIntegerRelation();
   RankedTensorType targetType = cast<RankedTensorType>(targetTypeTy);
   auto elementType = getElementTypeOrSelf(input.getType());
@@ -436,10 +438,6 @@ static FailureOr<Value> implementAssignLayoutStep(
     LLVM_DEBUG(llvm::dbgs() << "Detected constant input, evaluating layout\n");
     int64_t numTargetElements = targetType.getNumElements();
 
-    PointPairCollector collector(dataSemanticType.getRank(),
-                                 /*rangeDims=*/targetType.getRank());
-    enumeratePoints(rel, collector);
-
     // Row-major strides let us flatten a multi-dimensional point with plain
     // integer math, avoiding per-element getFlattenedIndex() interface lookups
     auto rowMajorStrides = [](ArrayRef<int64_t> shape) {
@@ -466,44 +464,63 @@ static FailureOr<Value> implementAssignLayoutStep(
       unsigned byteWidth = elementType.getIntOrFloatBitWidth() / 8;
       ArrayRef<char> srcRaw =
           isDenseConstant ? constantAttr.getRawData() : resourceRaw;
-      std::vector<char> rawBuffer(
-          static_cast<size_t>(numTargetElements) * byteWidth, 0);
+      // Pack directly into the buffer the constant takes over: a heap blob for
+      // a resource constant, a byte vector for a dense one.
+      size_t numBytes = static_cast<size_t>(numTargetElements) * byteWidth;
+      std::optional<AsmResourceBlob> packedBlob;
+      std::vector<char> rawBuffer;
+      MutableArrayRef<char> packed;
+      if (isResourceConstant) {
+        packedBlob = HeapAsmResourceBlob::allocate(
+            numBytes, resourceAttr.getRawHandle().getBlob()->getDataAlignment(),
+            /*dataIsMutable=*/true);
+        packed = packedBlob->getMutableData();
+        std::memset(packed.data(), 0, numBytes);
+      } else {
+        rawBuffer.assign(numBytes, 0);
+        packed = MutableArrayRef<char>(rawBuffer.data(), rawBuffer.size());
+      }
 
       std::vector<bool> written(srcIsSplat ? 0 : numTargetElements, false);
-      for (const auto& [domainPoint, rangePoint] : collector.points) {
+      int64_t conflictingSlot = -1;
+      auto packPoint = [&](ArrayRef<int64_t> domainPoint,
+                           ArrayRef<int64_t> rangePoint) {
         int64_t dstFlat = flatten(rangePoint, dstStrides);
-        if (dstFlat < 0 || dstFlat >= numTargetElements) continue;
+        if (dstFlat < 0 || dstFlat >= numTargetElements) return;
         int64_t srcFlat = srcIsSplat ? 0 : flatten(domainPoint, srcStrides);
+        char* dst = packed.data() + static_cast<size_t>(dstFlat) * byteWidth;
+        const char* src =
+            srcRaw.data() + static_cast<size_t>(srcFlat) * byteWidth;
         if (!srcIsSplat && written[dstFlat] &&
-            std::memcmp(
-                rawBuffer.data() + static_cast<size_t>(dstFlat) * byteWidth,
-                srcRaw.data() + static_cast<size_t>(srcFlat) * byteWidth,
-                byteWidth) != 0) {
-          return builder.emitError()
-                 << "layout maps two distinct data values to the same slot "
-                 << dstFlat << "; a non-replicated value cannot be packed "
-                 << "into this (non-injective) layout";
+            std::memcmp(dst, src, byteWidth) != 0) {
+          if (conflictingSlot < 0) conflictingSlot = dstFlat;
+          return;
         }
         if (!srcIsSplat) written[dstFlat] = true;
-        std::memcpy(rawBuffer.data() + static_cast<size_t>(dstFlat) * byteWidth,
-                    srcRaw.data() + static_cast<size_t>(srcFlat) * byteWidth,
-                    byteWidth);
+        std::memcpy(dst, src, byteWidth);
+      };
+      // `stages` are the layouts `layout` was composed from. Following the
+      // points through them one at a time avoids the locals the composition
+      // introduces for the intermediate coordinates.
+      if (failed(forEachComposedRelationPoint(stages, packPoint)) &&
+          failed(forEachRelationPoint(rel, packPoint)))
+        forEachPointPair(rel, packPoint);
+      if (conflictingSlot >= 0) {
+        return builder.emitError()
+               << "layout maps two distinct data values to the same slot "
+               << conflictingSlot << "; a non-replicated value cannot be "
+               << "packed into this (non-injective) layout";
       }
 
       TypedAttr packedConstantAttr;
-      ArrayRef<char> packedRaw(rawBuffer.data(), rawBuffer.size());
       if (isResourceConstant) {
         std::string resourceName = resourceAttr.getRawHandle().getKey().str();
         resourceName += "_packed";
-        auto packedBlob = HeapAsmResourceBlob::allocateAndCopyWithAlign(
-            packedRaw,
-            resourceAttr.getRawHandle().getBlob()->getDataAlignment(),
-            /*dataIsMutable=*/false);
         packedConstantAttr = DenseResourceElementsAttr::get(
-            targetType, resourceName, std::move(packedBlob));
+            targetType, resourceName, std::move(*packedBlob));
       } else {
-        packedConstantAttr =
-            DenseElementsAttr::getFromRawBuffer(targetType, packedRaw);
+        packedConstantAttr = DenseElementsAttr::getFromRawBuffer(
+            targetType, ArrayRef<char>(rawBuffer.data(), rawBuffer.size()));
       }
       auto constantOp = arith::ConstantOp::create(builder, builder.getLoc(),
                                                   packedConstantAttr);
@@ -519,20 +536,26 @@ static FailureOr<Value> implementAssignLayoutStep(
         srcIsSplat ? constantAttr.getSplatValue<Attribute>() : Attribute();
     auto srcValues = constantAttr.getValues<Attribute>();
     std::vector<bool> written(srcIsSplat ? 0 : numTargetElements, false);
-    for (const auto& [domainPoint, rangePoint] : collector.points) {
-      int64_t dstFlat = flatten(rangePoint, dstStrides);
-      if (dstFlat < 0 || dstFlat >= numTargetElements) continue;
-      Attribute val = srcIsSplat ? splatValue
-                                 : srcValues[static_cast<size_t>(
-                                       flatten(domainPoint, srcStrides))];
-      if (!srcIsSplat && written[dstFlat] && packedValues[dstFlat] != val) {
-        return builder.emitError()
-               << "layout maps two distinct data values to the same slot "
-               << dstFlat << "; a non-replicated value cannot be packed "
-               << "into this (non-injective) layout";
-      }
-      if (!srcIsSplat) written[dstFlat] = true;
-      packedValues[dstFlat] = val;
+    int64_t conflictingSlot = -1;
+    forEachPointPair(
+        rel, [&](ArrayRef<int64_t> domainPoint, ArrayRef<int64_t> rangePoint) {
+          int64_t dstFlat = flatten(rangePoint, dstStrides);
+          if (dstFlat < 0 || dstFlat >= numTargetElements) return;
+          Attribute val = srcIsSplat ? splatValue
+                                     : srcValues[static_cast<size_t>(
+                                           flatten(domainPoint, srcStrides))];
+          if (!srcIsSplat && written[dstFlat] && packedValues[dstFlat] != val) {
+            if (conflictingSlot < 0) conflictingSlot = dstFlat;
+            return;
+          }
+          if (!srcIsSplat) written[dstFlat] = true;
+          packedValues[dstFlat] = val;
+        });
+    if (conflictingSlot >= 0) {
+      return builder.emitError()
+             << "layout maps two distinct data values to the same slot "
+             << conflictingSlot << "; a non-replicated value cannot be packed "
+             << "into this (non-injective) layout";
     }
 
     auto packedConstantAttr =
@@ -672,10 +695,13 @@ FailureOr<Value> implementAssignLayout(
       auto lastLayout = cast<LayoutAttr>(arrayAttr[arrayAttr.size() - 1]);
       Type targetType = materializeLayout(getElementTypeOrSelf(input.getType()),
                                           lastLayout, minSlotCount);
+      std::vector<presburger::IntegerRelation> stages;
+      for (Attribute attr : arrayAttr)
+        stages.push_back(cast<LayoutAttr>(attr).getIntegerRelation());
       return implementAssignLayoutStep(
           input, LayoutAttr::composeLayouts(arrayAttr, builder.getContext()),
           targetType, builder, createdOpCallback, /*domainSchedule=*/{},
-          strategy);
+          strategy, stages);
     }
 
     Value currentInput = input;
