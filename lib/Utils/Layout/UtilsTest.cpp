@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -1156,6 +1158,102 @@ TEST(UtilsTest, TricyclicCtPtDiagonal2x5x7) {
   EXPECT_TRUE(relation.containsPointNoLocal({0, 0, 0, 0, 0}).has_value());
   EXPECT_TRUE(relation.containsPointNoLocal({1, 1, 1, 0, 1}).has_value());
   EXPECT_FALSE(relation.containsPointNoLocal({0, 0, 0, 0, 1}).has_value());
+}
+
+// forEachRelationPoint visits exactly the points ISL enumerates, for layouts
+// with mods and floors like those of packed matrices and convolution filters.
+void expectSamePoints(const std::string& islStr) {
+  presburger::IntegerRelation rel =
+      getIntegerRelationFromIslStr(islStr).value();
+  using Pair = std::pair<std::vector<int64_t>, std::vector<int64_t>>;
+  std::set<Pair> expected, actual;
+  PointPairCollector collector(rel.getNumDomainVars(), rel.getNumRangeVars());
+  enumeratePoints(rel, collector);
+  for (const auto& [domain, range] : collector.points)
+    expected.insert({domain, range});
+  ASSERT_TRUE(succeeded(forEachRelationPoint(rel, [&](ArrayRef<int64_t> domain,
+                                                      ArrayRef<int64_t> range) {
+    EXPECT_TRUE(actual
+                    .insert({std::vector<int64_t>(domain.begin(), domain.end()),
+                             std::vector<int64_t>(range.begin(), range.end())})
+                    .second);
+  })));
+  EXPECT_FALSE(expected.empty());
+  EXPECT_EQ(actual, expected);
+}
+
+TEST(UtilsTest, ForEachRelationPointMatvecDiagonals) {
+  expectSamePoints(
+      "{ [i0, i1] -> [ct, slot] : (i0 - i1 + ct) mod 4 = 0 and (-i0 + slot) "
+      "mod 4 = 0 and 0 <= i0 <= 3 and 0 <= i1 <= 3 and 0 <= ct <= 3 and 0 <= "
+      "slot <= 7 }");
+}
+
+TEST(UtilsTest, ForEachRelationPointConvFilter) {
+  // A ResNet-20 3x3 filter layout, scaled down from 16 channels and 32x32.
+  expectSamePoints(
+      "{ [i0, i1, i2, i3] -> [ct, slot] : (5 + 16i0 - 16i1 - 4i2 - i3 + ct) "
+      "mod 64 = 0 and 0 <= i0 <= 1 and 0 <= i1 <= 1 and 0 <= i2 <= 2 and 0 <= "
+      "i3 <= 2 and 0 <= ct <= 63 and slot >= 16i0 and slot >= 4 + 16i0 - 4i2 "
+      "and slot >= 5 + 16i0 - 4i2 - i3 and 0 <= slot <= 63 and slot <= 20 + "
+      "16i0 - 4i2 - i3 and slot <= 19 + 16i0 - 4i2 and slot <= 15 + 16i0 and "
+      "4*floor((slot)/4) >= -4 + i3 + slot and 4*floor((slot)/4) < i3 + slot "
+      "}");
+}
+
+TEST(UtilsTest, ForEachRelationPointComposedLayout) {
+  // A composed layout: the intermediate coordinates are locals whose division
+  // representations depend on each other.
+  expectSamePoints(
+      "{ [i0, i1] -> [ct, slot] : exists (e0, e1 : e0 = 4i0 + i1 and e1 = "
+      "floor(e0 / 8) and ct = e1 and slot = e0 - 8e1 + 8 * floor(i1 / 2) and "
+      "0 <= i0 <= 3 and 0 <= i1 <= 3 and 0 <= ct <= 1 and 0 <= slot <= 15) }");
+}
+
+TEST(UtilsTest, ForEachRelationPointFailsWithoutCallingOnPoint) {
+  // A symbol, and a range variable with no upper bound.
+  for (const char* islStr :
+       {"[N] -> { [i] -> [j] : j = i and 0 <= i <= 3 and 0 <= N <= 3 }",
+        "{ [i] -> [j] : j >= i and 0 <= i <= 3 }"}) {
+    presburger::IntegerRelation rel =
+        getIntegerRelationFromIslStr(islStr).value();
+    bool called = false;
+    EXPECT_TRUE(failed(forEachRelationPoint(
+        rel, [&](ArrayRef<int64_t>, ArrayRef<int64_t>) { called = true; })));
+    EXPECT_FALSE(called);
+  }
+}
+
+TEST(UtilsTest, ForEachComposedRelationPoint) {
+  // Two stages, an expansion then a diagonal packing, followed stage by stage.
+  presburger::IntegerRelation first =
+      getIntegerRelationFromIslStr(
+          "{ [i0, i1] -> [a, b] : a = i0 and b = 2i1 + 1 and 0 <= i0 <= 3 and "
+          "0 <= i1 <= 3 }")
+          .value();
+  presburger::IntegerRelation second =
+      getIntegerRelationFromIslStr(
+          "{ [a, b] -> [ct, slot] : (a - b + ct) mod 8 = 0 and (-a + slot) "
+          "mod 8 = 0 and 0 <= a <= 7 and 0 <= b <= 7 and 0 <= ct <= 7 and 0 "
+          "<= slot <= 15 }")
+          .value();
+  presburger::IntegerRelation composed = first;
+  composed.compose(second);
+
+  using Pair = std::pair<std::vector<int64_t>, std::vector<int64_t>>;
+  std::set<Pair> expected, actual;
+  PointPairCollector collector(composed.getNumDomainVars(),
+                               composed.getNumRangeVars());
+  enumeratePoints(composed, collector);
+  for (const auto& [domain, range] : collector.points)
+    expected.insert({domain, range});
+  ASSERT_TRUE(succeeded(forEachComposedRelationPoint(
+      {first, second}, [&](ArrayRef<int64_t> domain, ArrayRef<int64_t> range) {
+        actual.insert({std::vector<int64_t>(domain.begin(), domain.end()),
+                       std::vector<int64_t>(range.begin(), range.end())});
+      })));
+  EXPECT_FALSE(expected.empty());
+  EXPECT_EQ(actual, expected);
 }
 
 }  // namespace

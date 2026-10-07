@@ -6,10 +6,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -932,7 +935,7 @@ void forEachDomainImagePoint(
 }  // namespace
 
 struct WrapCallbackCtx {
-  PointPairCollector* collector;
+  llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair;
   int numDomain;
   int numRange;
 };
@@ -956,21 +959,18 @@ static isl_stat enumeratePointsCallback(__isl_take isl_point* pnt, void* user) {
     }
     isl_val_free(coord);
   }
-  ctx->collector->points.emplace_back(std::move(domainPoint),
-                                      std::move(rangePoint));
+  ctx->onPair(domainPoint, rangePoint);
   isl_point_free(pnt);
   return isl_stat_ok;
 }
 
-void enumeratePoints(const presburger::IntegerRelation& relation,
-                     PointPairCollector& collector) {
-  assert(relation.getNumDomainVars() ==
-             static_cast<unsigned>(collector.domainDims) &&
-         "collector domainDims must match the relation's domain rank");
-  assert(relation.getNumRangeVars() ==
-             static_cast<unsigned>(collector.rangeDims) &&
-         "collector rangeDims must match the relation's range rank");
-  isl_basic_map* bmap = convertRelationToBasicMap(relation, collector.ctx);
+void forEachPointPair(
+    const presburger::IntegerRelation& relation,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair) {
+  int domainDims = relation.getNumDomainVars();
+  int rangeDims = relation.getNumRangeVars();
+  isl_ctx* islCtx = isl_ctx_alloc();
+  isl_basic_map* bmap = convertRelationToBasicMap(relation, islCtx);
 
   SmallVector<int64_t> lb, ub;
   getDomainBox(relation, lb, ub);
@@ -1001,20 +1001,342 @@ void enumeratePoints(const presburger::IntegerRelation& relation,
     forEachDomainImagePoint(
         bmap, lb, ub,
         [&](ArrayRef<int64_t> domainPoint, __isl_keep isl_point* imagePoint) {
-          std::vector<int64_t> rangePoint(collector.rangeDims);
-          extractCoords(imagePoint, collector.rangeDims, rangePoint);
-          collector.points.emplace_back(
-              std::vector<int64_t>(domainPoint.begin(), domainPoint.end()),
-              std::move(rangePoint));
+          std::vector<int64_t> rangePoint(rangeDims);
+          extractCoords(imagePoint, rangeDims, rangePoint);
+          onPair(domainPoint, rangePoint);
         });
     isl_basic_map_free(bmap);
   } else {
     isl_basic_set* bset = isl_basic_map_wrap(bmap);
     isl_set* set = isl_set_from_basic_set(bset);
-    WrapCallbackCtx ctx{&collector, collector.domainDims, collector.rangeDims};
+    WrapCallbackCtx ctx{onPair, domainDims, rangeDims};
     isl_set_foreach_point(set, enumeratePointsCallback, &ctx);
     isl_set_free(set);
   }
+  isl_ctx_free(islCtx);
+}
+
+void enumeratePoints(const presburger::IntegerRelation& relation,
+                     PointPairCollector& collector) {
+  assert(relation.getNumDomainVars() ==
+             static_cast<unsigned>(collector.domainDims) &&
+         "collector domainDims must match the relation's domain rank");
+  assert(relation.getNumRangeVars() ==
+             static_cast<unsigned>(collector.rangeDims) &&
+         "collector rangeDims must match the relation's range rank");
+  forEachPointPair(relation, [&](ArrayRef<int64_t> domainPoint,
+                                 ArrayRef<int64_t> rangePoint) {
+    collector.points.emplace_back(
+        std::vector<int64_t>(domainPoint.begin(), domainPoint.end()),
+        std::vector<int64_t>(rangePoint.begin(), rangePoint.end()));
+  });
+}
+
+namespace {
+
+// Visits the points of an IntegerRelation without ISL. Variables are fixed in
+// order (domain, then range), and each local is computed from its division
+// representation as soon as the variables it depends on are fixed, which the
+// constraints make exact. Each variable takes its candidate
+// values from the constraints over what is already known: an equality pins
+// it, an equality with not-yet-known locals (a mod) gives a stride, and
+// inequalities give bounds. A complete point is checked against every
+// constraint.
+class RelationPointEnumerator {
+ public:
+  explicit RelationPointEnumerator(const presburger::IntegerRelation& rel)
+      : rel(rel),
+        numVars(rel.getNumVars()),
+        numFixed(rel.getNumDomainVars() + rel.getNumRangeVars()),
+        localOffset(rel.getVarKindOffset(presburger::VarKind::Local)) {}
+
+  LogicalResult init() {
+    if (rel.getNumSymbolVars() != 0) return failure();
+    presburger::DivisionRepr divs = rel.getLocalReprs();
+    unsigned numLocals = rel.getNumLocalVars();
+    // Order the locals so that each one's dividend uses only earlier ones, and
+    // give each the level (number of fixed variables) it can be computed at.
+    level.assign(numVars, 0);
+    for (unsigned v = 0; v < numFixed; ++v) level[v] = v + 1;
+    SmallVector<bool> done(numLocals, false);
+    for (unsigned round = 0; round < numLocals; ++round) {
+      for (unsigned l = 0; l < numLocals; ++l) {
+        if (done[l]) continue;
+        if (!divs.hasRepr(l)) return failure();
+        ArrayRef<llvm::DynamicAPInt> dividend = divs.getDividend(l);
+        bool ready = dividend[localOffset + l] == 0;
+        for (unsigned k = 0; k < numLocals && ready; ++k)
+          if (k != l && !done[k] && dividend[localOffset + k] != 0)
+            ready = false;
+        if (!ready) continue;
+        Local local{localOffset + l,
+                    {},
+                    llvm::int64fromDynamicAPInt(divs.getDenom(l)),
+                    0};
+        for (unsigned j = 0; j < numVars; ++j) {
+          local.dividend.push_back(llvm::int64fromDynamicAPInt(dividend[j]));
+          if (dividend[j] != 0) local.level = std::max(local.level, level[j]);
+        }
+        local.dividend.push_back(
+            llvm::int64fromDynamicAPInt(dividend[numVars]));
+        level[local.position] = local.level;
+        locals.push_back(std::move(local));
+        done[l] = true;
+      }
+    }
+    if (locals.size() != numLocals) return failure();
+
+    for (unsigned i = 0, e = rel.getNumEqualities(); i < e; ++i)
+      eqs.push_back(rel.getEquality64(i));
+    for (unsigned i = 0, e = rel.getNumInequalities(); i < e; ++i)
+      ineqs.push_back(rel.getInequality64(i));
+
+    vars.resize(numFixed);
+    for (unsigned v = 0; v < numFixed; ++v) {
+      Var& var = vars[v];
+      var.lb = rel.getConstantBound64(presburger::BoundType::LB, v);
+      var.ub = rel.getConstantBound64(presburger::BoundType::UB, v);
+      for (unsigned i = 0; i < ineqs.size(); ++i) {
+        if (ineqs[i][v] == 0 || !knownBesides(ineqs[i], v)) continue;
+        (ineqs[i][v] > 0 ? var.lowerRows : var.upperRows).push_back(i);
+      }
+      for (unsigned i = 0; i < eqs.size(); ++i) {
+        ArrayRef<int64_t> row = eqs[i];
+        if (row[v] == 0) continue;
+        if (knownBesides(row, v)) {
+          var.pinRows.push_back(i);
+          continue;
+        }
+        // Otherwise, if the row's unknowns are all locals, it is a congruence
+        // modulo the gcd of their coefficients.
+        int64_t modulus = 0;
+        bool usable = true;
+        for (unsigned j = 0; j < numVars && usable; ++j) {
+          if (row[j] == 0 || j == v || level[j] <= v) continue;
+          if (j < localOffset) usable = false;
+          modulus = std::gcd(modulus, std::abs(row[j]));
+        }
+        if (usable && modulus > 1) var.congruences.push_back({i, modulus});
+      }
+      bool hasLower =
+          var.lb.has_value() || !var.lowerRows.empty() || !var.pinRows.empty();
+      bool hasUpper =
+          var.ub.has_value() || !var.upperRows.empty() || !var.pinRows.empty();
+      if (!hasLower || !hasUpper) return failure();
+    }
+    budget = kMaxCandidates;
+    return success();
+  }
+
+  // Fails after kMaxCandidates complete candidates. `onPoint` has already seen
+  // the points found before that.
+  LogicalResult run(
+      llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint) {
+    point.assign(numVars, 0);
+    return success(visit(0, onPoint));
+  }
+
+  // Visits the points whose domain is `domainPoint`. The budget carries over
+  // between calls.
+  LogicalResult runWithDomain(
+      ArrayRef<int64_t> domainPoint,
+      llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint) {
+    unsigned numDomain = rel.getNumDomainVars();
+    point.assign(numVars, 0);
+    llvm::copy(domainPoint, point.begin());
+    for (unsigned v = 0; v < numDomain; ++v) computeLocals(v);
+    return success(visit(numDomain, onPoint));
+  }
+
+ private:
+  static constexpr int64_t kMaxCandidates = 200'000'000;
+
+  struct Local {
+    unsigned position;
+    SmallVector<int64_t> dividend;
+    int64_t denom;
+    unsigned level;
+  };
+  struct Var {
+    std::optional<int64_t> lb, ub;
+    SmallVector<unsigned> lowerRows, upperRows, pinRows;
+    SmallVector<std::pair<unsigned, int64_t>> congruences;
+  };
+
+  // Whether every variable of `row` other than `v` is known once the first
+  // `v` variables are fixed.
+  bool knownBesides(ArrayRef<int64_t> row, unsigned v) const {
+    for (unsigned j = 0; j < numVars; ++j)
+      if (j != v && row[j] != 0 && level[j] > v) return false;
+    return true;
+  }
+
+  // The row's value at the current point without its term on `v` and its
+  // terms not yet known.
+  int64_t restOf(ArrayRef<int64_t> row, unsigned v) const {
+    int64_t sum = row[numVars];
+    for (unsigned j = 0; j < numVars; ++j)
+      if (j != v && level[j] <= v) sum += row[j] * point[j];
+    return sum;
+  }
+
+  static int64_t floorDiv(int64_t a, int64_t b) {
+    int64_t q = a / b;
+    return (a % b != 0 && ((a < 0) != (b < 0))) ? q - 1 : q;
+  }
+  static int64_t ceilDiv(int64_t a, int64_t b) { return -floorDiv(-a, b); }
+
+  // The inverse of `a` modulo `m`, for `a` coprime to `m`.
+  static int64_t modInverse(int64_t a, int64_t m) {
+    int64_t t = 0, newT = 1, r = m, newR = a;
+    while (newR != 0) {
+      int64_t q = r / newR;
+      std::tie(t, newT) = std::make_pair(newT, t - q * newT);
+      std::tie(r, newR) = std::make_pair(newR, r - q * newR);
+    }
+    return (t % m + m) % m;
+  }
+
+  // Computes the locals that become known once `v` variables are fixed.
+  void computeLocals(unsigned v) {
+    for (const Local& local : locals) {
+      if (local.level != v) continue;
+      int64_t sum = local.dividend[numVars];
+      for (unsigned j = 0; j < numVars; ++j)
+        sum += local.dividend[j] * point[j];
+      point[local.position] = floorDiv(sum, local.denom);
+    }
+  }
+
+  bool satisfied() const {
+    for (ArrayRef<int64_t> row : eqs) {
+      int64_t sum = row[numVars];
+      for (unsigned j = 0; j < numVars; ++j) sum += row[j] * point[j];
+      if (sum != 0) return false;
+    }
+    for (ArrayRef<int64_t> row : ineqs) {
+      int64_t sum = row[numVars];
+      for (unsigned j = 0; j < numVars; ++j) sum += row[j] * point[j];
+      if (sum < 0) return false;
+    }
+    return true;
+  }
+
+  // Returns false when the budget runs out.
+  bool visit(
+      unsigned v,
+      llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint) {
+    computeLocals(v);
+    if (v == numFixed) {
+      if (--budget < 0) return false;
+      if (satisfied()) {
+        ArrayRef<int64_t> fixed(point.data(), numFixed);
+        unsigned numDomain = rel.getNumDomainVars();
+        onPoint(fixed.take_front(numDomain), fixed.drop_front(numDomain));
+      }
+      return true;
+    }
+    const Var& var = vars[v];
+    int64_t lo = var.lb.value_or(std::numeric_limits<int64_t>::min());
+    int64_t hi = var.ub.value_or(std::numeric_limits<int64_t>::max());
+    for (unsigned i : var.lowerRows) {
+      // a*x + rest >= 0 with a > 0.
+      lo = std::max(lo, ceilDiv(-restOf(ineqs[i], v), ineqs[i][v]));
+    }
+    for (unsigned i : var.upperRows) {
+      // a*x + rest >= 0 with a < 0.
+      hi = std::min(hi, floorDiv(restOf(ineqs[i], v), -ineqs[i][v]));
+    }
+    for (unsigned i : var.pinRows) {
+      int64_t a = eqs[i][v];
+      int64_t rest = restOf(eqs[i], v);
+      if (rest % a != 0) return true;
+      lo = std::max(lo, -rest / a);
+      hi = std::min(hi, -rest / a);
+    }
+    if (lo > hi) return true;
+
+    // The congruence with the largest stride, if any.
+    int64_t stride = 1, start = lo;
+    for (auto [i, modulus] : var.congruences) {
+      int64_t a = eqs[i][v];
+      int64_t rest = restOf(eqs[i], v);
+      // a*x + rest == 0 (mod modulus).
+      int64_t g = std::gcd(std::abs(a), modulus);
+      if (((rest % g) + g) % g != 0) return true;
+      int64_t m = modulus / g;
+      if (m <= stride) continue;
+      int64_t aRed = ((a / g) % m + m) % m;
+      int64_t target = ((-rest / g) % m + m) % m;
+      // aRed * x == target (mod m), with aRed invertible modulo m.
+      int64_t residue = (target * modInverse(aRed, m)) % m;
+      stride = m;
+      start = lo + (((residue - lo) % m) + m) % m;
+    }
+    for (int64_t x = start; x <= hi; x += stride) {
+      point[v] = x;
+      if (!visit(v + 1, onPoint)) return false;
+    }
+    return true;
+  }
+
+  const presburger::IntegerRelation& rel;
+  unsigned numVars, numFixed, localOffset;
+  // The number of fixed variables after which each variable is known.
+  SmallVector<unsigned> level;
+  std::vector<Local> locals;
+  SmallVector<SmallVector<int64_t>> eqs, ineqs;
+  std::vector<Var> vars;
+  SmallVector<int64_t> point;
+  // Complete candidates left to check.
+  int64_t budget = 0;
+};
+
+}  // namespace
+
+LogicalResult forEachRelationPoint(
+    const presburger::IntegerRelation& relation,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint) {
+  RelationPointEnumerator enumerator(relation);
+  if (failed(enumerator.init())) return failure();
+  return enumerator.run(onPoint);
+}
+
+LogicalResult forEachComposedRelationPoint(
+    ArrayRef<presburger::IntegerRelation> stages,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint) {
+  if (stages.empty()) return failure();
+  std::vector<RelationPointEnumerator> enumerators;
+  enumerators.reserve(stages.size());
+  for (const presburger::IntegerRelation& stage : stages) {
+    enumerators.emplace_back(stage);
+    if (failed(enumerators.back().init())) return failure();
+  }
+  // Follows each point of the first stage through the later ones, each with
+  // its domain fixed to the previous stage's range point.
+  bool exhausted = false;
+  std::function<void(unsigned, ArrayRef<int64_t>, ArrayRef<int64_t>)> follow =
+      [&](unsigned stage, ArrayRef<int64_t> origin, ArrayRef<int64_t> at) {
+        if (exhausted) return;
+        if (stage == stages.size()) {
+          onPoint(origin, at);
+          return;
+        }
+        // `origin` and `at` point into earlier stages' enumerators, which the
+        // later stages leave alone.
+        if (failed(enumerators[stage].runWithDomain(
+                at, [&](ArrayRef<int64_t>, ArrayRef<int64_t> range) {
+                  follow(stage + 1, origin, range);
+                })))
+          exhausted = true;
+      };
+  if (failed(enumerators[0].run(
+          [&](ArrayRef<int64_t> domain, ArrayRef<int64_t> range) {
+            follow(1, domain, range);
+          })) ||
+      exhausted)
+    return failure();
+  return success();
 }
 
 std::vector<int64_t> anyRangePoint(
@@ -1055,17 +1377,30 @@ void getCtComplementPoints(const presburger::IntegerRelation& relation,
 
   int64_t numCts = outputType.getDimSize(0);
 
+  // Mark which ct indices (range var 0) actually appear in the range.
+  std::vector<bool> seen(numCts, false);
+  if (succeeded(forEachRelationPoint(
+          relation, [&](ArrayRef<int64_t>, ArrayRef<int64_t> rangePoint) {
+            int64_t ct = rangePoint[0];
+            if (ct >= 0 && ct < numCts) seen[ct] = true;
+          }))) {
+    for (int64_t ct = 0; ct < numCts; ++ct) {
+      if (!seen[ct]) collector.points.push_back({ct});
+    }
+    return;
+  }
+
   SmallVector<int64_t> lb, ub;
   getDomainBox(relation, lb, ub);
 
   isl_basic_map* bmap = convertRelationToBasicMap(relation, collector.ctx);
 
-  // Mark which ct indices (range var 0) actually appear in the range. See
-  // forEachDomainImagePoint for why we enumerate the domain rather than probe
-  // each ct with isl_basic_map_is_empty. Once every ct is accounted for we can
-  // stop early instead of scanning the rest of a large domain.
-  std::vector<bool> seen(numCts, false);
-  int64_t seenCount = 0;
+  // See forEachDomainImagePoint for why we enumerate the domain rather than
+  // probe each ct with isl_basic_map_is_empty. Once every ct is accounted for
+  // we can stop early instead of scanning the rest of a large domain. The
+  // native enumeration may have marked some cts before running out of its
+  // budget.
+  int64_t seenCount = std::count(seen.begin(), seen.end(), true);
   forEachDomainImagePoint(
       bmap, lb, ub,
       [&](ArrayRef<int64_t> /*domainPoint*/, __isl_keep isl_point* imagePoint) {
