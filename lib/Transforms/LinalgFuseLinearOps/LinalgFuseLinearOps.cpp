@@ -124,7 +124,8 @@ LogicalResult findLinearOpAndOperand(OpTy op, Operation*& linearOp,
     rawOperand = rhs;
     return success();
   }
-  if (isLinearOp(rhsOp)) {
+  // c / (x * W) and c - (x * W) are not (x * W) / c and (x * W) - c.
+  if (op->template hasTrait<OpTrait::IsCommutative>() && isLinearOp(rhsOp)) {
     linearOp = rhsOp;
     rawOperand = lhs;
     return success();

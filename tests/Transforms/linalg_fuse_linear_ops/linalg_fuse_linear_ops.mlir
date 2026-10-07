@@ -193,3 +193,31 @@ func.func @fuse_matmul_sub_empty_constant(%arg0: tensor<2x3xf32>, %arg1: tensor<
   %2 = arith.subf %1, %scale : tensor<2x4xf32>
   return %2 : tensor<2x4xf32>
 }
+
+// -----
+
+// The linear op is the divisor, so the division is not a scale.
+
+// CHECK: func.func @no_fuse_div_by_linear
+// CHECK: linalg.matvec
+// CHECK: arith.divf
+func.func @no_fuse_div_by_linear(%arg0: tensor<2x3xf32>, %arg1: tensor<3xf32>, %arg2: tensor<2xf32>) -> tensor<2xf32> {
+  %0 = tensor.empty() : tensor<2xf32>
+  %1 = linalg.matvec ins(%arg0, %arg1 : tensor<2x3xf32>, tensor<3xf32>) outs(%0 : tensor<2xf32>) -> tensor<2xf32>
+  %2 = arith.divf %arg2, %1 : tensor<2xf32>
+  return %2 : tensor<2xf32>
+}
+
+// -----
+
+// The linear op is the subtrahend, so the subtraction is not an addend.
+
+// CHECK: func.func @no_fuse_sub_from_constant
+// CHECK: linalg.matvec
+// CHECK: arith.subf
+func.func @no_fuse_sub_from_constant(%arg0: tensor<2x3xf32>, %arg1: tensor<3xf32>, %arg2: tensor<2xf32>) -> tensor<2xf32> {
+  %0 = tensor.empty() : tensor<2xf32>
+  %1 = linalg.matvec ins(%arg0, %arg1 : tensor<2x3xf32>, tensor<3xf32>) outs(%0 : tensor<2xf32>) -> tensor<2xf32>
+  %2 = arith.subf %arg2, %1 : tensor<2xf32>
+  return %2 : tensor<2xf32>
+}
