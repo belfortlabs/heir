@@ -2819,17 +2819,17 @@ class ConvertTensorExtractSlice
     sourceRel.compose(extractSliceLayout.value());
     sourceRel.compose(resultRel);
 
-    LayoutAttr sliceLayoutAttr =
+    LayoutAttr remapLayoutAttr =
         LayoutAttr::getFromIntegerRelation(ctx, sourceRel);
     auto resultCiphertextSemanticType = cast<RankedTensorType>(
         getTypeConverter()->convertType(op.getResultType(), resultLayout));
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);
     auto remapAndExtract = remapAndExtractResult(
-        b, adaptor.getSource(), sliceLayoutAttr, resultCiphertextSemanticType);
+        b, adaptor.getSource(), remapLayoutAttr, resultCiphertextSemanticType);
 
     setMaterializedAttr(remapAndExtract);
     setAttributeAssociatedWith(remapAndExtract->getResult(0), kLayoutAttrName,
-                               sliceLayoutAttr);
+                               resultLayout);
     rewriter.replaceOp(op, remapAndExtract->getResult(0));
     return success();
   }
