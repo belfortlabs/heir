@@ -1,8 +1,11 @@
 #include "lib/Dialect/Cheddar/Transforms/PlanEvaluationKeys.h"
 
+#include <dlfcn.h>
+
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "cyclops_planner.h"  // from @heir//bazel/cyclops:planner
 #include "lib/Dialect/Cheddar/IR/CheddarAttributes.h"
@@ -35,12 +38,70 @@ func::FuncOp findClientSetup(ModuleOp module) {
   return found;
 }
 
+// The planner functions the pass calls. heir-opt does not link the
+// proprietary planner: the pass loads libcyclops_planner from the library
+// path when it first plans keys.
+// clang-format off
+#define CYCLOPS_PLANNER_FUNCTIONS(X) \
+  X(cyclops_free_error) \
+  X(cyclops_params_create) \
+  X(cyclops_params_set_dense_hamming_weight) \
+  X(cyclops_params_set_sparse_hamming_weight) \
+  X(cyclops_params_set_max_log_pq) \
+  X(cyclops_params_set_max_key_switch_aux) \
+  X(cyclops_params_set_level_specific_ks) \
+  X(cyclops_params_free) \
+  X(cyclops_evk_request_create) \
+  X(cyclops_evk_request_add_request) \
+  X(cyclops_evk_request_request_multiplication_key) \
+  X(cyclops_evk_request_keys) \
+  X(cyclops_evk_request_free) \
+  X(cyclops_add_linear_transform_required_keys) \
+  X(cyclops_default_mod1) \
+  X(cyclops_add_bootstrap_required_rotations) \
+  X(cyclops_mod1_depth)
+// clang-format on
+
+struct Planner {
+#define DECLARE_FUNCTION(name) decltype(&::name) name = nullptr;
+  CYCLOPS_PLANNER_FUNCTIONS(DECLARE_FUNCTION)
+#undef DECLARE_FUNCTION
+  // Why loading failed; empty once every function is found.
+  std::string error;
+};
+
+const Planner& planner() {
+  static const Planner loaded = [] {
+    Planner result;
+#ifdef __APPLE__
+    void* library =
+        dlopen("@rpath/libcyclops_planner.dylib", RTLD_NOW | RTLD_LOCAL);
+#else
+    void* library = dlopen("libcyclops_planner.so", RTLD_NOW | RTLD_LOCAL);
+#endif
+    if (!library) {
+      result.error = dlerror();
+      return result;
+    }
+#define LOAD_FUNCTION(name)                                                 \
+  result.name = reinterpret_cast<decltype(&::name)>(dlsym(library, #name)); \
+  if (!result.name) {                                                       \
+    result.error = dlerror();                                               \
+    return result;                                                          \
+  }
+    CYCLOPS_PLANNER_FUNCTIONS(LOAD_FUNCTION)
+#undef LOAD_FUNCTION
+    return result;
+  }();
+  return loaded;
+}
+
 // The x mod 1 approximation the attribute describes, on top of Cyclops'
 // default: the same resolution the emitted BootParameter performs, so the
 // planned keys match the runtime's circuit.
-std::optional<cyclops_mod1> toMod1(EvalModAttr attr) {
+std::optional<cyclops_mod1> toMod1(const Planner& api, EvalModAttr attr) {
   if (!attr) return std::nullopt;
-  cyclops_mod1 mod1 = cyclops_default_mod1();
+  cyclops_mod1 mod1 = api.cyclops_default_mod1();
   if (StringAttr type = attr.getType()) {
     mod1.type = llvm::StringSwitch<int>(type.getValue())
                     .Case("cos_hk", CYCLOPS_MOD1_COS_HK)
@@ -86,13 +147,19 @@ struct PlanEvaluationKeysPass
                      DenseI64ArrayAttr multiplicationKeys, ArrayAttr shapes,
                      IntegerAttr bootstrapSlots,
                      BootstrapConfigAttr bootstrapConfig) {
+    const Planner& api = planner();
+    if (!api.error.empty())
+      return setup.emitOpError()
+             << "Cyclops key planning needs libcyclops_planner on the library "
+                "path: "
+             << api.error;
     char* error = nullptr;
     // Reports a failed planner call; NULL error means allocation failed.
     auto failed = [&](bool ok) {
       if (ok) return false;
       setup.emitOpError() << "Cyclops key planning failed: "
                           << (error ? error : "out of memory");
-      cyclops_free_error(error);
+      api.cyclops_free_error(error);
       return true;
     };
 
@@ -104,7 +171,7 @@ struct PlanEvaluationKeysPass
     const int32_t additionalBase[2] = {static_cast<int32_t>(baseMain),
                                        static_cast<int32_t>(baseTerminal)};
     std::unique_ptr<cyclops_params, decltype(&cyclops_params_free)> params(
-        cyclops_params_create(
+        api.cyclops_params_create(
             parameterSet.getLogN(),
             static_cast<double>(uint64_t{1} << parameterSet.getLogScale()),
             parameterSet.getDefaultEncryptionLevelOrDefault(), levels.data(),
@@ -117,36 +184,36 @@ struct PlanEvaluationKeysPass
             static_cast<int>(parameterSet.getDefaultNumAux().value_or(-1)),
             CYCLOPS_RING_STANDARD,
             static_cast<int>(parameterSet.getWordBitsOrDefault()), &error),
-        cyclops_params_free);
+        api.cyclops_params_free);
     if (failed(params != nullptr)) return failure();
     // The dense weight goes first: the sparse one must stay below it.
     if (auto weight = parameterSet.getDenseHammingWeight())
-      if (failed(cyclops_params_set_dense_hamming_weight(params.get(), *weight,
-                                                         &error) == 0))
+      if (failed(api.cyclops_params_set_dense_hamming_weight(
+                     params.get(), *weight, &error) == 0))
         return failure();
     if (auto weight = parameterSet.getSparseHammingWeight())
-      if (failed(cyclops_params_set_sparse_hamming_weight(params.get(), *weight,
-                                                          &error) == 0))
+      if (failed(api.cyclops_params_set_sparse_hamming_weight(
+                     params.get(), *weight, &error) == 0))
         return failure();
     if (FloatAttr budget = parameterSet.getMaxLogPq())
-      if (failed(cyclops_params_set_max_log_pq(
+      if (failed(api.cyclops_params_set_max_log_pq(
                      params.get(), budget.getValueAsDouble(), &error) == 0))
         return failure();
     if (BoolAttr levelSpecific = parameterSet.getLevelSpecificKs())
-      if (failed(cyclops_params_set_level_specific_ks(
+      if (failed(api.cyclops_params_set_level_specific_ks(
                      params.get(), levelSpecific.getValue(), &error) == 0))
         return failure();
     if (auto cap = parameterSet.getMaxKeySwitchAux())
-      if (failed(cyclops_params_set_max_key_switch_aux(params.get(), *cap,
-                                                       &error) == 0))
+      if (failed(api.cyclops_params_set_max_key_switch_aux(params.get(), *cap,
+                                                           &error) == 0))
         return failure();
 
     std::unique_ptr<cyclops_evk_request, decltype(&cyclops_evk_request_free)>
-        request(cyclops_evk_request_create(), cyclops_evk_request_free);
+        request(api.cyclops_evk_request_create(), api.cyclops_evk_request_free);
     if (failed(request != nullptr)) return failure();
     ArrayRef<int64_t> pairs = rotationKeys.asArrayRef();
     for (size_t i = 0; i + 1 < pairs.size(); i += 2)
-      if (failed(cyclops_evk_request_add_request(
+      if (failed(api.cyclops_evk_request_add_request(
                      request.get(), pairs[i], pairs[i + 1],
                      CYCLOPS_KEY_MODE_INHERIT, -1, &error) == 0))
         return failure();
@@ -155,7 +222,7 @@ struct PlanEvaluationKeysPass
     // for the level otherwise.
     if (multiplicationKeys)
       for (int64_t level : multiplicationKeys.asArrayRef())
-        if (failed(cyclops_evk_request_request_multiplication_key(
+        if (failed(api.cyclops_evk_request_request_multiplication_key(
                        request.get(), level, CYCLOPS_KEY_MODE_DEFAULT, -1,
                        &error) == 0))
           return failure();
@@ -183,7 +250,7 @@ struct PlanEvaluationKeysPass
           }
         }
         auto diagonals = indices.asArrayRef();
-        if (failed(cyclops_add_linear_transform_required_keys(
+        if (failed(api.cyclops_add_linear_transform_required_keys(
                        request.get(), params.get(), width.getInt(),
                        diagonals.data(), diagonals.size(), level.getInt(),
                        bs.getInt(), gs.getInt(), CYCLOPS_KEY_MODE_INHERIT,
@@ -195,10 +262,11 @@ struct PlanEvaluationKeysPass
     if (bootstrapSlots) {
       int ratio = bootstrapConfig.getLogMessageRatio().value_or(
           kDefaultLogMessageRatio);
-      std::optional<cyclops_mod1> mod1 = toMod1(bootstrapConfig.getEvalMod());
+      std::optional<cyclops_mod1> mod1 =
+          toMod1(api, bootstrapConfig.getEvalMod());
       int evalModLevels = 0;
-      if (failed(cyclops_mod1_depth(mod1 ? &*mod1 : nullptr, ratio,
-                                    &evalModLevels, &error) == 0))
+      if (failed(api.cyclops_mod1_depth(mod1 ? &*mod1 : nullptr, ratio,
+                                        &evalModLevels, &error) == 0))
         return failure();
       if (evalModLevels != bootstrapConfig.getNumEvalModLevels()) {
         return setup.emitOpError()
@@ -207,7 +275,7 @@ struct PlanEvaluationKeysPass
                << bootstrapConfig.getNumEvalModLevels();
       }
       // The emitter hard-codes the imaginary-removing variant.
-      if (failed(cyclops_add_bootstrap_required_rotations(
+      if (failed(api.cyclops_add_bootstrap_required_rotations(
                      request.get(), params.get(),
                      bootstrapConfig.getNumCtsLevels(),
                      bootstrapConfig.getNumStcLevels(), ratio,
@@ -218,8 +286,8 @@ struct PlanEvaluationKeysPass
     }
 
     SmallVector<cyclops_key> keys(
-        cyclops_evk_request_keys(request.get(), nullptr, 0));
-    cyclops_evk_request_keys(request.get(), keys.data(), keys.size());
+        api.cyclops_evk_request_keys(request.get(), nullptr, 0));
+    api.cyclops_evk_request_keys(request.get(), keys.data(), keys.size());
     SmallVector<int64_t> flattened;
     for (const cyclops_key& key : keys)
       flattened.append({key.family, key.rotation, key.level, key.key_mode,

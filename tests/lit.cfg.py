@@ -66,8 +66,18 @@ substitutions = {
 }
 config.substitutions.extend(substitutions.items())
 
-# Tests that plan Cyclops evaluation keys need the real planner, not the stub
-# heir-opt links by default (see bazel/cyclops/BUILD).
-planner_kind = runfiles_dir / "_main/bazel/cyclops/planner_kind.txt"
-if planner_kind.read_text().strip() == "real":
+# Tests that plan Cyclops evaluation keys need the planner library, which
+# heir-opt loads from the library path. They run when CYCLOPS_PLANNER_DIR names
+# a directory with libcyclops_planner. The directory is local, so run them
+# locally, e.g.
+# bazel test --test_env=CYCLOPS_PLANNER_DIR=/path/to/dir \
+#   --strategy=TestRunner=local //tests/...
+if planner_dir := os.environ.get("CYCLOPS_PLANNER_DIR"):
+  if not any(Path(planner_dir).glob("libcyclops_planner.*")):
+    lit_config.fatal(
+        f"CYCLOPS_PLANNER_DIR={planner_dir} has no libcyclops_planner; the"
+        " planner tests need local execution (--strategy=TestRunner=local)"
+    )
   config.available_features.add("cyclops-planner")
+  for name in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+    config.environment[name] = planner_dir

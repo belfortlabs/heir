@@ -345,17 +345,17 @@ struct LinearTransformOpConversion
       }
     }
 
-    // Handle mgmt attrs
+    // Handle mgmt attrs. Keep the first occurrence of each name so the result
+    // mgmt attr wins over the operand one, as in SecretGenericOpConversion.
     convertArrayOfDicts(op.getAllResultAttrsAttr(), attrsToPreserve);
     convertArrayOfDicts(op.getAllOperandAttrsAttr(), attrsToPreserve);
     DenseSet<StringRef> seenNames;
     SmallVector<NamedAttribute> dedupedAttrsToPreserve;
-    for (auto attr : llvm::reverse(attrsToPreserve)) {
+    for (auto attr : attrsToPreserve) {
       if (seenNames.insert(attr.getName().getValue()).second) {
         dedupedAttrsToPreserve.push_back(attr);
       }
     }
-    std::reverse(dedupedAttrsToPreserve.begin(), dedupedAttrsToPreserve.end());
     auto newLtOp = kernel::LinearTransformOp::create(
         rewriter, ltOp.getLoc(), resultTypes, inputs, dedupedAttrsToPreserve);
 

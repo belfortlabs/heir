@@ -1,9 +1,11 @@
 #ifndef BAZEL_CYCLOPS_CYCLOPS_PLANNER_H_
 #define BAZEL_CYCLOPS_CYCLOPS_PLANNER_H_
 
-// The functions of Cyclops' planner/include/cyclops_planner.h (at version.bzl's
-// commit), and the constants HEIR uses, for building against the planner stub.
+// The functions of Cyclops' planner/include/cyclops_planner.h (at commit
+// c4b4d20487ff855811f3d8de0592ab6871d70ff3), and the constants HEIR uses, for
+// loading the planner at run time.
 // The constants keep Cyclops' values; the structs keep its layout.
+// header_check.py checks this copy against a Cyclops checkout or release.
 
 #include <stddef.h>
 #include <stdint.h>
