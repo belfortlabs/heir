@@ -1,6 +1,5 @@
 #include "lib/Dialect/Secret/Conversions/SecretToCKKS/SecretToCKKS.h"
 
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <optional>
