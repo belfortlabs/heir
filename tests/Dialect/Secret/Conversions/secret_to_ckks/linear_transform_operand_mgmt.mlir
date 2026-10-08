@@ -1,20 +1,17 @@
 // RUN: heir-opt --secret-to-ckks %s | FileCheck %s
 
-// The generic around a linear transform carries the operand's mgmt attribute
-// (level 2) next to the result's (level 1). The converted linear transform must
-// keep the result's level, or the function return expects a level-2 ciphertext
-// and the conversion leaves an unresolved materialization behind.
+// The generic's operand mgmt attr is one level above its result's. The converted
+// linear_transform must keep the result's level, or the return needs an
+// unresolved materialization.
 
 // CHECK: func.func @lintrans_operand_mgmt
-// CHECK-SAME: tensor<1x!ct_L1>
+// CHECK-SAME: -> tensor<1x!ct_L1>
 // CHECK: kernel.linear_transform
 // CHECK-SAME: -> tensor<1x!ct_L1>
 // CHECK-NEXT: return {{.*}} : tensor<1x!ct_L1>
 module attributes {
-  backend.lattigo,
   ckks.schemeParam = #ckks.scheme_param<logN = 14, Q = [36028797017456641, 35184371138561, 35184372121601], P = [1152921504607338497, 1152921504608747521], logDefaultScale = 45, encryptionTechnique = extended>,
   scheme.ckks,
-  scheme.actual_slot_count = 8192 : i64,
   scheme.requested_slot_count = 1024 : i64
 } {
   func.func @lintrans_operand_mgmt(

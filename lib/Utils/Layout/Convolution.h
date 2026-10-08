@@ -108,7 +108,8 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
 // Returns a sequence of IntegerRelations that represents the layout mapping as
 // a series of simple steps (Toeplitz expansion, row interchange, flattening,
 // diagonalization). This is preferred for compilation performance to avoid ISL
-// hangs when generating loops.
+// hangs when generating loops. `inputGap` is as for
+// get2dConvChwFchwFilterExpandedType.
 FailureOr<std::vector<presburger::IntegerRelation>>
 get2dConvChwFchwFilterAsSequence(RankedTensorType filterType,
                                  RankedTensorType dataType,

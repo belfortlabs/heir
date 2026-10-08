@@ -1220,7 +1220,6 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     return op->emitOpError() << "Expected equal strides for Conv2DNchwFchwOp";
   }
 
-  // Ensure data is in gapped row-major layout with current inputGap.
   // We expect 4-D tensor (N, C, H, W) but only support N=1.
   if (dataType.getRank() != 4 || dataType.getDimSize(0) != 1) {
     return op->emitOpError() << "Expected 4-D data tensor (N=1, C, H, W)";
@@ -1236,7 +1235,8 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   }
   // Gapped data is the pixel-shuffled result of an earlier strided conv. The
   // Toeplitz matrix reads it in place, and the result is shuffled by the input
-  // gap times the stride, so it reserves whole blocks of gap^2 channels.
+  // gap times the stride, so the result reserves whole blocks of gap^2
+  // channels.
   int64_t inputGap = dataKernelInfo->gapFactor;
   int64_t gapFactor = strides[0] * inputGap;
 
@@ -1307,8 +1307,10 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
         RankedTensorType::get({outputType.getDimSize(0), cFhe, hFhe, wFhe},
                               outputType.getElementType());
   }
-  // `inputShape` stays the padded FHE shape; ConvertToCiphertextSemantics
-  // re-derives the unpadded operand from it and the folded padding attribute.
+  // `inputShape` is the shape the matrix is built against before a folded pad
+  // is removed: the padded FHE shape, or the logical data shape for gapped
+  // data. ConvertToCiphertextSemantics re-derives the unpadded operand from it
+  // and the folded padding attribute.
   KernelInfo kernelInfo = {
       .inputShape = llvm::to_vector(fheInputType.getShape()),
       .resultShape = llvm::to_vector(fheOutputType.getShape()),
