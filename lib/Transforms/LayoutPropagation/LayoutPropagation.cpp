@@ -246,7 +246,7 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
     LLVM_DEBUG(llvm::dbgs()
                << "conv found a pad of " << p
                << " but the operand layout does not match the shifted "
-                  "unpadded row-major layout; not folding\n");
+                  "unpadded layout; not folding\n");
     return std::nullopt;
   }
 
@@ -1933,8 +1933,9 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
   // A 1-D conv reads only row-major data, so it would convert gapped data after
   // the pad anyway. Un-shuffle before the pad instead, so the conv can fold the
   // pad into its padding parameter. A 2-D conv folds the pad into its read of
-  // the gapped data and needs no conversion.
-  if (info && info->gapFactor > 1 && paddedType.getRank() == 3) {
+  // the gapped data and needs no conversion. The producing conv's input rank
+  // tells them apart; DropUnitDims leaves 2-D pads at rank 3 too.
+  if (info && info->gapFactor > 1 && info->inputShape.size() == 3) {
     IntegerRelation rowMajor =
         getRowMajorLayoutRelation(op.getSourceType(), minSlotCount);
     if (!isRelationEqual(sourceLayout.getIntegerRelation(), rowMajor)) {

@@ -6,7 +6,8 @@ import (
 )
 
 // A stride-2 conv, a zero pad and a stride-1 conv: the pad sits on the gapped
-// result of the first conv.
+// result of the first conv. The expected values are the plaintext result,
+// computed from the input and filters.
 func TestConv2DStridedPad(t *testing.T) {
 	evaluator, params, ecd, enc, dec := Conv2d_nchw_strided_pad__configure()
 
