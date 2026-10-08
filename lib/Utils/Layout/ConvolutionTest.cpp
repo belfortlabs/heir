@@ -1206,6 +1206,19 @@ TEST(ConvolutionTest, TestConv2dChwFchwDiagonalizedGappedInput) {
   }
 }
 
+TEST(ConvolutionTest, TestConv2dChwFchwDiagonalizedGappedInputFoldedPadding) {
+  // A zero pad on gapped data folded into the conv: the columns still index
+  // the unpadded data at its shuffled position.
+  MLIRContext context;
+  for (int64_t stride : {1, 2}) {
+    checkConv2dChwFchwDiagonalized(context, /*outputChannels=*/2,
+                                   /*inputChannels=*/3, /*filterSize=*/3,
+                                   /*dataH=*/4, /*dataW=*/4, stride,
+                                   /*padding=*/1, /*ciphertextSize=*/128,
+                                   /*interchangeRows=*/true, /*inputGap=*/2);
+  }
+}
+
 }  // namespace
 }  // namespace heir
 }  // namespace mlir
