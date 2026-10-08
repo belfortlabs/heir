@@ -344,10 +344,10 @@ struct LinearTransformOpConversion
       }
     }
 
-    // Handle mgmt attrs. Keep the first occurrence of each name so the result
-    // mgmt attr wins over the operand one, as in SecretGenericOpConversion.
+    // The new op's attributes are read as its result's, so only the generic's
+    // result attrs carry over. Its operand attrs, e.g. the operand's mgmt.mgmt
+    // one level higher, would be misread as the result's.
     convertArrayOfDicts(op.getAllResultAttrsAttr(), attrsToPreserve);
-    convertArrayOfDicts(op.getAllOperandAttrsAttr(), attrsToPreserve);
     DenseSet<StringRef> seenNames;
     SmallVector<NamedAttribute> dedupedAttrsToPreserve;
     for (auto attr : attrsToPreserve) {
