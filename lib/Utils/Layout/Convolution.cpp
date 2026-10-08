@@ -522,8 +522,6 @@ FailureOr<std::vector<IntegerRelation>> get2dConvChwFchwFilterAsSequence(
     RankedTensorType filterType, RankedTensorType dataType,
     ArrayRef<int64_t> strides, int64_t padding, int64_t minSlotCount,
     bool interchangeRows, int64_t inputGap) {
-  assert((inputGap == 1 || padding == 0) &&
-         "gapped data cannot fold a pad into the conv");
   auto inputChannels = dataType.getDimSize(1);
   auto outputChannels = filterType.getDimSize(0);
   auto filterRowSize = filterType.getDimSize(2);
