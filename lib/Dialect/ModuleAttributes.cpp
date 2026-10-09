@@ -77,6 +77,17 @@ int64_t getEncodedSlotCount(Operation* moduleOp, int64_t ringCapacity) {
   return ringCapacity;
 }
 
+int64_t getLayoutSlotCount(Operation* op, int64_t minSlotCount) {
+  Operation* moduleOp =
+      isa<ModuleOp>(op) ? op : op->getParentOfType<ModuleOp>();
+  if (!moduleOp) return minSlotCount;
+  if (auto recorded =
+          moduleOp->getAttrOfType<IntegerAttr>(kLayoutSlotCountAttrName)) {
+    return recorded.getInt();
+  }
+  return minSlotCount;
+}
+
 bool moduleIsBGV(Operation* moduleOp) {
   return moduleOp->getAttrOfType<mlir::UnitAttr>(kBGVSchemeAttrName) != nullptr;
 }
