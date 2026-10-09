@@ -867,6 +867,52 @@ TEST(UtilsTest, TestGetSliceInsertionRelation) {
   }
 }
 
+TEST(UtilsTest, TestGetSliceInsertionRelationKeepsUnitDims) {
+  MLIRContext context;
+  // Insert a 1x1x3x4 slice into a 2x1x3x4 tensor at (1, 0, 0, 0) without rank
+  // reduction.
+  RankedTensorType sliceType =
+      RankedTensorType::get({1, 1, 3, 4}, IndexType::get(&context));
+  RankedTensorType destType =
+      RankedTensorType::get({2, 1, 3, 4}, IndexType::get(&context));
+  SmallVector<int64_t> offsets = {1, 0, 0, 0};
+  SmallVector<int64_t> sizes = {1, 1, 3, 4};
+  SmallVector<int64_t> strides = {1, 1, 1, 1};
+
+  auto sliceRelation =
+      getSliceInsertionRelation(sliceType, destType, offsets, sizes, strides);
+  ASSERT_TRUE(succeeded(sliceRelation));
+  EXPECT_TRUE(sliceRelation.value()
+                  .containsPointNoLocal({0, 0, 2, 3, 1, 0, 2, 3})
+                  .has_value());
+  EXPECT_FALSE(sliceRelation.value()
+                   .containsPointNoLocal({0, 0, 2, 3, 1, 0, 0, 0})
+                   .has_value());
+}
+
+TEST(UtilsTest, TestGetSliceExtractionRelationKeepsUnitDims) {
+  MLIRContext context;
+  // Extract a 1x1x3x4 slice from a 2x1x3x4 tensor at (1, 0, 0, 0) without
+  // rank reduction.
+  RankedTensorType sourceType =
+      RankedTensorType::get({2, 1, 3, 4}, IndexType::get(&context));
+  RankedTensorType sliceType =
+      RankedTensorType::get({1, 1, 3, 4}, IndexType::get(&context));
+  SmallVector<int64_t> offsets = {1, 0, 0, 0};
+  SmallVector<int64_t> sizes = {1, 1, 3, 4};
+  SmallVector<int64_t> strides = {1, 1, 1, 1};
+
+  auto sliceRelation = getSliceExtractionRelation(sourceType, sliceType,
+                                                  offsets, sizes, strides);
+  ASSERT_TRUE(succeeded(sliceRelation));
+  EXPECT_TRUE(sliceRelation.value()
+                  .containsPointNoLocal({1, 0, 2, 3, 0, 0, 2, 3})
+                  .has_value());
+  EXPECT_FALSE(sliceRelation.value()
+                   .containsPointNoLocal({1, 0, 2, 3, 0, 0, 0, 0})
+                   .has_value());
+}
+
 TEST(UtilsTest, TestShiftVar) {
   MLIRContext context;
   auto rel =
