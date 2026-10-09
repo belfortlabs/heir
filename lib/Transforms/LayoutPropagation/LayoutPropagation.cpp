@@ -12,6 +12,7 @@
 
 #include "lib/Analysis/SecretnessAnalysis/SecretnessAnalysis.h"
 #include "lib/Dialect/HEIRInterfaces.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretDialect.h"
 #include "lib/Dialect/Secret/IR/SecretOps.h"
@@ -21,6 +22,7 @@
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
 #include "lib/Dialect/TensorExt/Transforms/Patterns.h"
 #include "lib/Kernel/KernelName.h"
+#include "lib/Target/CompilationTarget/CompilationTarget.h"
 #include "lib/Transforms/LayoutPropagation/Utils.h"
 #include "lib/Utils/AttributeUtils.h"
 #include "lib/Utils/Layout/Convolution.h"
@@ -50,6 +52,7 @@
 #include "mlir/include/mlir/IR/AffineMap.h"              // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
+#include "mlir/include/mlir/IR/BuiltinOps.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/Diagnostics.h"            // from @llvm-project
@@ -352,6 +355,10 @@ struct LayoutPropagation : impl::LayoutPropagationBase<LayoutPropagation> {
   // assignedLayouts map contains the layout for the result SSA values already.
   void setResultLayoutAttr(Operation* op, Attribute kernelInfoAttr = {});
 
+  // Fails with an error when `op`'s kernel, whose packing spans `slots` values
+  // per ciphertext, needs more slots than the backend's largest ring holds.
+  LogicalResult checkMaxSlotCount(Operation* op, int64_t slots);
+
   void runOnOperation() override;
 
   LayoutAttr getComposedLayoutAttr(Value v) {
@@ -374,6 +381,10 @@ struct LayoutPropagation : impl::LayoutPropagationBase<LayoutPropagation> {
 
   DenseMap<Value, Attribute> assignedLayouts;
   DataFlowSolver* solver;
+  // The backend's largest ring degree, and the slots its ciphertexts hold. 0
+  // when the module names no backend or the backend sets no limit.
+  int64_t maxRingDegree = 0;
+  int64_t maxSlotCount = 0;
 };
 
 FailureOr<AssignLayoutOp> LayoutPropagation::assignDefaultLayoutForOpOperand(
@@ -682,6 +693,13 @@ LogicalResult LayoutPropagation::visitOperation(VecmatOp op) {
   MLIRContext* ctx = &getContext();
   mlir::IRRewriter builder(ctx);
 
+  // Each ciphertext holds the whole vector, or a whole diagonal of the matrix.
+  ArrayRef<int64_t> matrixShape =
+      cast<RankedTensorType>(matrix.getType()).getShape();
+  if (failed(checkMaxSlotCount(op, std::max(matrixShape[0], matrixShape[1])))) {
+    return failure();
+  }
+
   if (vecType.getDimSize(0) > minSlotCount) {
     return op->emitError() << "Vector must fit into a single ciphertext";
   }
@@ -808,6 +826,12 @@ LogicalResult LayoutPropagation::visitOperation(MatvecOp op) {
   // TODO(#1597): a layout optimizer should really be selecting the diagonal
   // layout instead of this pass.
 
+  // Each ciphertext holds a whole diagonal of the matrix.
+  if (failed(checkMaxSlotCount(
+          op, std::max(matrixType.getDimSize(0), matrixType.getDimSize(1))))) {
+    return failure();
+  }
+
   LayoutAttr matrixLayout = getComposedLayoutAttr(matrix);
   // The Halevi-Shoup kernel (all we support at this time) requires one
   // ciphertext per matrix row.
@@ -930,6 +954,10 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DOp op) {
   auto dataType = cast<RankedTensorType>(data.getType());
   auto filterType = cast<RankedTensorType>(filter.getType());
 
+  if (failed(checkMaxSlotCount(op, dataType.getNumElements()))) {
+    return failure();
+  }
+
   // Flattened data must fit into the ciphertext size.
   if (dataType.getNumElements() > minSlotCount) {
     return op->emitOpError()
@@ -1004,6 +1032,10 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DOp op) {
   Value filter = op.getInputs().back();
   auto dataType = cast<RankedTensorType>(data.getType());
   auto filterType = cast<RankedTensorType>(filter.getType());
+
+  if (failed(checkMaxSlotCount(op, dataType.getNumElements()))) {
+    return failure();
+  }
 
   // Flattened data must fit into the ciphertext size.
   if (dataType.getNumElements() > minSlotCount) {
@@ -1118,6 +1150,16 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
         convertToLayout(ctx, builder, op, data, dataLayout, targetDataRelation);
     debugAssignLayout(toReplace, newDataLayoutAttr);
     assignedLayouts.insert({toReplace, newDataLayoutAttr});
+  }
+
+  // Each ciphertext holds a whole diagonal of the expanded filter matrix.
+  RankedTensorType expandedFilterType = get1dConvCwFcwFilterExpandedType(
+      filterType, matrixOperand.dataType, stride, matrixOperand.padding,
+      interchangeRows);
+  if (failed(
+          checkMaxSlotCount(op, std::max(expandedFilterType.getDimSize(0),
+                                         expandedFilterType.getDimSize(1))))) {
+    return failure();
   }
 
   // The kernel for this operation requires expanding the conv filter matrix
@@ -1251,6 +1293,18 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     matrixOperand = folded->matrixOperand;
     targetDataRelation = folded->targetRelation;
     dataLayoutMatchesTarget = true;
+  }
+
+  // Each ciphertext holds a whole diagonal of the expanded filter matrix, which
+  // is built against the operand the ciphertext holds: gapped by the
+  // producer's strides, and without a pad that folded into the conv.
+  RankedTensorType expandedFilterType = get2dConvChwFchwFilterExpandedType(
+      filterType, matrixOperand.dataType, matrixOperand.padding, strides,
+      interchangeRows);
+  if (failed(
+          checkMaxSlotCount(op, std::max(expandedFilterType.getDimSize(0),
+                                         expandedFilterType.getDimSize(1))))) {
+    return failure();
   }
 
   RankedTensorType fheOutputType = outputType;
@@ -1397,6 +1451,14 @@ LogicalResult LayoutPropagation::visitOperation(BatchMatmulOp op) {
 
   // Tricyclic ct-ct batch matmul.
   if (secretLhs && secretRhs && lhsCoprime && rhsCoprime) {
+    // The cyclic kernel holds each operand, and the result, in one ciphertext
+    // (a diagonal of a plaintext weight spans the whole weight).
+    if (failed(checkMaxSlotCount(
+            op, std::max({lhsType.getNumElements(), rhsType.getNumElements(),
+                          cast<RankedTensorType>(result.getType())
+                              .getNumElements()})))) {
+      return failure();
+    }
     LayoutAttr lhsLayout = getComposedLayoutAttr(lhs);
     if (!isRelationTricyclic(lhsType, minSlotCount,
                              lhsLayout.getIntegerRelation())) {
@@ -1469,6 +1531,10 @@ LogicalResult LayoutPropagation::visitOperation(BatchMatmulOp op) {
       RankedTensorType bmmOutputType = cast<RankedTensorType>(result.getType());
       int64_t period = hDim * ctStride;
       int64_t reach = period * (nDim - 1);
+      if (failed(
+              checkMaxSlotCount(op, reach + bmmOutputType.getNumElements()))) {
+        return failure();
+      }
       if (reach + bmmOutputType.getNumElements() > minSlotCount) {
         return builder.notifyMatchFailure(
             op, "slot count budget exceeded for batch matmul diagonal reach");
@@ -1571,6 +1637,14 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
   // Bicyclic ct-ct matmul.
   if (inputSecret && filterSecret && lhsCoprime && rhsCoprime &&
       outputCoprime) {
+    // The cyclic kernel holds each operand, and the result, in one ciphertext
+    // (a diagonal of a plaintext weight spans the whole weight).
+    if (failed(checkMaxSlotCount(
+            op, std::max({lhsType.getNumElements(), rhsType.getNumElements(),
+                          cast<RankedTensorType>(result.getType())
+                              .getNumElements()})))) {
+      return failure();
+    }
     LayoutAttr lhsLayout = getComposedLayoutAttr(lhs);
     if (!isRelationBicyclic(lhsType, minSlotCount,
                             lhsLayout.getIntegerRelation())) {
@@ -1615,6 +1689,14 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
   // with period the secret operand's packed row (or column) count.
   if (outputCoprime && ((inputSecret && !filterSecret && lhsCoprime) ||
                         (!inputSecret && filterSecret && rhsCoprime))) {
+    // The cyclic kernel holds each operand, and the result, in one ciphertext
+    // (a diagonal of a plaintext weight spans the whole weight).
+    if (failed(checkMaxSlotCount(
+            op, std::max({lhsType.getNumElements(), rhsType.getNumElements(),
+                          cast<RankedTensorType>(result.getType())
+                              .getNumElements()})))) {
+      return failure();
+    }
     Value secretOperand = inputSecret ? lhs : rhs;
     RankedTensorType secretType = inputSecret ? lhsType : rhsType;
     Value weight = inputSecret ? rhs : lhs;
@@ -1697,6 +1779,12 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
         ctx, KernelName::MatmulBicyclicDiagonal, /*force=*/false);
     op->setAttr(secret::SecretDialect::kKernelAttrName, kernelAttr);
     return success();
+  }
+
+  // Each ciphertext holds a row of the input matrix, or a whole diagonal of the
+  // filter matrix.
+  if (failed(checkMaxSlotCount(op, std::max(nDim, pDim)))) {
+    return failure();
   }
 
   // Assign a per-row layout to the input matrix. Each row of the input matrix
@@ -2585,7 +2673,41 @@ void LayoutPropagation::setResultLayoutAttr(Operation* op,
               builder.getArrayAttr(resultLayouts));
 }
 
+LogicalResult LayoutPropagation::checkMaxSlotCount(Operation* op,
+                                                   int64_t slots) {
+  if (maxSlotCount <= 0 || slots <= maxSlotCount) return success();
+  return op->emitOpError() << "needs " << slots
+                           << " slots, but the backend's largest ring degree "
+                           << maxRingDegree << " holds " << maxSlotCount;
+}
+
 void LayoutPropagation::runOnOperation() {
+  // The backend's largest ring bounds the slots a ciphertext holds: half the
+  // ring degree for CKKS, the full degree for BGV/BFV.
+  Operation* root = getOperation();
+  ModuleOp module = dyn_cast<ModuleOp>(root);
+  if (!module) module = root->getParentOfType<ModuleOp>();
+  maxRingDegree = 0;
+  if (module && (moduleIsOpenfhe(module) || moduleIsLattigo(module) ||
+                 moduleIsCheddar(module))) {
+    FailureOr<CompilationTarget> target = getTargetConfig(module);
+    if (failed(target)) {
+      signalPassFailure();
+      return;
+    }
+    maxRingDegree = target->max_ring_degree;
+  }
+  maxSlotCount =
+      (module && moduleIsBGVOrBFV(module)) ? maxRingDegree : maxRingDegree / 2;
+  if (maxSlotCount > 0 && minSlotCount > maxSlotCount) {
+    root->emitOpError() << "min-slot-count " << minSlotCount << " exceeds the "
+                        << maxSlotCount
+                        << " slots of the backend's largest ring degree "
+                        << maxRingDegree;
+    signalPassFailure();
+    return;
+  }
+
   DataFlowSolver solver;
   dataflow::loadBaselineAnalyses(solver);
   solver.load<SecretnessAnalysis>();

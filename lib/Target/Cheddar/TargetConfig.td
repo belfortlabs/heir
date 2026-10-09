@@ -16,4 +16,8 @@ def Cheddar : CompilationTarget<"cheddar"> {
   // scale-snu/cheddar exposes one canonical scale per level and has no
   // operation for a same-level scalar scale correction.
   let can_emit_adjust_scale = 0;
+
+  // Cheddar's NTT supports ring degrees up to 2^16 (NTTHandler's
+  // max_log_degree_), and its parameter sets end at logN = 16.
+  let max_ring_degree = 65536;
 }

@@ -14,6 +14,9 @@ class CompilationTarget<string name> {
   // Whether ciphertext-plaintext operations require equal modulus-chain levels.
   int requires_matching_ciphertext_plaintext_levels = 0;
   int can_emit_adjust_scale = 1;
+  // The largest ring degree N the backend supports, which bounds the slots a
+  // ciphertext holds (N/2 for CKKS, N for BGV/BFV). 0 means no limit.
+  int max_ring_degree = 0;
 }
 
 #endif // LIB_TARGET_COMPILATIONTARGET_HEIRTARGET_TD_
