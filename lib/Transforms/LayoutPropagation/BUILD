@@ -20,6 +20,7 @@ cc_library(
         "@heir//lib/Dialect/TensorExt/IR:Dialect",
         "@heir//lib/Dialect/TensorExt/Transforms:Patterns",
         "@heir//lib/Kernel",
+        "@heir//lib/Target/CompilationTarget",
         "@heir//lib/Utils:AttributeUtils",
         "@heir//lib/Utils/Layout:Convolution",
         "@heir//lib/Utils/Layout:Hoisting",
