@@ -10,7 +10,7 @@
 // CHECK: module attributes {
 // CHECK-SAME: backend.cheddar, cheddar.parameter_set = #cheddar.parameter_set<logN = 13, logScale = 35
 // CHECK-SAME: mainPrimes = [969146369, 1172439041, 958136321, 1070727169, 1115815937,
-// CHECK-SAME: auxPrimes = [964558849,
+// CHECK-SAME: auxPrimes = [2147352577,
 // CHECK-SAME: terminalPrimes = [30539777, 32899073, 29884417, 31326209, 36175873]
 // CHECK-SAME: levelConfig = [0, 2, 2, 1, 4, 0]
 // CHECK-SAME: wordBits = 32
@@ -18,10 +18,10 @@
 // CHECK-SAME: defaultNumAux = 12
 // CHECK-SAME: levelSpecificKs = true
 // CHECK-SAME: maxKeySwitchAux = 23
-// CHECK-SAME: maxLogPq = 2.162500e+02 : f64
+// CHECK-SAME: maxLogPq = 1.840000e+02 : f64
 // CHECK-SAME: denseHammingWeight = 128
 // CHECK-SAME: sparseHammingWeight = 128>
-// CHECK-SAME: ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [{{([0-9]{15,16})}}, {{([0-9]{11})}}, {{([0-9]{11})}}], P = [{{([0-9]{9,10}(, [0-9]{9,10}){24})}}], logDefaultScale = 35
+// CHECK-SAME: ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [{{([0-9]{15,16})}}, {{([0-9]{11})}}, {{([0-9]{11})}}], P = [{{([0-9]{9,10}(, [0-9]{9,10}){22})}}], logDefaultScale = 35
 // CHECK-SAME: encryptionTechnique = extended
 // CHECK-SAME: mgmt.top_level = 2 : i64
 // CHECK-SAME: scheme.actual_slot_count = 4096 : i64
