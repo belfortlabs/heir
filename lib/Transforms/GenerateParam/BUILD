@@ -41,6 +41,7 @@ cc_library(
         "@heir//lib/Parameters/BGV:Params",
         "@heir//lib/Parameters/CKKS:Params",
         "@heir//lib/Parameters/Cheddar:ParameterFile",
+        "@heir//lib/Target/CompilationTarget",
         "@heir//lib/Utils:LogArithmetic",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Analysis",

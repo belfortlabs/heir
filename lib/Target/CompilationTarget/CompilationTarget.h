@@ -42,6 +42,10 @@ FailureOr<CompilationTarget> getTargetConfig(ModuleOp module);
 // backend's config cannot be resolved.
 FailureOr<int64_t> getMaxRingDegree(ModuleOp module);
 
+// Fail with an error on `module` when `ringDegree` exceeds the largest ring
+// degree of the module's backend.
+LogicalResult verifyRingDegree(ModuleOp module, int64_t ringDegree);
+
 // Validate that the key-value pair is supported and valid for the target config
 // of the module.
 LogicalResult validateCompilationTargetOverride(ModuleOp module, StringRef key,

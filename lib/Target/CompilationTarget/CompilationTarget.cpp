@@ -101,6 +101,17 @@ FailureOr<int64_t> getMaxRingDegree(ModuleOp module) {
   return target->max_ring_degree;
 }
 
+LogicalResult verifyRingDegree(ModuleOp module, int64_t ringDegree) {
+  FailureOr<int64_t> maxRingDegree = getMaxRingDegree(module);
+  if (failed(maxRingDegree)) return failure();
+  if (*maxRingDegree > 0 && ringDegree > *maxRingDegree) {
+    return module.emitError()
+           << "ring degree " << ringDegree
+           << " exceeds the backend's largest ring degree " << *maxRingDegree;
+  }
+  return success();
+}
+
 LogicalResult validateCompilationTargetOverride(ModuleOp module, StringRef key,
                                                 Attribute value) {
   FailureOr<CompilationTarget> target = getTargetConfig(module);
