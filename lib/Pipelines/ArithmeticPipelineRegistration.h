@@ -42,7 +42,8 @@ struct MlirToRLWEPipelineOptions : public LoopOptions {
   PassOptions::Option<int> minSlotCount{
       *this, "min-slot-count",
       llvm::cl::desc("The minimum number of slots needed to pack cleartexts; "
-                     "this is a lower bound on the ring degree."),
+                     "this is a lower bound on the ring degree. "
+                     "layout-propagation raises it to fit every kernel."),
       llvm::cl::init(1024)};
   PassOptions::Option<bool> usePublicKey{
       *this, "use-public-key",
