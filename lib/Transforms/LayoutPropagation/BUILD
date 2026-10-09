@@ -16,7 +16,6 @@ cc_library(
         ":new_pass_inc_gen",
         "@heir//lib/Analysis/SecretnessAnalysis",
         "@heir//lib/Dialect:HEIRInterfaces",
-        "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/Secret/IR:Dialect",
         "@heir//lib/Dialect/TensorExt/IR:Dialect",
         "@heir//lib/Dialect/TensorExt/Transforms:Patterns",

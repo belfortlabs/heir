@@ -12,7 +12,6 @@
 
 #include "lib/Analysis/SecretnessAnalysis/SecretnessAnalysis.h"
 #include "lib/Dialect/HEIRInterfaces.h"
-#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretDialect.h"
 #include "lib/Dialect/Secret/IR/SecretOps.h"
@@ -2683,22 +2682,21 @@ LogicalResult LayoutPropagation::checkMaxSlotCount(Operation* op,
 
 void LayoutPropagation::runOnOperation() {
   // The backend's largest ring bounds the slots a ciphertext holds: half the
-  // ring degree for CKKS, the full degree for BGV/BFV.
+  // ring degree, as parameter generation sizes the ring at twice the slot
+  // count for every scheme.
   Operation* root = getOperation();
   ModuleOp module = dyn_cast<ModuleOp>(root);
   if (!module) module = root->getParentOfType<ModuleOp>();
   maxRingDegree = 0;
-  if (module && (moduleIsOpenfhe(module) || moduleIsLattigo(module) ||
-                 moduleIsCheddar(module))) {
-    FailureOr<CompilationTarget> target = getTargetConfig(module);
-    if (failed(target)) {
+  if (module) {
+    FailureOr<int64_t> degree = getMaxRingDegree(module);
+    if (failed(degree)) {
       signalPassFailure();
       return;
     }
-    maxRingDegree = target->max_ring_degree;
+    maxRingDegree = *degree;
   }
-  maxSlotCount =
-      (module && moduleIsBGVOrBFV(module)) ? maxRingDegree : maxRingDegree / 2;
+  maxSlotCount = maxRingDegree / 2;
   if (maxSlotCount > 0 && minSlotCount > maxSlotCount) {
     root->emitOpError() << "min-slot-count " << minSlotCount << " exceeds the "
                         << maxSlotCount
