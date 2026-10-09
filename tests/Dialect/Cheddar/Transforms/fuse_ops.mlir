@@ -101,3 +101,23 @@ func.func @do_not_fuse_different_contexts(
   %result = cheddar.add %ctx1, %rotated, %other, %d1 : (!cheddar.context, tensor<!ct>, tensor<!ct>, tensor<!ct>) -> tensor<!ct>
   return %result : tensor<!ct>
 }
+
+// A linear transform prepared by the function that applies it, here twice, is
+// evaluated directly at each use, so its encoded diagonals are not kept on the
+// device between the uses.
+
+// CHECK: @apply_prepared_directly
+// CHECK-NOT: cheddar.prepare_linear_transform
+// CHECK-COUNT-2: cheddar.linear_transform %{{.*}} {bs = 2 : i64, diagonal_indices = array<i32: 0, 3>, gs = 1 : i64, level = 5 : i64}
+// CHECK-NOT: cheddar.apply_prepared_linear_transform
+func.func @apply_prepared_directly(
+    %ctx: !cheddar.boot_context, %evk: !cheddar.evk_map, %a: tensor<1x!ct>,
+    %b: tensor<1x!ct>, %diagonals: tensor<2x8xf32>) -> (tensor<1x!ct>, tensor<1x!ct>) {
+  %d = tensor.empty() : tensor<!cheddar.linear_transform>
+  %t = cheddar.prepare_linear_transform %ctx, %diagonals, %d {bs = 2 : i64, diagonal_indices = array<i32: 0, 3>, gs = 1 : i64, level = 5 : i64, width = 8 : i64} : (!cheddar.boot_context, tensor<2x8xf32>, tensor<!cheddar.linear_transform>) -> tensor<!cheddar.linear_transform>
+  %o0 = tensor.empty() : tensor<1x!ct>
+  %r0 = cheddar.apply_prepared_linear_transform %ctx, %a, %evk, %t, %o0 : (!cheddar.boot_context, tensor<1x!ct>, !cheddar.evk_map, tensor<!cheddar.linear_transform>, tensor<1x!ct>) -> tensor<1x!ct>
+  %o1 = tensor.empty() : tensor<1x!ct>
+  %r1 = cheddar.apply_prepared_linear_transform %ctx, %b, %evk, %t, %o1 : (!cheddar.boot_context, tensor<1x!ct>, !cheddar.evk_map, tensor<!cheddar.linear_transform>, tensor<1x!ct>) -> tensor<1x!ct>
+  return %r0, %r1 : tensor<1x!ct>, tensor<1x!ct>
+}
