@@ -5,6 +5,7 @@
 
 #include "lib/Dialect/Debug/IR/DebugOps.h"
 #include "lib/Dialect/LWE/IR/LWETypes.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Utils/Utils.h"
 #include "llvm/include/llvm/ADT/DenseMap.h"              // from @llvm-project
 #include "llvm/include/llvm/ADT/DenseSet.h"              // from @llvm-project
@@ -471,7 +472,8 @@ struct AddDebugPort : impl::AddDebugPortBase<AddDebugPort> {
 
       if (privateKey) {
         if (failed(lowerValidationOps(funcOp, symbolTable, privateKey,
-                                      minSlotCount, typeToDebugFunc))) {
+                                      getLayoutSlotCount(funcOp, minSlotCount),
+                                      typeToDebugFunc))) {
           funcOp.emitError("failed to lower validation ops");
           return failure();
         }

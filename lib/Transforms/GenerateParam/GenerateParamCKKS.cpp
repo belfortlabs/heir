@@ -108,6 +108,10 @@ std::optional<int64_t> optionalField(int value) {
 struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
   using GenerateParamCKKSBase::GenerateParamCKKSBase;
 
+  // The slot count the layouts are packed for: the min-slot-count option, or
+  // the count layout-propagation recorded on the module.
+  int64_t slotCount = 0;
+
   // In CKKS, the modulus for L0 should be larger than the
   // scaling modulus, however, the number of extra bits is often
   // empirically chosen. We use RangeAnalysis to find the
@@ -180,8 +184,7 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
              << "-bit scale of " << cheddarParameterFile;
 
     int minLogDegree = 0;
-    while ((int64_t{1} << minLogDegree) <
-           2 * static_cast<int64_t>(minSlotCount))
+    while ((int64_t{1} << minLogDegree) < 2 * static_cast<int64_t>(slotCount))
       ++minLogDegree;
     const cheddar::RingProfile* profile =
         file->selectProfile(minLogDegree, computeMaxLevel, hasBootstrap);
@@ -290,7 +293,7 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
     LDBG() << "Scheme Param (model chain):\n" << schemeParam;
 
     module->setAttr(kRequestedSlotCountAttrName,
-                    builder.getI64IntegerAttr(minSlotCount));
+                    builder.getI64IntegerAttr(slotCount));
     module->setAttr(kActualSlotCountAttrName,
                     builder.getI64IntegerAttr(ringDim / 2));
     module->setAttr(ckks::CKKSDialect::kSchemeParamAttrName,
@@ -370,6 +373,7 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
   }
 
   void runOnOperation() override {
+    slotCount = getLayoutSlotCount(getOperation(), minSlotCount);
     LDBG() << "Starting generate-param-ckks pass";
 
     std::optional<int> maxLevel = getMaxLevel(getOperation());
@@ -431,7 +435,7 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
     // The data occupies minSlotCount slots regardless of how large the ring
     // has to be, so the layouts' packing width is recorded before any bump
     // below. Widening it would desync the packed layouts from the ciphertexts.
-    int64_t requestedSlotCount = minSlotCount;
+    int64_t requestedSlotCount = slotCount;
 
     bool cheddarTarget = moduleIsCheddar(getOperation());
 
@@ -445,10 +449,10 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
       // require LogN >= 14. Since ringDim is twice minSlotCount, enforce the
       // corresponding 8192-slot floor.
       if (hasBootstrap) {
-        if (minSlotCount < 8192) {
+        if (slotCount < 8192) {
           LDBG() << "Bootstrapping detected, bumping minSlotCount from "
-                 << minSlotCount << " to 8192";
-          minSlotCount = 8192;
+                 << slotCount << " to 8192";
+          slotCount = 8192;
         }
       }
     }
@@ -459,7 +463,7 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
         computeMaxLevel + (cheddarBootstrap ? kCheddarBootOverhead : 0);
 
     auto schemeParam = ckks::SchemeParam::getConcreteSchemeParam(
-        firstModBits, scalingModBits, generatedMaxLevel, minSlotCount,
+        firstModBits, scalingModBits, generatedMaxLevel, slotCount,
         usePublicKey, encryptionTechniqueExtended, reducedError,
         cheddarBootstrap ? kCheddarBootArithmeticLevels : 0,
         cheddarBootstrap ? std::max<int>(scalingModBits, kCheddarBootModBits)
