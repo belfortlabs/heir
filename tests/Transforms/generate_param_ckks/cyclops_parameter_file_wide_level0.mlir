@@ -7,12 +7,12 @@
 // parameter set keeps the file's own primes and layout.
 
 // CHECK: module attributes {
-// CHECK-SAME: backend.cheddar, cheddar.parameter_set = #cheddar.parameter_set<logN = 13, logScale = 35
+// CHECK-SAME: backend.cheddar, cheddar.parameter_set = #cheddar.parameter_set<logN = 14, logScale = 35
 // CHECK-SAME: terminalPrimes = [36175873, 29884417, 32899073, 31326209, 37224449]
 // CHECK-SAME: levelConfig = [0, 4, 2, 3, 4, 2]
 // CHECK-SAME: wordBits = 32
 // CHECK-SAME: defaultEncryptionLevel = 2
-// CHECK-SAME: ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [{{([0-9]{19})}}, {{([0-9]{11})}}, {{([0-9]{11})}}], P = [{{([0-9]{9,10}(, [0-9]{9,10}){22})}}], logDefaultScale = 35
+// CHECK-SAME: ckks.schemeParam = #ckks.scheme_param<logN = 14, Q = [{{([0-9]{19})}}, {{([0-9]{11})}}, {{([0-9]{11})}}], P = [{{([0-9]{9,10}(, [0-9]{9,10}){22})}}], logDefaultScale = 35
 // CHECK-SAME: mgmt.top_level = 2 : i64
 module attributes {backend.cheddar, scheme.ckks} {
   func.func @square_twice(%arg0: !secret.secret<f32> {mgmt.mgmt = #mgmt.mgmt<level = 2>}) -> (!secret.secret<f32> {mgmt.mgmt = #mgmt.mgmt<level = 0>}) {
