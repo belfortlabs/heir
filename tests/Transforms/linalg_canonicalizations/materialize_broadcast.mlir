@@ -144,7 +144,7 @@ func.func @constant_channel_broadcast(%arg0: tensor<1x4x4x4xf32>) -> tensor<1x4x
   %cst = tensor.empty() : tensor<1x4x4x4xf32>
   // CHECK-NOT: linalg.broadcast
   // CHECK: %[[SCALE:.*]] = arith.constant dense<{{.*}}> : tensor<1x4x4x4xf32>
-  // CHECK: arith.mulf %[[SCALE]], %arg0 : tensor<1x4x4x4xf32>
+  // CHECK: arith.mulf %arg0, %[[SCALE]] : tensor<1x4x4x4xf32>
   %0 = linalg.generic {
     indexing_maps = [affine_map<(d0, d1, d2, d3) -> (d1, 0, 0)>, affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>, affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>],
     iterator_types = ["parallel", "parallel", "parallel", "parallel"]
