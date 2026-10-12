@@ -1115,7 +1115,10 @@ struct MaterializeBroadcasts : public OpRewritePattern<linalg::GenericOp> {
         continue;
       }
 
-      if (map.getNumResults() < numDims) {
+      // Besides dropped dimensions, torch exports broadcasts of unit
+      // dimensions as constant-zero results, e.g. (d0, d1, d2, d3) -> (d0,
+      // d1, 0, 0).
+      if (!getBroadcastDimensions(map, numDims).empty()) {
         madeChanges = true;
         auto materializedValue = materializeBroadcastForOperand(
             rewriter, genericOp, value, map, numDims);

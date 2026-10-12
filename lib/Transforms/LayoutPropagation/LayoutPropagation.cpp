@@ -778,21 +778,41 @@ LogicalResult LayoutPropagation::visitOperation(BroadcastOp op) {
 
   // If the input is in cyclic layout and the result can be packed in a
   // cyclic layout, the result is assigned the cyclic layout (which
-  // lowers to zero-cost). Otherwise, assign the row-major default layout.
+  // lowers to zero-cost). Otherwise, if a user combines the result with a
+  // secret value of the same type that already has a layout (e.g., a
+  // squeeze-excite scale multiplied into a feature map), use that layout so
+  // the user needs no conversion. Otherwise, assign the row-major default
+  // layout.
   LayoutAttr resultLayoutAttr;
+  Attribute kernelInfoAttr =
+      cloneKernelInfoWithResultShape(input, resultType.getShape());
   IntegerRelation cyclicResultRel =
       getCyclicLayoutRelation(resultType, minSlotCount);
+  Value sibling;
+  for (Operation* user : result.getUsers()) {
+    for (Value operand : user->getOperands()) {
+      if (operand != result && operand.getType() == resultType &&
+          assignedLayouts.contains(operand) && isSecret(operand, solver)) {
+        sibling = operand;
+        break;
+      }
+    }
+    if (sibling) break;
+  }
   if (isRelationCyclic(inputType, minSlotCount,
                        inputLayout.getIntegerRelation()) &&
       isRelationCyclic(resultType, minSlotCount, cyclicResultRel)) {
     resultLayoutAttr = LayoutAttr::getFromIntegerRelation(ctx, cyclicResultRel);
+  } else if (sibling) {
+    resultLayoutAttr = getComposedLayoutAttr(sibling);
+    auto siblingKernelInfo =
+        findAttributeAssociatedWith(sibling, kKernelInfoAttrName);
+    if (succeeded(siblingKernelInfo)) kernelInfoAttr = *siblingKernelInfo;
   } else {
     resultLayoutAttr = LayoutAttr::getFromIntegerRelation(
         ctx, getRowMajorLayoutRelation(resultType, minSlotCount));
   }
 
-  Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(input, resultType.getShape());
   assignedLayouts.insert({result, resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
   debugAssignLayout(result, resultLayoutAttr);
