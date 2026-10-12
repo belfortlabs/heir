@@ -1183,17 +1183,16 @@ struct PreserveLinalgMatvecAsLinearTransform
     std::vector<Attribute> diagonalValues(numDiagonals * slots, zeroAttr);
 
     auto matrixRelation = matrixLayout.getIntegerRelation();
-    PointPairCollector collector(2, 2);
-    enumeratePoints(matrixRelation, collector);
-    for (const auto& pointPair : collector.points) {
-      int64_t row = pointPair.first[0];
-      int64_t col = pointPair.first[1];
-      int64_t d = pointPair.second[0];
-      int64_t s = pointPair.second[1];
-
-      int64_t flatIndex = row * numCols + col;
-      diagonalValues[d * slots + s] = readElement(flatIndex);
-    }
+    auto placePoint = [&](ArrayRef<int64_t> domainPoint,
+                          ArrayRef<int64_t> rangePoint) {
+      int64_t flatIndex = domainPoint[0] * numCols + domainPoint[1];
+      diagonalValues[rangePoint[0] * slots + rangePoint[1]] =
+          readElement(flatIndex);
+    };
+    // Placing a point twice is harmless, so a native enumeration that gives up
+    // partway can be followed by the isl one.
+    if (failed(forEachRelationPoint(matrixRelation, placePoint)))
+      forEachPointPair(matrixRelation, placePoint);
 
     std::vector<int64_t> nonZeroDiagonalIndices;
     std::vector<Attribute> nonZeroDiagonalValues;
