@@ -39,10 +39,10 @@ int64_t getEncodedSlotCount(Operation* moduleOp, int64_t ringCapacity);
 constexpr const static ::llvm::StringLiteral kLayoutSlotCountAttrName =
     "scheme.layout_slot_count";
 
-// Returns the slot count recorded in kLayoutSlotCountAttrName on `op` or its
-// enclosing module, or `minSlotCount` when none is recorded. Passes that pack
+// Returns the larger of `minSlotCount` and the slot count recorded in
+// kLayoutSlotCountAttrName on `op` or its enclosing module. Passes that pack
 // or size ciphertexts after layout-propagation use this in place of their own
-// min-slot-count option.
+// min-slot-count option, which can still ask for larger ciphertexts.
 int64_t getLayoutSlotCount(Operation* op, int64_t minSlotCount);
 
 bool moduleIsBGV(Operation* moduleOp);

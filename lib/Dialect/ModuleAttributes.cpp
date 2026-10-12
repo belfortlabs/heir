@@ -83,7 +83,7 @@ int64_t getLayoutSlotCount(Operation* op, int64_t minSlotCount) {
   if (!moduleOp) return minSlotCount;
   if (auto recorded =
           moduleOp->getAttrOfType<IntegerAttr>(kLayoutSlotCountAttrName)) {
-    return recorded.getInt();
+    return std::max<int64_t>(recorded.getInt(), minSlotCount);
   }
   return minSlotCount;
 }

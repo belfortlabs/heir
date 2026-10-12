@@ -2717,8 +2717,7 @@ void LayoutPropagation::runOnOperation() {
   // slots, and is restored for the next run of the pass.
   int optionSlotCount = minSlotCount;
   llvm::scope_exit restoreOption([&] { minSlotCount = optionSlotCount; });
-  minSlotCount =
-      std::max<int64_t>(minSlotCount, getLayoutSlotCount(root, minSlotCount));
+  minSlotCount = getLayoutSlotCount(root, minSlotCount);
 
   if (maxSlotCount > 0 && minSlotCount > maxSlotCount) {
     root->emitOpError() << "min-slot-count " << minSlotCount << " exceeds the "
