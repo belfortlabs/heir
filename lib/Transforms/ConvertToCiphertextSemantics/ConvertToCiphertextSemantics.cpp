@@ -46,6 +46,7 @@
 #include "lib/Utils/MathUtils.h"
 #include "lib/Utils/Utils.h"
 #include "llvm/include/llvm/ADT/ArrayRef.h"            // from @llvm-project
+#include "llvm/include/llvm/ADT/DenseSet.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/Hashing.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"           // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"         // from @llvm-project
@@ -2641,6 +2642,31 @@ class ConvertTensorPad : public ContextAwareOpConversionPattern<tensor::PadOp> {
   }
 };
 
+// Whether every (ct, slot) of layout `subset` is also one of layout `superset`.
+// Collecting the slots of both is much cheaper than the Presburger subset
+// check, whose coefficients overflow to arbitrary precision on gapped layouts.
+static bool isSlotSubset(const IntegerRelation& subset,
+                         const IntegerRelation& superset) {
+  auto presburgerCheck = [&]() {
+    return subset.getRangeSet().isSubsetOf(superset.getRangeSet());
+  };
+  if (subset.getNumRangeVars() != 2 || superset.getNumRangeVars() != 2)
+    return presburgerCheck();
+  DenseSet<std::pair<int64_t, int64_t>> supersetSlots;
+  if (failed(forEachRelationPoint(
+          superset, [&](ArrayRef<int64_t>, ArrayRef<int64_t> slot) {
+            supersetSlots.insert({slot[0], slot[1]});
+          })))
+    return presburgerCheck();
+  bool contained = true;
+  if (failed(forEachRelationPoint(
+          subset, [&](ArrayRef<int64_t>, ArrayRef<int64_t> slot) {
+            contained &= supersetSlots.contains({slot[0], slot[1]});
+          })))
+    return presburgerCheck();
+  return contained;
+}
+
 class ConvertTensorInsertSlice
     : public ContextAwareOpConversionPattern<tensor::InsertSliceOp> {
  public:
@@ -2730,7 +2756,7 @@ class ConvertTensorInsertSlice
     // Initial support for this kernel requires that the scalar source slice
     // changes layout to match the destination tensor layout at the subspace
     // defined by the slicing.
-    if (!scalarRel.getRangeSet().isSubsetOf(destRel.getRangeSet())) {
+    if (!isSlotSubset(scalarRel, destRel)) {
       return op.emitError()
              << "tensor.insert requires slice layout to be a subset of the "
                 "dest layout, but "
