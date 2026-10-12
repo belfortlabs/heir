@@ -61,17 +61,18 @@ func.func @strided_splat_filter(%arg0: tensor<1x2x5x5xf32>) -> tensor<1x2x2x2xf3
 
 // -----
 
-// A dilated depthwise conv becomes a dilated conv, which is then undilated.
+// A dilated depthwise conv spreads the taps in each diagonal block and becomes
+// a conv with dilation 1.
 // CHECK: func.func @dilated
-// CHECK: %[[filter:[^ ]+]] = arith.constant dense<{{.*}}[1.000000e+00, 0.000000e+00, 2.000000e+00], [0.000000e+00, 0.000000e+00, 0.000000e+00], [3.000000e+00, 0.000000e+00, 4.000000e+00]
-// CHECK-SAME: [0.000000e+00, 0.000000e+00, 0.000000e+00], [0.000000e+00, 0.000000e+00, 0.000000e+00], [0.000000e+00, 0.000000e+00, 0.000000e+00]
-// CHECK-SAME: [5.000000e+00, 0.000000e+00, 6.000000e+00], [0.000000e+00, 0.000000e+00, 0.000000e+00], [7.000000e+00, 0.000000e+00, 8.000000e+00]
-// CHECK-SAME: tensor<2x2x3x3xf32>
+// CHECK-NOT: arith.constant dense<{{.*}}> : tensor<2x2x3x3xf32>
+// CHECK: %[[filter:.*]] = arith.constant dense_resource<depthwise_filter> : tensor<2x2x3x3xf32>
 // CHECK: linalg.conv_2d_nchw_fchw
 // CHECK-SAME: dilations = dense<1>
 // CHECK-SAME: strides = dense<1>
 // CHECK-SAME: tensor<1x2x5x5xf32>, tensor<2x2x3x3xf32>
 // CHECK-NOT: linalg.depthwise_conv_2d_nchw_chw
+// CHECK-NOT: arith.constant dense<{{.*}}> : tensor<2x2x3x3xf32>
+// CHECK: depthwise_filter: "0x040000000000803F00000000000000400000000000000000000000000000404000000000000080400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000A040000000000000C0400000000000000000000000000000E0400000000000000041"
 func.func @dilated(%arg0: tensor<1x2x5x5xf32>) -> tensor<1x2x3x3xf32> {
   %init = arith.constant dense<0.000000e+00> : tensor<1x2x3x3xf32>
   %filter = arith.constant dense<[[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]> : tensor<2x2x2xf32>
