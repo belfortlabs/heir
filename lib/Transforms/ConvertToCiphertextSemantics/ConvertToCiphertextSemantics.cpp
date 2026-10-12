@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -838,8 +839,277 @@ struct ConvertLinalgDot : public ConversionBase<linalg::DotOp> {
   }
 };
 
-// Lowers linalg.broadcast under bicyclic or tricyclic packing where the
-// broadcast acts as a zero-cost view without moving ciphertext data.
+// Splits a set of slot offsets (sorted, starting at 0) into a sequence of
+// (stride, count) factors such that every offset is uniquely a sum of
+// k_i * stride_i with 0 <= k_i < count_i. Returns std::nullopt if the set has
+// no such structure.
+std::optional<SmallVector<std::pair<int64_t, int64_t>>> factorSlotPattern(
+    std::vector<int64_t> pattern) {
+  SmallVector<std::pair<int64_t, int64_t>> factors;
+  while (pattern.size() > 1) {
+    std::set<int64_t> offsets(pattern.begin(), pattern.end());
+    int64_t stride = pattern[1];
+    int64_t count = 1;
+    while (offsets.count(count * stride)) ++count;
+    std::vector<int64_t> rowStarts;
+    for (int64_t offset : pattern) {
+      if (!offsets.count(offset - stride)) rowStarts.push_back(offset);
+    }
+    if (rowStarts.size() * count != pattern.size()) return std::nullopt;
+    for (int64_t start : rowStarts) {
+      for (int64_t k = 0; k < count; ++k) {
+        if (!offsets.count(start + k * stride)) return std::nullopt;
+      }
+    }
+    factors.push_back({stride, count});
+    pattern = rowStarts;
+  }
+  return factors;
+}
+
+// Moves the value in slot i of each ciphertext to slot i + shift.
+Value rotateSlotsRight(ImplicitLocOpBuilder& b, Value value, int64_t shift,
+                       int64_t numSlots) {
+  int64_t leftShift = (numSlots - shift % numSlots) % numSlots;
+  if (leftShift == 0) return value;
+  auto shiftOp = arith::ConstantIndexOp::create(b, leftShift);
+  auto rotateOp = tensor_ext::RotateOp::create(b, value, shiftOp);
+  setMaterializedAttr({shiftOp, rotateOp});
+  return rotateOp;
+}
+
+Value createSlotMask(ImplicitLocOpBuilder& b, RankedTensorType type,
+                     ArrayRef<int64_t> oneSlots) {
+  Type elementType = type.getElementType();
+  DenseElementsAttr maskAttr;
+  if (auto floatType = dyn_cast<FloatType>(elementType)) {
+    const auto& semantics = floatType.getFloatSemantics();
+    SmallVector<APFloat> values(type.getNumElements(),
+                                APFloat::getZero(semantics));
+    for (int64_t slot : oneSlots) values[slot] = APFloat::getOne(semantics);
+    maskAttr = DenseElementsAttr::get(type, values);
+  } else {
+    unsigned width = elementType.getIntOrFloatBitWidth();
+    SmallVector<APInt> values(type.getNumElements(), APInt(width, 0));
+    for (int64_t slot : oneSlots) values[slot] = APInt(width, 1);
+    maskAttr = DenseElementsAttr::get(type, values);
+  }
+  auto maskOp = arith::ConstantOp::create(b, type, maskAttr);
+  setMaterializedAttr(maskOp);
+  return maskOp;
+}
+
+Value addValues(ImplicitLocOpBuilder& b, Value lhs, Value rhs) {
+  if (!lhs) return rhs;
+  Operation* addOp = makeAppropriatelyTypedAddOp(b, b.getLoc(), lhs, rhs);
+  setMaterializedAttr(addOp);
+  return addOp->getResult(0);
+}
+
+// Lowers a broadcast whose result layout is not a view of the input layout.
+// Every result slot holds a copy of one input element. The kernel first moves
+// each input element to one anchor slot among its copies: the input is masked
+// once per (baby step, giant step) pair and rotated baby-step giant-step, so
+// the kernel has multiplicative depth 1. If the copies of every element form
+// the same pattern of offsets from their anchor, and that pattern is a product
+// of strided runs (as for a channel broadcast into a row-major or gapped
+// feature map), the anchors are then copied to the other slots with
+// unmasked rotate-and-add, log2(run length) rotations per run. Otherwise
+// every result slot is its own anchor.
+Value implementBroadcastByReplication(ImplicitLocOpBuilder& b, Value input,
+                                      const IntegerRelation& inputRel,
+                                      const IntegerRelation& resultRel,
+                                      ArrayRef<int64_t> broadcastDims,
+                                      int64_t inputRank, int64_t resultRank,
+                                      RankedTensorType resultCtType) {
+  auto inputCtType = cast<RankedTensorType>(input.getType());
+  int64_t numInputCts = inputCtType.getDimSize(0);
+  int64_t numSlots = inputCtType.getDimSize(1);
+  int64_t numResultCts = resultCtType.getDimSize(0);
+  assert(resultCtType.getDimSize(1) == numSlots &&
+         "input and result ciphertexts must have the same slot count");
+  RankedTensorType singleCtType =
+      RankedTensorType::get({1, numSlots}, inputCtType.getElementType());
+
+  using Index = std::vector<int64_t>;
+  using CtSlot = std::pair<int64_t, int64_t>;
+  std::map<Index, SmallVector<CtSlot>> sources;
+  {
+    PointPairCollector collector(inputRank, 2);
+    enumeratePoints(inputRel, collector);
+    for (const auto& [index, ctSlot] : collector.points)
+      sources[index].push_back({ctSlot[0], ctSlot[1]});
+  }
+
+  // Result slots per (result ciphertext, input element).
+  std::map<std::pair<int64_t, Index>, std::vector<int64_t>> copies;
+  {
+    PointPairCollector collector(resultRank, 2);
+    enumeratePoints(resultRel, collector);
+    for (const auto& [index, ctSlot] : collector.points) {
+      Index inputIndex;
+      for (int64_t dim = 0; dim < resultRank; ++dim) {
+        if (!llvm::is_contained(broadcastDims, dim))
+          inputIndex.push_back(index[dim]);
+      }
+      copies[{ctSlot[0], inputIndex}].push_back(ctSlot[1]);
+    }
+  }
+
+  std::vector<int64_t> commonPattern;
+  bool hasCommonPattern = true;
+  for (auto& [key, slots] : copies) {
+    llvm::sort(slots);
+    std::vector<int64_t> pattern;
+    for (int64_t slot : slots) pattern.push_back(slot - slots.front());
+    if (commonPattern.empty()) commonPattern = pattern;
+    if (pattern != commonPattern) hasCommonPattern = false;
+  }
+  std::optional<SmallVector<std::pair<int64_t, int64_t>>> factors;
+  if (hasCommonPattern) factors = factorSlotPattern(commonPattern);
+
+  // One move per anchor: (result ct, anchor slot, input ct, input slot,
+  // right shift).
+  struct Move {
+    int64_t resultCt, anchor, inputCt, inputSlot, shift;
+  };
+  std::vector<Move> moves;
+  for (const auto& [key, slots] : copies) {
+    const auto& [resultCt, inputIndex] = key;
+    ArrayRef<int64_t> anchors = slots;
+    if (factors.has_value()) anchors = anchors.take_front();
+    for (int64_t anchor : anchors) {
+      // Among the input's copies of this element, take the one closest
+      // below the anchor to keep the shifts small.
+      Move best{resultCt, anchor, 0, 0, numSlots};
+      for (const auto& [inputCt, inputSlot] : sources.at(inputIndex)) {
+        int64_t shift = ((anchor - inputSlot) % numSlots + numSlots) % numSlots;
+        if (shift < best.shift)
+          best = {resultCt, anchor, inputCt, inputSlot, shift};
+      }
+      moves.push_back(best);
+    }
+  }
+
+  // Pick the giant step that minimizes the number of rotations.
+  std::set<int64_t> candidateSteps = {numSlots};
+  for (const Move& move : moves) {
+    if (move.shift > 0 && candidateSteps.size() < 4096)
+      candidateSteps.insert(move.shift);
+  }
+  int64_t giantStep = numSlots;
+  size_t bestCost = std::numeric_limits<size_t>::max();
+  for (int64_t step : candidateSteps) {
+    std::set<CtSlot> babySteps, giantSteps;
+    for (const Move& move : moves) {
+      if (move.shift % step)
+        babySteps.insert({move.inputCt, move.shift % step});
+      if (move.shift / step)
+        giantSteps.insert({move.resultCt, move.shift / step});
+    }
+    if (babySteps.size() + giantSteps.size() < bestCost) {
+      bestCost = babySteps.size() + giantSteps.size();
+      giantStep = step;
+    }
+  }
+
+  SmallVector<Value> inputCts;
+  for (int64_t ct = 0; ct < numInputCts; ++ct) {
+    if (numInputCts == 1) {
+      inputCts.push_back(input);
+      continue;
+    }
+    SmallVector<OpFoldResult> offsets = {b.getIndexAttr(ct), b.getIndexAttr(0)};
+    SmallVector<OpFoldResult> sizes = {b.getIndexAttr(1),
+                                       b.getIndexAttr(numSlots)};
+    SmallVector<OpFoldResult> strides(2, b.getIndexAttr(1));
+    auto extractOp = tensor::ExtractSliceOp::create(b, singleCtType, input,
+                                                    offsets, sizes, strides);
+    setMaterializedAttr(extractOp);
+    inputCts.push_back(extractOp);
+  }
+
+  // (result ct, giant step) -> (input ct, baby step) -> masked input slots
+  std::map<CtSlot, std::map<CtSlot, std::vector<int64_t>>> maskSlots;
+  for (const Move& move : moves) {
+    int64_t baby = move.shift % giantStep;
+    maskSlots[{move.resultCt, move.shift / giantStep}][{move.inputCt, baby}]
+        .push_back((move.inputSlot + baby) % numSlots);
+  }
+
+  std::map<CtSlot, Value> babyRotations;
+  SmallVector<Value> resultCts(numResultCts);
+  for (const auto& [resultGiant, terms] : maskSlots) {
+    const auto& [resultCt, giant] = resultGiant;
+    Value inner;
+    for (const auto& [inputBaby, slots] : terms) {
+      const auto& [inputCt, baby] = inputBaby;
+      Value& rotated = babyRotations[inputBaby];
+      if (!rotated)
+        rotated = rotateSlotsRight(b, inputCts[inputCt], baby, numSlots);
+      Operation* mulOp = makeAppropriatelyTypedMulOp(
+          b, b.getLoc(), createSlotMask(b, singleCtType, slots), rotated);
+      setMaterializedAttr(mulOp);
+      inner = addValues(b, inner, mulOp->getResult(0));
+    }
+    resultCts[resultCt] =
+        addValues(b, resultCts[resultCt],
+                  rotateSlotsRight(b, inner, giant * giantStep, numSlots));
+  }
+
+  Value result;
+  if (numResultCts == 1) {
+    result = resultCts[0];
+  } else {
+    result = tensor::EmptyOp::create(b, resultCtType.getShape(),
+                                     resultCtType.getElementType());
+    setMaterializedAttr(result.getDefiningOp());
+    for (int64_t ct = 0; ct < numResultCts; ++ct) {
+      Value ctValue = resultCts[ct];
+      if (!ctValue) ctValue = createSlotMask(b, singleCtType, {});
+      SmallVector<OpFoldResult> offsets = {b.getIndexAttr(ct),
+                                           b.getIndexAttr(0)};
+      SmallVector<OpFoldResult> sizes = {b.getIndexAttr(1),
+                                         b.getIndexAttr(numSlots)};
+      SmallVector<OpFoldResult> strides(2, b.getIndexAttr(1));
+      auto insertOp = tensor::InsertSliceOp::create(b, ctValue, result, offsets,
+                                                    sizes, strides);
+      setMaterializedAttr(insertOp);
+      result = insertOp;
+    }
+  }
+
+  // Copy each anchor to the rest of its pattern: for every (stride, count)
+  // run, build the copies at offsets [0, count) * stride from doubling
+  // blocks, without masks.
+  if (factors.has_value()) {
+    for (const auto& [stride, count] : factors.value()) {
+      Value block = result;
+      Value acc;
+      int64_t blockLength = 1;
+      int64_t covered = 0;
+      for (int64_t bit = 1; bit <= count; bit <<= 1) {
+        if (count & bit) {
+          acc = addValues(
+              b, acc, rotateSlotsRight(b, block, covered * stride, numSlots));
+          covered += blockLength;
+        }
+        if ((bit << 1) <= count) {
+          block = addValues(
+              b, block,
+              rotateSlotsRight(b, block, blockLength * stride, numSlots));
+          blockLength *= 2;
+        }
+      }
+      result = acc;
+    }
+  }
+  return result;
+}
+
+// Lowers linalg.broadcast. Under bicyclic or tricyclic packing the broadcast
+// acts as a zero-cost view without moving ciphertext data; otherwise it uses
+// implementBroadcastByReplication.
 class ConvertLinalgBroadcast
     : public ContextAwareOpConversionPattern<linalg::BroadcastOp> {
  public:
@@ -899,10 +1169,15 @@ class ConvertLinalgBroadcast
       return success();
     }
 
-    // Lowering of non-cyclic broadcasts is postponed to a dedicated broadcast
-    // kernel (e.g. https://github.com/google/heir/pull/3163)
-    return rewriter.notifyMatchFailure(
-        op, "non-cyclic broadcasts are not supported yet");
+    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+    Value result = implementBroadcastByReplication(
+        b, adaptor.getInput(), inputLayout.getIntegerRelation(),
+        resultLayout.getIntegerRelation(), op.getDimensions(),
+        inputType.getRank(), resultType.getRank(),
+        cast<RankedTensorType>(convertedResultType));
+    setAttributeAssociatedWith(result, kLayoutAttrName, resultLayout);
+    rewriter.replaceOp(op, result);
+    return success();
   }
 };
 
