@@ -37,6 +37,15 @@ class CompilationTargetRegistry {
 // example, due to an incorrectly spelled key).
 FailureOr<CompilationTarget> getTargetConfig(ModuleOp module);
 
+// Return the largest ring degree the module's backend supports, or 0 when the
+// module names no backend or its backend sets no limit. Returns failure if the
+// backend's config cannot be resolved.
+FailureOr<int64_t> getMaxRingDegree(ModuleOp module);
+
+// Fail with an error on `module` when `ringDegree` exceeds the largest ring
+// degree of the module's backend.
+LogicalResult verifyRingDegree(ModuleOp module, int64_t ringDegree);
+
 // Validate that the key-value pair is supported and valid for the target config
 // of the module.
 LogicalResult validateCompilationTargetOverride(ModuleOp module, StringRef key,

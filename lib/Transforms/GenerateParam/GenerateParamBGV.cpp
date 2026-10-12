@@ -19,11 +19,13 @@
 #include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretOps.h"
 #include "lib/Parameters/BGV/Params.h"
+#include "lib/Target/CompilationTarget/CompilationTarget.h"
 #include "llvm/include/llvm/Support/Debug.h"               // from @llvm-project
 #include "mlir/include/mlir/Analysis/DataFlow/Utils.h"     // from @llvm-project
 #include "mlir/include/mlir/Analysis/DataFlowFramework.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"                 // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"        // from @llvm-project
+#include "mlir/include/mlir/IR/BuiltinOps.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/Diagnostics.h"              // from @llvm-project
 #include "mlir/include/mlir/IR/Operation.h"                // from @llvm-project
 #include "mlir/include/mlir/IR/Value.h"                    // from @llvm-project
@@ -134,6 +136,9 @@ struct GenerateParamBGV : impl::GenerateParamBGVBase<GenerateParamBGV> {
   }
 
   void annotateSchemeParam(const bgv::SchemeParam& schemeParam) {
+    if (auto module = dyn_cast<ModuleOp>(getOperation());
+        module && failed(verifyRingDegree(module, schemeParam.getRingDim())))
+      return signalPassFailure();
     auto* context = &getContext();
     OpBuilder builder(context);
     getOperation()->setAttr(kRequestedSlotCountAttrName,
@@ -208,6 +213,10 @@ struct GenerateParamBGV : impl::GenerateParamBGVBase<GenerateParamBGV> {
     if (auto schemeParamAttr =
             getOperation()->getAttrOfType<bgv::SchemeParamAttr>(
                 bgv::BGVDialect::kSchemeParamAttrName)) {
+      if (auto module = dyn_cast<ModuleOp>(getOperation());
+          module && failed(verifyRingDegree(
+                        module, int64_t{1} << schemeParamAttr.getLogN())))
+        signalPassFailure();
       return;
     }
 
