@@ -63,6 +63,12 @@ def MappingLike : AnyAttrOf<[
   AnyI64ElementsAttr,
   // A layout relation with domain and range space equal to (ct, slot).
   TensorExt_LayoutAttr,
+  // A pair of layouts [from, to] of the same tensor, mapping each (ct, slot)
+  // of `from` to the (ct, slot)s of `to` holding the same tensor element.
+  // This is the composition of the inverse of `from` with `to`, but enumerating
+  // the two layouts separately is much cheaper than enumerating the
+  // composition.
+  TypedArrayAttrBase<TensorExt_LayoutAttr, "pair of layouts">,
 ]>;
 
 def TensorExt_RemapOp : TensorExt_Op<"remap", [Pure, AllTypesMatch<["input", "output"]>]> {

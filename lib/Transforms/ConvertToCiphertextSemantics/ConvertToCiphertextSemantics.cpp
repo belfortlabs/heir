@@ -146,7 +146,7 @@ IntegerRelation restrictRelationToSlice(const IntegerRelation& relation,
 // extract the subset ciphertexts relevant to the layout of the output
 // slice.
 Operation* remapAndExtractResult(ImplicitLocOpBuilder& builder, Value input,
-                                 LayoutAttr resultLayout,
+                                 Attribute resultLayout,
                                  RankedTensorType resultType) {
   assert(resultType.getRank() == 2 && "Expected 2D ciphertext semantic type");
   auto remapOp = tensor_ext::RemapOp::create(builder, input, resultLayout);
@@ -570,15 +570,10 @@ class ConvertConvertLayout
 
     // This is persisted as an operation rather than lowered eagerly to a shift
     // network so as to allow VosVosErkinShiftNetworks to cache its work across
-    // multiple instances of the same conversion.
-    std::shared_ptr<IntegerRelation> composedLayout =
-        fromLayout.getIntegerRelation().clone();
-    composedLayout->inverse();
-    composedLayout->compose(toLayout.getIntegerRelation());
-
+    // multiple instances of the same conversion. The remap keeps the two
+    // layouts rather than their composition, which is expensive to enumerate.
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);
-    LayoutAttr newLayoutAttr =
-        LayoutAttr::getFromIntegerRelation(getContext(), *composedLayout);
+    Attribute newLayoutAttr = rewriter.getArrayAttr({fromLayout, toLayout});
     auto resultCiphertextSemanticType = cast<RankedTensorType>(
         getTypeConverter()->convertType(op.getResult().getType(), toLayout));
     auto remapAndExtract = remapAndExtractResult(
@@ -2590,13 +2585,14 @@ class ConvertTensorPad : public ContextAwareOpConversionPattern<tensor::PadOp> {
     IntegerRelation sourceRel = sourceLayout.getIntegerRelation();
     IntegerRelation resultRel = resultLayout.getIntegerRelation();
 
+    // The remap converts from the source layout to the result layout read
+    // through the padding, both layouts of the source tensor.
     paddingRel.inverse();
-    sourceRel.inverse();
-    sourceRel.compose(paddingRel);
-    sourceRel.compose(resultRel);
+    paddingRel.compose(resultRel);
 
-    LayoutAttr remapLayoutAttr =
-        LayoutAttr::getFromIntegerRelation(op.getContext(), sourceRel);
+    Attribute remapLayoutAttr =
+        rewriter.getArrayAttr({sourceLayout, LayoutAttr::getFromIntegerRelation(
+                                                 op.getContext(), paddingRel)});
 
     auto resultCiphertextSemanticType = cast<RankedTensorType>(targetCTType);
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);
@@ -3189,8 +3185,6 @@ class ConvertTensorExtractSlice
     FailureOr<Attribute> resultLayoutResult =
         getTypeConverter()->getContextualAttr(op.getResult());
     LayoutAttr resultLayout = cast<LayoutAttr>(resultLayoutResult.value());
-    IntegerRelation sourceRel =
-        cast<LayoutAttr>(sourceLayoutResult.value()).getIntegerRelation();
     IntegerRelation resultRel = resultLayout.getIntegerRelation();
 
     // Compute the layout relation of the extract_slice operation.
@@ -3214,12 +3208,14 @@ class ConvertTensorExtractSlice
     //     │                        \/
     // Source ciphertext        Slice ciphertext
     // (ct, slot)               (ct, slot)
-    sourceRel.inverse();
-    sourceRel.compose(extractSliceLayout.value());
-    sourceRel.compose(resultRel);
+    // The remap converts from the source layout to the slice's layout read
+    // through the slice, both layouts of the source tensor.
+    IntegerRelation sliceSourceRel = extractSliceLayout.value();
+    sliceSourceRel.compose(resultRel);
 
-    LayoutAttr remapLayoutAttr =
-        LayoutAttr::getFromIntegerRelation(ctx, sourceRel);
+    Attribute remapLayoutAttr = rewriter.getArrayAttr(
+        {sourceLayoutResult.value(),
+         LayoutAttr::getFromIntegerRelation(ctx, sliceSourceRel)});
     auto resultCiphertextSemanticType = cast<RankedTensorType>(
         getTypeConverter()->convertType(op.getResultType(), resultLayout));
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);

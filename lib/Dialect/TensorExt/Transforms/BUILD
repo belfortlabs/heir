@@ -117,6 +117,7 @@ cc_library(
         "@heir//lib/Utils/Graph",
         "@heir//lib/Utils/Layout:Utils",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",

@@ -24,10 +24,11 @@
 #include "lib/Utils/ADT/FrozenVector.h"
 #include "lib/Utils/Graph/Graph.h"
 #include "lib/Utils/Layout/Utils.h"
-#include "llvm/include/llvm/ADT/DenseMap.h"              // from @llvm-project
-#include "llvm/include/llvm/ADT/DenseSet.h"              // from @llvm-project
-#include "llvm/include/llvm/ADT/STLExtras.h"             // from @llvm-project
-#include "llvm/include/llvm/Support/Debug.h"             // from @llvm-project
+#include "llvm/include/llvm/ADT/DenseMap.h"   // from @llvm-project
+#include "llvm/include/llvm/ADT/DenseSet.h"   // from @llvm-project
+#include "llvm/include/llvm/ADT/STLExtras.h"  // from @llvm-project
+#include "llvm/include/llvm/Support/Debug.h"  // from @llvm-project
+#include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
@@ -196,6 +197,22 @@ void populateMappingFromLayoutAttr(const LayoutAttr& layoutAttr,
   }
 }
 
+// Populate the mapping of a conversion from layout `from` to layout `to`.
+static void populateMappingFromConversion(LayoutAttr from, LayoutAttr to,
+                                          Mapping& mapping) {
+  auto addPair = [&](ArrayRef<int64_t> source, ArrayRef<int64_t> target) {
+    mapping.add(CtSlot{source[0], source[1]}, CtSlot{target[0], target[1]});
+  };
+  if (succeeded(forEachConversionPair(from.getIntegerRelation(),
+                                      to.getIntegerRelation(), addPair)))
+    return;
+  std::shared_ptr<presburger::IntegerRelation> composed =
+      from.getIntegerRelation().clone();
+  composed->inverse();
+  composed->compose(to.getIntegerRelation());
+  forEachPointPair(*composed, addPair);
+}
+
 void populateMappingFromDenseElementsAttr(
     const DenseIntElementsAttr& denseElementsAttr, Mapping& mapping) {
   // iterate in batches of 4 to get the (ct_source, slot_source,
@@ -242,10 +259,13 @@ LogicalResult convertRemapOp(RemapOp op,
   } else if (auto denseElementsAttr =
                  dyn_cast<DenseIntElementsAttr>(op.getPermutation())) {
     populateMappingFromDenseElementsAttr(denseElementsAttr, mapping);
+  } else if (auto layouts = dyn_cast<ArrayAttr>(op.getPermutation())) {
+    populateMappingFromConversion(cast<LayoutAttr>(layouts[0]),
+                                  cast<LayoutAttr>(layouts[1]), mapping);
   } else {
     return op.emitOpError()
-           << "requires permutation attribute to be either LayoutAttr or "
-              "DenseIntElementsAttr";
+           << "requires permutation attribute to be a LayoutAttr, a pair of "
+              "LayoutAttrs, or a DenseIntElementsAttr";
   }
 
   b.setInsertionPointAfter(op);

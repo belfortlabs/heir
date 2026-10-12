@@ -83,3 +83,20 @@ func.func @periodic_replication(%arg0: tensor<1x1024xi16> {tensor_ext.layout = #
   %0 = tensor_ext.remap %arg0 {permutation = #replication} : tensor<1x1024xi16>
   return %0 : tensor<1x1024xi16>
 }
+
+// A pair of layouts [from, to] maps each slot of `from` to the slots of `to`
+// that hold the same element; this pair is the cyclic shift of
+// @test_no_conflicts.
+#from = #tensor_ext.layout<"{ [i] -> [ct, slot] : ct = 0 and slot = i and 0 <= i <= 63 }">
+#to = #tensor_ext.layout<"{ [i] -> [ct, slot] : ct = 0 and (i - 1 - slot) mod 64 = 0 and 0 <= i <= 63 and 0 <= slot <= 63 }">
+// CHECK: func.func @test_layout_pair
+// CHECK-SAME: (%[[ARG0:.*]]: tensor<1x64xi32>) -> tensor<1x64xi32>
+// CHECK: %[[SLICE:.*]] = tensor.extract_slice %[[ARG0]][0, 0] [1, 64] [1, 1] : tensor<1x64xi32> to tensor<1x64xi32>
+// CHECK: %[[C1:.*]] = arith.constant 1 : index
+// CHECK: %[[ROT:.*]] = tensor_ext.rotate %[[SLICE]], %[[C1]] : tensor<1x64xi32>, index
+// CHECK: %[[INSERT:.*]] = tensor.insert_slice %[[ROT]] into %[[ARG0]][0, 0] [1, 64] [1, 1] : tensor<1x64xi32> into tensor<1x64xi32>
+// CHECK: return %[[INSERT]] : tensor<1x64xi32>
+func.func @test_layout_pair(%0: tensor<1x64xi32>) -> tensor<1x64xi32> {
+  %1 = tensor_ext.remap %0 {permutation = [#from, #to]} : tensor<1x64xi32>
+  return %1 : tensor<1x64xi32>
+}

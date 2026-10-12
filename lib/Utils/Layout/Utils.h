@@ -277,6 +277,18 @@ LogicalResult forEachComposedRelationPoint(
     ArrayRef<presburger::IntegerRelation> stages,
     llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint);
 
+// Call `onPair(source, target)` for every point of the conversion from
+// layout `from` to layout `to`, i.e. of inverse(from) composed with `to`: each
+// pair of a (ct, slot) of `from` and a (ct, slot) of `to` that hold the same
+// tensor element, once each and in lexicographic order. The two layouts are
+// enumerated separately and joined on the tensor element, which avoids the
+// locals the composition introduces for the tensor coordinates. Requires
+// constant bounds on the layouts' domains.
+LogicalResult forEachConversionPair(
+    const presburger::IntegerRelation& from,
+    const presburger::IntegerRelation& to,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair);
+
 // Get a list of points in the range of the relation by enumerating all
 // possible values.
 void getRangePoints(const presburger::IntegerRelation& relation,

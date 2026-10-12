@@ -90,16 +90,17 @@ Cost computeCostOfLayoutConversion(int64_t numCiphertexts, int64_t minSlotCount,
   assert(fromLayout.getIntegerRelation().getNumDomainVars() ==
              toLayout.getIntegerRelation().getNumDomainVars() &&
          "a layout conversion must keep the tensor's rank");
-  std::shared_ptr<IntegerRelation> composedLayout =
-      fromLayout.getIntegerRelation().clone();
-  composedLayout->inverse();
-  composedLayout->compose(toLayout.getIntegerRelation());
-
   Mapping mapping(minSlotCount, numCiphertexts);
-  PointPairCollector collector(2, 2);
-  enumeratePoints(*composedLayout, collector);
-  for (const auto& [source, target] : collector.points) {
+  auto addPair = [&](ArrayRef<int64_t> source, ArrayRef<int64_t> target) {
     mapping.add(CtSlot{source[0], source[1]}, CtSlot{target[0], target[1]});
+  };
+  if (failed(forEachConversionPair(fromLayout.getIntegerRelation(),
+                                   toLayout.getIntegerRelation(), addPair))) {
+    std::shared_ptr<IntegerRelation> composedLayout =
+        fromLayout.getIntegerRelation().clone();
+    composedLayout->inverse();
+    composedLayout->compose(toLayout.getIntegerRelation());
+    forEachPointPair(*composedLayout, addPair);
   }
 
   tensor_ext::VosVosErkinShiftNetworks shiftNetwork;

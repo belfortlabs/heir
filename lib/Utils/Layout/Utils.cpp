@@ -1,6 +1,7 @@
 #include "lib/Utils/Layout/Utils.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <climits>
 #include <cmath>
@@ -19,6 +20,7 @@
 
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/MathUtils.h"
+#include "llvm/include/llvm/ADT/DenseMap.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/DenseSet.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/STLFunctionalExtras.h"  // from @llvm-project
@@ -1490,6 +1492,65 @@ LogicalResult forEachComposedRelationPoint(
           })) ||
       exhausted)
     return failure();
+  return success();
+}
+
+LogicalResult forEachConversionPair(
+    const presburger::IntegerRelation& from,
+    const presburger::IntegerRelation& to,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair) {
+  unsigned rank = from.getNumDomainVars();
+  if (to.getNumDomainVars() != rank || from.getNumRangeVars() != 2 ||
+      to.getNumRangeVars() != 2)
+    return failure();
+  // Number the tensor elements row-major within the domain's bounding box.
+  SmallVector<int64_t> lb, ub;
+  for (unsigned i = 0; i < rank; ++i) {
+    std::optional<int64_t> lower = from.getConstantBound64(BoundType::LB, i);
+    std::optional<int64_t> upper = from.getConstantBound64(BoundType::UB, i);
+    if (!lower || !upper) return failure();
+    lb.push_back(*lower);
+    ub.push_back(*upper);
+  }
+  auto elementIndex = [&](ArrayRef<int64_t> point) -> int64_t {
+    int64_t index = 0;
+    for (unsigned i = 0; i < rank; ++i)
+      index = index * (ub[i] - lb[i] + 1) + (point[i] - lb[i]);
+    return index;
+  };
+  // A native enumeration that gives up partway is followed by the isl one; the
+  // points it already produced are deduplicated below.
+  auto forEachPoint =
+      [](const presburger::IntegerRelation& layout,
+         llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> fn) {
+        if (failed(forEachRelationPoint(layout, fn)))
+          forEachPointPair(layout, fn);
+      };
+
+  DenseMap<int64_t, SmallVector<std::array<int64_t, 2>, 1>> sourcesOf;
+  bool outOfBox = false;
+  forEachPoint(from, [&](ArrayRef<int64_t> element, ArrayRef<int64_t> slot) {
+    for (unsigned i = 0; i < rank; ++i)
+      if (element[i] < lb[i] || element[i] > ub[i]) outOfBox = true;
+    if (!outOfBox)
+      sourcesOf[elementIndex(element)].push_back({slot[0], slot[1]});
+  });
+  if (outOfBox) return failure();
+
+  std::vector<std::array<int64_t, 4>> pairs;
+  forEachPoint(to, [&](ArrayRef<int64_t> element, ArrayRef<int64_t> slot) {
+    for (unsigned i = 0; i < rank; ++i)
+      if (element[i] < lb[i] || element[i] > ub[i]) return;
+    auto it = sourcesOf.find(elementIndex(element));
+    if (it == sourcesOf.end()) return;
+    for (const auto& source : it->second)
+      pairs.push_back({source[0], source[1], slot[0], slot[1]});
+  });
+  llvm::sort(pairs);
+  pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+  for (const auto& pair : pairs)
+    onPair(ArrayRef<int64_t>(pair).take_front(2),
+           ArrayRef<int64_t>(pair).drop_front(2));
   return success();
 }
 

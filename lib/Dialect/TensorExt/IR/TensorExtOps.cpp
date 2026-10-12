@@ -345,6 +345,15 @@ LogicalResult RemapOp::verify() {
     return success();
   }
 
+  if (auto layouts = dyn_cast<ArrayAttr>(getPermutation())) {
+    if (layouts.size() != 2) {
+      return emitOpError() << "requires a pair of layouts [from, to], but "
+                              "found "
+                           << layouts.size() << " layouts";
+    }
+    return success();
+  }
+
   if (auto denseElementsAttr =
           dyn_cast<DenseIntElementsAttr>(getPermutation())) {
     // Assert the attr has shape <N x 4>
