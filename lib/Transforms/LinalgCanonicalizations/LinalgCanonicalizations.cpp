@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <utility>
 
@@ -12,6 +13,7 @@
 #include "llvm/include/llvm/ADT/SmallBitVector.h"      // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"         // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVectorExtras.h"   // from @llvm-project
+#include "llvm/include/llvm/Support/MathExtras.h"      // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
@@ -22,6 +24,7 @@
 #include "mlir/include/mlir/Dialect/Utils/StaticValueUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Utils/StructuredOpsUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/AffineExpr.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/AsmState.h"    // from @llvm-project
 #include "mlir/include/mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
@@ -1395,6 +1398,82 @@ struct UndilateConv2DNchwFchw
   }
 };
 
+// Rewrites a linalg.depthwise_conv_2d_nchw_chw with a constant (C, KH, KW)
+// filter K into a linalg.conv_2d_nchw_fchw with the block-diagonal (C, C, KH,
+// KW) filter F[f, c] = (f == c) ? K[c] : 0. The conv sums over c, and only
+// c == f contributes, so this computes the same result. The new filter is a
+// dense resource so that assign_layout folds it regardless of its size.
+struct DepthwiseConvToConv2DNchwFchw
+    : public OpRewritePattern<linalg::DepthwiseConv2DNchwChwOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::DepthwiseConv2DNchwChwOp convOp,
+                                PatternRewriter& rewriter) const override {
+    Value filter = convOp.getInputs()[1];
+    auto filterTy = cast<RankedTensorType>(filter.getType());
+    if (!filterTy.hasStaticShape())
+      return rewriter.notifyMatchFailure(convOp, "dynamic filter shape");
+    Type eltTy = filterTy.getElementType();
+    if (!eltTy.isIntOrFloat() || eltTy.getIntOrFloatBitWidth() < 8 ||
+        !llvm::isPowerOf2_64(eltTy.getIntOrFloatBitWidth()))
+      return rewriter.notifyMatchFailure(convOp, "unsupported element type");
+
+    // torch-mlir collapses its (C, 1, KH, KW) filter to (C, KH, KW). A
+    // collapse_shape keeps the row-major element order, so read its source.
+    if (auto collapseOp = filter.getDefiningOp<tensor::CollapseShapeOp>())
+      filter = collapseOp.getSrc();
+
+    TypedAttr constAttr;
+    if (!matchPattern(filter, m_Constant(&constAttr)))
+      return rewriter.notifyMatchFailure(convOp, "filter must be a constant");
+
+    ArrayRef<char> raw;
+    bool isSplat = false;
+    if (auto denseAttr = dyn_cast<DenseElementsAttr>(constAttr)) {
+      raw = denseAttr.getRawData();
+      isSplat = denseAttr.isSplat();
+    } else if (auto resourceAttr =
+                   dyn_cast<DenseResourceElementsAttr>(constAttr)) {
+      raw = resourceAttr.getData();
+    } else {
+      return rewriter.notifyMatchFailure(convOp, "unsupported filter constant");
+    }
+
+    ArrayRef<int64_t> shape = filterTy.getShape();
+    int64_t c = shape[0], kh = shape[1], kw = shape[2];
+    int64_t eltBytes = eltTy.getIntOrFloatBitWidth() / 8;
+    int64_t blockBytes = kh * kw * eltBytes;
+    int64_t expectedBytes = isSplat ? eltBytes : c * blockBytes;
+    if (static_cast<int64_t>(raw.size()) != expectedBytes)
+      return rewriter.notifyMatchFailure(convOp, "unexpected filter data size");
+
+    SmallVector<char> data(c * c * blockBytes, 0);
+    for (int64_t ci = 0; ci < c; ++ci) {
+      char* dst = data.data() + (ci * c + ci) * blockBytes;
+      if (isSplat) {
+        for (int64_t k = 0; k < kh * kw; ++k)
+          std::memcpy(dst + k * eltBytes, raw.data(), eltBytes);
+      } else {
+        std::memcpy(dst, raw.data() + ci * blockBytes, blockBytes);
+      }
+    }
+
+    auto newFilterTy = RankedTensorType::get({c, c, kh, kw}, eltTy);
+    auto newFilterAttr = DenseResourceElementsAttr::get(
+        newFilterTy, "depthwise_filter",
+        HeapAsmResourceBlob::allocateAndCopyWithAlign(data, eltBytes));
+    Value newFilter =
+        arith::ConstantOp::create(rewriter, convOp.getLoc(), newFilterAttr);
+
+    rewriter.replaceOpWithNewOp<linalg::Conv2DNchwFchwOp>(
+        convOp, convOp.getResultTypes(),
+        ValueRange{convOp.getInputs()[0], newFilter},
+        ValueRange{convOp.getDpsInits()[0]}, convOp.getStrides(),
+        convOp.getDilations());
+    return success();
+  }
+};
+
 // Torch exports constants as dense resources, which the arith and math folders
 // do not read. Inline them so that e.g. a BatchNorm's rsqrt(var + eps) folds.
 // Operands of contractions, convolutions and transposes stay resources:
@@ -1455,12 +1534,13 @@ struct LinalgCanonicalizations
 
     RewritePatternSet patterns(context);
     patterns.add<
-        BroadcastToExpandShape, DropCfAssertInLinalg, FoldBroadcastExtractSlice,
-        FoldConstantBroadcast, FoldConstantFill, FoldConstantLinalgTranspose,
-        FoldConstantTruncF, FuseConv2DPooling, LinalgGenericToElementwise,
-        LinalgMapToElementwise, MaterializeBroadcasts, RewriteAvgPoolAsConv1D,
-        RewriteAvgPoolAsConv2D, RewriteVecmatAsMatvec, UndilateConv1DNcwFcw,
-        UndilateConv2DNchwFchw>(context);
+        BroadcastToExpandShape, DepthwiseConvToConv2DNchwFchw,
+        DropCfAssertInLinalg, FoldBroadcastExtractSlice, FoldConstantBroadcast,
+        FoldConstantFill, FoldConstantLinalgTranspose, FoldConstantTruncF,
+        FuseConv2DPooling, LinalgGenericToElementwise, LinalgMapToElementwise,
+        MaterializeBroadcasts, RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D,
+        RewriteVecmatAsMatvec, UndilateConv1DNcwFcw, UndilateConv2DNchwFchw>(
+        context);
 
     mlir::linalg::populateDecomposeProjectedPermutationPatterns(patterns);
 
