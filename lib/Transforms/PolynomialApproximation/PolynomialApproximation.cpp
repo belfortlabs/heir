@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <type_traits>
 #include <utility>
 
 #include "lib/Analysis/SecretnessAnalysis/SecretnessAnalysis.h"
@@ -636,6 +638,98 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
   DataFlowSolver* solver;
 };
 
+// clamp(x, lo, hi) = lo + relu(x - lo) - relu(x - hi) for lo < hi, matched as
+// either min(max(x, lo), hi) or max(min(x, hi), lo) with constant bounds (e.g.
+// ReLU6 = clamp(x, 0, 6), hard-sigmoid = clamp(x / 6 + 1/2, 0, 1)). Both ReLUs
+// read x, so they are evaluated in parallel and the clamp costs the depth of a
+// single ReLU, and each goes through the ReLU approximation (including
+// use-composite-relu), instead of two chained approximations of the min and
+// the max.
+//
+// The inner op's domain is the range of x (the outer op's domain describes the
+// already clamped-from-one-side value), so each ReLU gets that domain shifted
+// by its bound. Without a domain the default [-1, 1] is shifted the same way.
+// A ReLU whose shifted domain is entirely on one side of zero is zero or the
+// identity there, so it is not approximated; without calibrated domains this
+// drops the upper bound of ReLU6, which lies outside [-1, 1].
+template <typename OuterOp, typename InnerOp>
+struct ClampViaTwoRelus : public OpRewritePattern<OuterOp> {
+  using OpRewritePattern<OuterOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(OuterOp op,
+                                PatternRewriter& rewriter) const override {
+    // Split a binary op into its non-constant operand and constant value.
+    auto splitConstant =
+        [](Operation* binOp) -> std::optional<std::pair<Value, APFloat>> {
+      for (int i = 0; i < 2; ++i) {
+        FailureOr<APFloat> c = getSingleValueOrSplat(binOp->getOperand(i));
+        if (succeeded(c)) return std::make_pair(binOp->getOperand(1 - i), *c);
+      }
+      return std::nullopt;
+    };
+
+    auto outer = splitConstant(op);
+    if (!outer) return rewriter.notifyMatchFailure(op, "no constant bound");
+    auto innerOp = outer->first.template getDefiningOp<InnerOp>();
+    if (!innerOp) return rewriter.notifyMatchFailure(op, "not a clamp");
+    auto inner = splitConstant(innerOp);
+    if (!inner) return rewriter.notifyMatchFailure(op, "no constant bound");
+
+    constexpr bool kMaxInside = std::is_same_v<InnerOp, arith::MaximumFOp>;
+    Value x = inner->first;
+    APFloat lo = kMaxInside ? inner->second : outer->second;
+    APFloat hi = kMaxInside ? outer->second : inner->second;
+    double loValue = lo.convertToDouble();
+    double hiValue = hi.convertToDouble();
+    if (!(loValue < hiValue))
+      return rewriter.notifyMatchFailure(op, "empty clamp interval");
+
+    double domainLower = kDefaultDomainLower;
+    double domainUpper = kDefaultDomainUpper;
+    if (auto a = dyn_cast_or_null<FloatAttr>(innerOp->getAttr("domain_lower")))
+      domainLower = a.getValueAsDouble();
+    if (auto a = dyn_cast_or_null<FloatAttr>(innerOp->getAttr("domain_upper")))
+      domainUpper = a.getValueAsDouble();
+
+    Location loc = op.getLoc();
+    Type ty = op.getType();
+    auto constant = [&](const APFloat& value) -> Value {
+      return arith::ConstantOp::create(rewriter, loc, ty,
+                                       getScalarOrDenseAttr(ty, value));
+    };
+    // relu(x - bound), with the domain of x shifted by -bound, or a null value
+    // if that domain is entirely negative.
+    auto relu = [&](const APFloat& bound, double boundValue) -> Value {
+      double lower = domainLower - boundValue;
+      double upper = domainUpper - boundValue;
+      if (upper <= 0) return Value();
+      Value shifted = x;
+      if (!bound.isZero())
+        shifted = arith::SubFOp::create(rewriter, loc, x, constant(bound));
+      if (lower >= 0) return shifted;
+      auto zero = APFloat::getZero(bound.getSemantics());
+      auto maxOp =
+          arith::MaximumFOp::create(rewriter, loc, shifted, constant(zero));
+      maxOp->setAttr("domain_lower", rewriter.getF64FloatAttr(lower));
+      maxOp->setAttr("domain_upper", rewriter.getF64FloatAttr(upper));
+      if (Attribute degree = innerOp->getAttr("degree"))
+        maxOp->setAttr("degree", degree);
+      return maxOp.getResult();
+    };
+
+    // relu(x - hi) is nonzero only where relu(x - lo) is.
+    Value result = relu(lo, loValue);
+    if (Value reluHi = relu(hi, hiValue))
+      result = arith::SubFOp::create(rewriter, loc, result, reluHi);
+    if (!result)
+      result = constant(lo);
+    else if (!lo.isZero())
+      result = arith::AddFOp::create(rewriter, loc, result, constant(lo));
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 // Use a square and multiply algorithm for x^n where n is a constant.
 struct SquareAndMultiplyForPowOp : public OpRewritePattern<math::FPowIOp> {
   SquareAndMultiplyForPowOp(MLIRContext* context)
@@ -683,6 +777,15 @@ struct PolynomialApproximation
 
   void runOnOperation() override {
     MLIRContext* context = &getContext();
+
+    // Split clamps into ReLUs before anything approximates their min/max
+    // halves. This runs ahead of the secretness analysis so the analysis
+    // covers the values it creates.
+    RewritePatternSet clampPatterns(context);
+    clampPatterns.add<ClampViaTwoRelus<arith::MinimumFOp, arith::MaximumFOp>,
+                      ClampViaTwoRelus<arith::MaximumFOp, arith::MinimumFOp>>(
+        context);
+    (void)applyPatternsGreedily(getOperation(), std::move(clampPatterns));
 
     DataFlowSolver solver;
     dataflow::loadBaselineAnalyses(solver);

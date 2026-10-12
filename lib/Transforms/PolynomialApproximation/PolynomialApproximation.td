@@ -61,6 +61,11 @@ def PolynomialApproximation : Pass<"polynomial-approximation"> {
     These ops are replaced with `polynomial.eval` ops with a static polynomial
     attribute.
 
+    A clamp with constant bounds, `min(max(x, lo), hi)` or `max(min(x, hi), lo)`
+    (e.g. ReLU6), is first rewritten to `lo + max(x - lo, 0) - max(x - hi, 0)`,
+    so that it is approximated as two ReLUs evaluated in parallel. Each ReLU
+    gets the inner op's `domain_lower`/`domain_upper` shifted by its bound.
+
     Some ops support alternative approximation strategies, such as `exp` on
     `[-2^k, 1.0]` using repeated squaring `(1 + x/2^k)^(2^k)` (when using
     `--math-exp-method=taylor`), which evaluates a degree-2^k polynomial with k

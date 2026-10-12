@@ -42,20 +42,21 @@ static bool IsOne(mlir::Attribute attr) {
 // populateWithGenerated, which can conflict with other generated patterns.
 #include "lib/Transforms/ActivationCanonicalizations/Rewrites.cpp.inc"
 
-// select(a > c, a, c) = max(a, c) for floats. This replaces the DRR
-// `SelectGreaterThanEqualFloat` pattern and folds in
-// two attr-forwarding behaviors so the polynomial-approximation domain survives
-// regardless of where torch-mlir attached it:
+// select(a > c, a, c) = max(a, c) and select(a < c, a, c) = min(a, c) for
+// floats, with ordered or unordered predicates (torch-mlir emits `ugt` for
+// ReLU and `ogt`/`olt` for the maximum/minimum halves of a clamp such as
+// ReLU6). This replaces the DRR `SelectGreaterThanEqualFloat` pattern and folds
+// in two attr-forwarding behaviors so the polynomial-approximation domain
+// survives regardless of where torch-mlir attached it:
 //   (a) copy discardable attrs off the select itself (the old DRR behavior),
 //   (b) if the domain is still missing, copy `domain_lower`/`domain_upper` from
 //       an enclosing `linalg.generic` (a torch ReLU imports as a generic
 //       carrying those attrs, with `cmpf+select` in its body) The
 //       generic's copy is dropped afterwards by stripForwardedDomains().
-// Either way the domain lands on the `arith.maximumf` that
+// Either way the domain lands on the `arith.maximumf`/`arith.minimumf` that
 // PolynomialApproximation / ReluViaCompositeSign read; without it they fall
 // back to [-1, 1].
-struct SelectGreaterThanEqualFloatPattern
-    : public OpRewritePattern<arith::SelectOp> {
+struct SelectMinMaxFloatPattern : public OpRewritePattern<arith::SelectOp> {
   using OpRewritePattern<arith::SelectOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(arith::SelectOp op,
@@ -64,29 +65,49 @@ struct SelectGreaterThanEqualFloatPattern
     if (!cmpOp)
       return rewriter.notifyMatchFailure(op, "condition is not arith.cmpf");
 
-    auto pred = cmpOp.getPredicate();
-    if (pred != arith::CmpFPredicate::UGT && pred != arith::CmpFPredicate::UGE)
-      return rewriter.notifyMatchFailure(op, "predicate is not ugt/uge");
+    bool isMax;
+    switch (cmpOp.getPredicate()) {
+      case arith::CmpFPredicate::OGT:
+      case arith::CmpFPredicate::OGE:
+      case arith::CmpFPredicate::UGT:
+      case arith::CmpFPredicate::UGE:
+        isMax = true;
+        break;
+      case arith::CmpFPredicate::OLT:
+      case arith::CmpFPredicate::OLE:
+      case arith::CmpFPredicate::ULT:
+      case arith::CmpFPredicate::ULE:
+        isMax = false;
+        break;
+      default:
+        return rewriter.notifyMatchFailure(op, "predicate is not >, >=, <, <=");
+    }
 
-    // Must be the ReLU/max shape: select(a >? c, a, c).
+    // Must be the max/min shape: select(a ? c, a, c).
     if (cmpOp.getLhs() != op.getTrueValue() ||
         cmpOp.getRhs() != op.getFalseValue())
       return rewriter.notifyMatchFailure(op,
-                                         "operands are not select(a>c,a,c)");
+                                         "operands are not select(a?c,a,c)");
 
-    auto maxOp =
-        arith::MaximumFOp::create(rewriter, op.getLoc(), op.getTrueValue(),
-                                  op.getFalseValue(), cmpOp.getFastmathAttr());
+    Operation* newOp;
+    if (isMax)
+      newOp = arith::MaximumFOp::create(rewriter, op.getLoc(),
+                                        op.getTrueValue(), op.getFalseValue(),
+                                        cmpOp.getFastmathAttr());
+    else
+      newOp = arith::MinimumFOp::create(rewriter, op.getLoc(),
+                                        op.getTrueValue(), op.getFalseValue(),
+                                        cmpOp.getFastmathAttr());
 
     // (a) Forward any discardable attrs annotated on the select op itself onto
-    // the maximumf (the old DRR `SelectGreaterThanEqualFloat` behavior). Covers
+    // the new op (the old DRR `SelectGreaterThanEqualFloat` behavior). Covers
     // IR where the domain is attached directly to the select.
     for (auto attr : op->getDiscardableAttrs())
-      maxOp->setAttr(attr.getName(), attr.getValue());
+      newOp->setAttr(attr.getName(), attr.getValue());
 
-    // (b) If the domain still isn't on the maximumf, it lives on an enclosing
+    // (b) If the domain still isn't on the new op, it lives on an enclosing
     // linalg.generic instead (where torch-mlir's importer attaches the ReLU
-    // domain). Copy it down onto the maximumf — the op PolynomialApproximation
+    // domain). Copy it down onto the new op — the op PolynomialApproximation
     // actually reads. We only COPY here; the generic's own bounds are dropped
     // afterwards by stripForwardedDomains(). A single generic can hold several
     // ReLUs, so stripping as soon as the first one is rewritten would starve
@@ -94,13 +115,13 @@ struct SelectGreaterThanEqualFloatPattern
     if (auto generic = dyn_cast<linalg::GenericOp>(op->getParentOp())) {
       Attribute lo = generic->getAttr("domain_lower");
       Attribute hi = generic->getAttr("domain_upper");
-      if (lo && !maxOp->hasAttr("domain_lower"))
-        maxOp->setAttr("domain_lower", lo);
-      if (hi && !maxOp->hasAttr("domain_upper"))
-        maxOp->setAttr("domain_upper", hi);
+      if (lo && !newOp->hasAttr("domain_lower"))
+        newOp->setAttr("domain_lower", lo);
+      if (hi && !newOp->hasAttr("domain_upper"))
+        newOp->setAttr("domain_upper", hi);
     }
 
-    rewriter.replaceOp(op, maxOp.getResult());
+    rewriter.replaceOp(op, newOp->getResults());
     return success();
   }
 };
@@ -137,7 +158,7 @@ struct ActivationCanonicalizations
     MLIRContext* context = &getContext();
     RewritePatternSet patterns(context);
     populateWithGenerated(patterns);
-    patterns.add<SelectGreaterThanEqualFloatPattern>(context);
+    patterns.add<SelectMinMaxFloatPattern>(context);
 
     (void)walkAndApplyPatterns(getOperation(), std::move(patterns));
 
