@@ -12,6 +12,7 @@
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/Layout/Utils.h"
 #include "lib/Utils/TensorUtils.h"
+#include "llvm/include/llvm/ADT/STLExtras.h"    // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"  // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/PresburgerSpace.h"  // from @llvm-project
@@ -1297,6 +1298,40 @@ TEST(UtilsTest, ForEachComposedRelationPoint) {
       {first, second}, [&](ArrayRef<int64_t> domain, ArrayRef<int64_t> range) {
         actual.insert({std::vector<int64_t>(domain.begin(), domain.end()),
                        std::vector<int64_t>(range.begin(), range.end())});
+      })));
+  EXPECT_FALSE(expected.empty());
+  EXPECT_EQ(actual, expected);
+}
+
+TEST(UtilsTest, ForEachConversionPair) {
+  // A row-major layout replicated twice in 32 slots, converted to a diagonal
+  // layout in 4 ciphertexts.
+  presburger::IntegerRelation from =
+      getIntegerRelationFromIslStr(
+          "{ [i0, i1] -> [ct, slot] : ct = 0 and (4i0 + i1 - slot) mod 16 = 0 "
+          "and 0 <= i0 <= 3 and 0 <= i1 <= 3 and 0 <= slot <= 31 }")
+          .value();
+  presburger::IntegerRelation to =
+      getIntegerRelationFromIslStr(
+          "{ [i0, i1] -> [ct, slot] : (i0 - i1 + ct) mod 4 = 0 and (-i0 + "
+          "slot) mod 4 = 0 and 0 <= i0 <= 3 and 0 <= i1 <= 3 and 0 <= ct <= 3 "
+          "and 0 <= slot <= 7 }")
+          .value();
+  presburger::IntegerRelation composed = from;
+  composed.inverse();
+  composed.compose(to);
+
+  using Pair = std::pair<std::vector<int64_t>, std::vector<int64_t>>;
+  std::vector<Pair> expected, actual;
+  PointPairCollector collector(2, 2);
+  enumeratePoints(composed, collector);
+  for (const auto& [source, target] : collector.points)
+    expected.push_back({source, target});
+  llvm::sort(expected);
+  ASSERT_TRUE(succeeded(forEachConversionPair(
+      from, to, [&](ArrayRef<int64_t> source, ArrayRef<int64_t> target) {
+        actual.push_back({std::vector<int64_t>(source.begin(), source.end()),
+                          std::vector<int64_t>(target.begin(), target.end())});
       })));
   EXPECT_FALSE(expected.empty());
   EXPECT_EQ(actual, expected);
