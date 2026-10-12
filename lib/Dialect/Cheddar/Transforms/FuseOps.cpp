@@ -152,6 +152,34 @@ struct FuseHConjAdd : public OpRewritePattern<AddOp> {
   }
 };
 
+// A linear transform the evaluating function prepares itself (no split
+// preprocessing) keeps its encoded diagonals on the device from preparation to
+// its last use; for a backbone applied to two inputs that is every transform
+// at once. Evaluate it directly instead, which encodes its diagonals for this
+// use alone and releases them right after.
+struct ApplyLinearTransformDirectly
+    : public OpRewritePattern<ApplyPreparedLinearTransformOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ApplyPreparedLinearTransformOp apply,
+                                PatternRewriter& rewriter) const override {
+    auto prepare =
+        apply.getTransform().getDefiningOp<PrepareLinearTransformOp>();
+    if (!prepare) return failure();
+    rewriter.setInsertionPoint(apply);
+    auto direct = LinearTransformOp::create(
+        rewriter, apply.getLoc(), apply.getResult().getType(), apply.getCtx(),
+        apply.getInput(), apply.getEvkMap(), prepare.getDiagonals(),
+        apply.getOutput(), prepare.getDiagonalIndicesAttr(),
+        prepare.getSourceRowIndicesAttr(), prepare.getLevelAttr(),
+        prepare.getBsAttr(), prepare.getGsAttr(), apply.getMinKsAttr(),
+        prepare.getLogPtSizePerPrimeAttr());
+    rewriter.replaceOp(apply, direct.getResult());
+    if (prepare->use_empty()) rewriter.eraseOp(prepare);
+    return success();
+  }
+};
+
 template <typename PlainOp>
 struct HoistRelinBeforePlainOp : public OpRewritePattern<RelinearizeOp> {
   using OpRewritePattern<RelinearizeOp>::OpRewritePattern;
@@ -202,6 +230,7 @@ struct CheddarFuseOps : public impl::CheddarFuseOpsBase<CheddarFuseOps> {
     patterns.add<FuseMultRelinRescale>(context, /*benefit=*/3);
     patterns.add<FuseMultRelinRescaleFused>(context, /*benefit=*/2);
     patterns.add<FuseMultRelin>(context, /*benefit=*/1);
+    patterns.add<ApplyLinearTransformDirectly>(context);
     patterns.add<FuseHRotAdd, FuseHConjAdd>(context, /*benefit=*/1);
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
