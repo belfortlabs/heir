@@ -1092,6 +1092,20 @@ struct MaterializeBroadcasts : public OpRewritePattern<linalg::GenericOp> {
 
     int64_t numDims = genericOp.getNumLoops();
 
+    // linalg.broadcast cannot transpose, so once the constant results are
+    // collapsed away, the remaining results must be dims in increasing order.
+    // Check this before rewriting any operand.
+    for (int64_t i = 0; i < genericOp.getNumDpsInputs(); ++i) {
+      if (getBroadcastDimensions(indexingMaps[i], numDims).empty()) continue;
+      int64_t prevDim = -1;
+      for (AffineExpr expr : indexingMaps[i].getResults()) {
+        if (isa<AffineConstantExpr>(expr)) continue;
+        auto dimExpr = dyn_cast<AffineDimExpr>(expr);
+        if (!dimExpr || dimExpr.getPosition() <= prevDim) return failure();
+        prevDim = dimExpr.getPosition();
+      }
+    }
+
     for (int64_t i = 0; i < genericOp.getNumDpsInputs(); ++i) {
       OpOperand* operand = genericOp.getDpsInputOperand(i);
       AffineMap map = indexingMaps[i];
@@ -1103,7 +1117,10 @@ struct MaterializeBroadcasts : public OpRewritePattern<linalg::GenericOp> {
         continue;
       }
 
-      if (map.getNumResults() < numDims) {
+      // Besides dropped dimensions, torch exports broadcasts of unit
+      // dimensions as constant-zero results, e.g. (d0, d1, d2, d3) -> (d0,
+      // d1, 0, 0).
+      if (!getBroadcastDimensions(map, numDims).empty()) {
         madeChanges = true;
         auto materializedValue = materializeBroadcastForOperand(
             rewriter, genericOp, value, map, numDims);
