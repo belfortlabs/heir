@@ -1688,12 +1688,15 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
   // with period the secret operand's packed row (or column) count.
   if (outputCoprime && ((inputSecret && !filterSecret && lhsCoprime) ||
                         (!inputSecret && filterSecret && rhsCoprime))) {
-    // The cyclic kernel holds each operand, and the result, in one ciphertext
-    // (a diagonal of a plaintext weight spans the whole weight).
+    // The result's valid prefix starts after the rotation reach, so the
+    // ciphertext holds the reach plus the whole result. This also covers the
+    // secret operand, which spans period * steps slots.
+    int64_t period = inputSecret ? mDim : pDim;
+    int64_t reach = period * (nDim - 1);
     if (failed(checkMaxSlotCount(
-            op, std::max({lhsType.getNumElements(), rhsType.getNumElements(),
-                          cast<RankedTensorType>(result.getType())
-                              .getNumElements()})))) {
+            op,
+            reach +
+                cast<RankedTensorType>(result.getType()).getNumElements()))) {
       return failure();
     }
     Value secretOperand = inputSecret ? lhs : rhs;
