@@ -80,9 +80,10 @@ func.func @fuse_conv_2d(%arg0: tensor<1x3x16x16xf32>, %arg1: tensor<8x3x3x3xf32>
 // CHECK: %[[EMPTY_W:.*]] = tensor.empty() : tensor<3x4xf32>
 // CHECK: %[[BROADCAST_W:.*]] = linalg.broadcast ins(%arg2 : tensor<4xf32>) outs(%[[EMPTY_W]] : tensor<3x4xf32>) dimensions = [0]
 // CHECK: %[[SCALED_W:.*]] = arith.mulf %arg1, %[[BROADCAST_W]] : tensor<3x4xf32>
+// CHECK: %[[SCALED_OUTS:.*]] = arith.mulf %arg4, %{{.*}} : tensor<2x4xf32>
 // CHECK: %[[EMPTY_OUT:.*]] = tensor.empty() : tensor<2x4xf32>
 // CHECK: %[[BROADCAST_OUT:.*]] = linalg.broadcast ins(%arg3 : tensor<4xf32>) outs(%[[EMPTY_OUT]] : tensor<2x4xf32>) dimensions = [0]
-// CHECK: %[[NEW_OUTS:.*]] = arith.addf %arg4, %[[BROADCAST_OUT]] : tensor<2x4xf32>
+// CHECK: %[[NEW_OUTS:.*]] = arith.addf %[[SCALED_OUTS]], %[[BROADCAST_OUT]] : tensor<2x4xf32>
 // CHECK: %[[RESULT:.*]] = linalg.matmul ins(%arg0, %[[SCALED_W]] : tensor<2x3xf32>, tensor<3x4xf32>) outs(%[[NEW_OUTS]] : tensor<2x4xf32>)
 // CHECK: return %[[RESULT]]
 func.func @fuse_matmul_with_bias(%arg0: tensor<2x3xf32>, %arg1: tensor<3x4xf32>, %arg2: tensor<4xf32>, %arg3: tensor<4xf32>, %arg4: tensor<2x4xf32>) -> tensor<2x4xf32> {
@@ -191,4 +192,32 @@ func.func @fuse_matmul_sub_empty_constant(%arg0: tensor<2x3xf32>, %arg1: tensor<
   %scale = arith.constant dense<3.000000e+00> : tensor<2x4xf32>
   %2 = arith.subf %1, %scale : tensor<2x4xf32>
   return %2 : tensor<2x4xf32>
+}
+
+// -----
+
+// The linear op is the divisor, so the division is not a scale.
+
+// CHECK: func.func @no_fuse_div_by_linear
+// CHECK: linalg.matvec
+// CHECK: arith.divf
+func.func @no_fuse_div_by_linear(%arg0: tensor<2x3xf32>, %arg1: tensor<3xf32>, %arg2: tensor<2xf32>) -> tensor<2xf32> {
+  %0 = tensor.empty() : tensor<2xf32>
+  %1 = linalg.matvec ins(%arg0, %arg1 : tensor<2x3xf32>, tensor<3xf32>) outs(%0 : tensor<2xf32>) -> tensor<2xf32>
+  %2 = arith.divf %arg2, %1 : tensor<2xf32>
+  return %2 : tensor<2xf32>
+}
+
+// -----
+
+// The linear op is the subtrahend, so the subtraction is not an addend.
+
+// CHECK: func.func @no_fuse_sub_from_constant
+// CHECK: linalg.matvec
+// CHECK: arith.subf
+func.func @no_fuse_sub_from_constant(%arg0: tensor<2x3xf32>, %arg1: tensor<3xf32>, %arg2: tensor<2xf32>) -> tensor<2xf32> {
+  %0 = tensor.empty() : tensor<2xf32>
+  %1 = linalg.matvec ins(%arg0, %arg1 : tensor<2x3xf32>, tensor<3xf32>) outs(%0 : tensor<2xf32>) -> tensor<2xf32>
+  %2 = arith.subf %arg2, %1 : tensor<2xf32>
+  return %2 : tensor<2xf32>
 }

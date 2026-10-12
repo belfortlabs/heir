@@ -26,7 +26,7 @@
 // CLIENT-SAME: std::vector<word>{30539777ULL, 32899073ULL, 29884417ULL, 31326209ULL, 36175873ULL}, std::pair<int, int>{0, 0}, 12);
 // CLIENT: cheddar_param.SetDenseHammingWeight(128);
 // CLIENT: cheddar_param.SetSparseHammingWeight(128);
-// CLIENT: cheddar_param.SetMaxLogPQ(216.25);
+// CLIENT: cheddar_param.SetMaxLogPQ(184);
 // CLIENT: cheddar_param.SetLevelSpecificKS(true);
 // CLIENT: cheddar_param.SetMaxKeySwitchAux(23);
 
