@@ -1124,9 +1124,49 @@ class RelationPointEnumerator {
       bool hasUpper =
           var.ub.has_value() || !var.upperRows.empty() || !var.pinRows.empty();
       if (!hasLower || !hasUpper) return failure();
+      findBlockLocal(v);
     }
     budget = kMaxCandidates;
     return success();
+  }
+
+  // Picks the floor division of variable `v` with the largest blocks among
+  // those that some constraint, unusable for `v` otherwise, narrows `v` with.
+  void findBlockLocal(unsigned v) {
+    Var& var = vars[v];
+    int64_t bestBlockSize = 1;
+    for (unsigned k = 0; k < locals.size(); ++k) {
+      const Local& local = locals[k];
+      int64_t a = std::abs(local.dividend[v]);
+      if (local.level != v + 1 || a == 0 || local.denom / a <= bestBlockSize)
+        continue;
+      // The division must be computable once `v` is fixed.
+      bool computable = true;
+      for (unsigned j = 0; j < numVars; ++j)
+        if (j != v && local.dividend[j] != 0 && level[j] > v)
+          computable = false;
+      if (!computable) continue;
+      // Rows whose only unknown besides `v` is this local.
+      auto usable = [&](ArrayRef<int64_t> row) {
+        if (row[v] == 0 || row[local.position] == 0) return false;
+        for (unsigned j = 0; j < numVars; ++j)
+          if (j != v && j != local.position && row[j] != 0 && level[j] > v)
+            return false;
+        return true;
+      };
+      SmallVector<unsigned> lowerRows, upperRows, pinRows;
+      for (unsigned i = 0; i < ineqs.size(); ++i)
+        if (usable(ineqs[i]))
+          (ineqs[i][v] > 0 ? lowerRows : upperRows).push_back(i);
+      for (unsigned i = 0; i < eqs.size(); ++i)
+        if (usable(eqs[i])) pinRows.push_back(i);
+      if (lowerRows.empty() && upperRows.empty() && pinRows.empty()) continue;
+      bestBlockSize = local.denom / a;
+      var.blockLocal = k;
+      var.blockLowerRows = std::move(lowerRows);
+      var.blockUpperRows = std::move(upperRows);
+      var.blockPinRows = std::move(pinRows);
+    }
   }
 
   // Fails after kMaxCandidates complete candidates. `onPoint` has already seen
@@ -1162,6 +1202,12 @@ class RelationPointEnumerator {
     std::optional<int64_t> lb, ub;
     SmallVector<unsigned> lowerRows, upperRows, pinRows;
     SmallVector<std::pair<unsigned, int64_t>> congruences;
+    // A local that is a floor division of this variable (an index into
+    // `locals`), and the rows that bound or pin the variable once it is known.
+    // The values of the variable split into blocks over which the local is
+    // constant, and within a block these rows narrow the candidates.
+    std::optional<unsigned> blockLocal;
+    SmallVector<unsigned> blockLowerRows, blockUpperRows, blockPinRows;
   };
 
   // Whether every variable of `row` other than `v` is known once the first
@@ -1179,6 +1225,12 @@ class RelationPointEnumerator {
     for (unsigned j = 0; j < numVars; ++j)
       if (j != v && level[j] <= v) sum += row[j] * point[j];
     return sum;
+  }
+
+  // Like restOf, with the block local of `v` known.
+  int64_t restInBlock(ArrayRef<int64_t> row, unsigned v) const {
+    unsigned position = locals[*vars[v].blockLocal].position;
+    return restOf(row, v) + row[position] * point[position];
   }
 
   static int64_t floorDiv(int64_t a, int64_t b) {
@@ -1256,7 +1308,47 @@ class RelationPointEnumerator {
       hi = std::min(hi, -rest / a);
     }
     if (lo > hi) return true;
+    if (!var.blockLocal) return visitRange(v, lo, hi, onPoint);
 
+    // Split [lo, hi] into blocks over which the block local is constant, and
+    // narrow each block with the rows that use it.
+    const Local& local = locals[*var.blockLocal];
+    int64_t a = local.dividend[v];
+    int64_t rest = local.dividend[numVars];
+    for (unsigned j = 0; j < numVars; ++j)
+      if (j != v) rest += local.dividend[j] * point[j];
+    for (int64_t blockStart = lo; blockStart <= hi;) {
+      int64_t q = floorDiv(a * blockStart + rest, local.denom);
+      point[local.position] = q;
+      // The last x with floor((a*x + rest) / denom) == q.
+      int64_t blockEnd = std::min(
+          hi, a > 0 ? floorDiv(q * local.denom + local.denom - 1 - rest, a)
+                    : floorDiv(rest - q * local.denom, -a));
+      int64_t blockLo = blockStart, blockHi = blockEnd;
+      for (unsigned i : var.blockLowerRows)
+        blockLo =
+            std::max(blockLo, ceilDiv(-restInBlock(ineqs[i], v), ineqs[i][v]));
+      for (unsigned i : var.blockUpperRows)
+        blockHi =
+            std::min(blockHi, floorDiv(restInBlock(ineqs[i], v), -ineqs[i][v]));
+      for (unsigned i : var.blockPinRows) {
+        int64_t pinRest = restInBlock(eqs[i], v);
+        if (pinRest % eqs[i][v] != 0) blockHi = blockLo - 1;
+        blockLo = std::max(blockLo, -pinRest / eqs[i][v]);
+        blockHi = std::min(blockHi, -pinRest / eqs[i][v]);
+      }
+      if (blockLo <= blockHi && !visitRange(v, blockLo, blockHi, onPoint))
+        return false;
+      blockStart = blockEnd + 1;
+    }
+    return true;
+  }
+
+  // Visits the candidates for variable `v` in [lo, hi].
+  bool visitRange(
+      unsigned v, int64_t lo, int64_t hi,
+      llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint) {
+    const Var& var = vars[v];
     // The congruence with the largest stride, if any.
     int64_t stride = 1, start = lo;
     for (auto [i, modulus] : var.congruences) {

@@ -1256,6 +1256,17 @@ TEST(UtilsTest, ForEachRelationPointComposedLayout) {
       "0 <= i0 <= 3 and 0 <= i1 <= 3 and 0 <= ct <= 1 and 0 <= slot <= 15) }");
 }
 
+TEST(UtilsTest, ForEachRelationPointFloorOfRangeVariable) {
+  // A channel-concat layout, scaled down: the slot is only bounded tightly
+  // through l0 = floor(slot / 8192), a local that depends on the slot itself.
+  expectSamePoints(
+      "{ [i0, i1, i2, i3] -> [ct, slot] : i0 = 0 and ct = 0 and 0 <= i1 <= 3 "
+      "and 0 <= i2 <= 3 and 0 <= i3 <= 3 and 0 <= slot <= 30719 and (i1 + "
+      "slot) mod 2 = 0 and exists (l0 : 8192l0 <= slot <= 8192l0 + 6143 and 0 "
+      "<= slot - 8192l0 - 64i2 - 2i3 - 32*floor(i1/2) - 960*floor(i1/4) <= 1) "
+      "}");
+}
+
 TEST(UtilsTest, ForEachRelationPointFailsWithoutCallingOnPoint) {
   // A symbol, and a range variable with no upper bound.
   for (const char* islStr :
