@@ -1,8 +1,8 @@
 // RUN: heir-opt --linalg-canonicalizations --layout-propagation %s | FileCheck %s
 
 // A global pool after a strided conv and an activation becomes a matvec on
-// gapped data. The matvec result is row-major, so a following conv must see
-// kernel info with gap factor 1 (a squeeze-excite block).
+// gapped data, as in a squeeze-excite block. The matvec result is row-major, so
+// the conv that follows must see kernel info with gap factor 1.
 
 #map = affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>
 
