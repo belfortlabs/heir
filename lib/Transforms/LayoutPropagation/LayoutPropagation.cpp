@@ -2711,6 +2711,15 @@ void LayoutPropagation::runOnOperation() {
     maxRingDegree = *degree;
   }
   maxSlotCount = maxRingDegree / 2;
+
+  // minSlotCount is a lower bound: it starts at the count an earlier run
+  // recorded on the module, is raised for this run when a kernel needs more
+  // slots, and is restored for the next run of the pass.
+  int optionSlotCount = minSlotCount;
+  llvm::scope_exit restoreOption([&] { minSlotCount = optionSlotCount; });
+  minSlotCount =
+      std::max<int64_t>(minSlotCount, getLayoutSlotCount(root, minSlotCount));
+
   if (maxSlotCount > 0 && minSlotCount > maxSlotCount) {
     root->emitOpError() << "min-slot-count " << minSlotCount << " exceeds the "
                         << maxSlotCount
@@ -2719,11 +2728,6 @@ void LayoutPropagation::runOnOperation() {
     signalPassFailure();
     return;
   }
-
-  // minSlotCount is a lower bound: it is raised for this run when a kernel
-  // needs more slots, and restored for the next run of the pass.
-  int optionSlotCount = minSlotCount;
-  llvm::scope_exit restoreOption([&] { minSlotCount = optionSlotCount; });
 
   // A kernel's slot requirement is only known once its operands have layouts:
   // a strided conv reads its input with the gaps its producers left. Every
@@ -2749,8 +2753,8 @@ void LayoutPropagation::runOnOperation() {
   }
 
   // Later passes pack and size ciphertexts for the same slot count.
-  if (minSlotCount != optionSlotCount && isa<ModuleOp>(root)) {
-    root->setAttr(
+  if (module) {
+    module->setAttr(
         kLayoutSlotCountAttrName,
         IntegerAttr::get(IntegerType::get(&getContext(), 64), minSlotCount));
   }
