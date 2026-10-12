@@ -1256,6 +1256,25 @@ TEST(UtilsTest, ForEachRelationPointComposedLayout) {
       "0 <= i0 <= 3 and 0 <= i1 <= 3 and 0 <= ct <= 1 and 0 <= slot <= 15) }");
 }
 
+TEST(UtilsTest, ForEachRelationPointLocalsWithoutDivisions) {
+  // A gapped conv output layout, scaled down from 64 channels. Some of its
+  // locals have no division representation until isl computes them.
+  expectSamePoints(
+      "{ [i0, i1, i2, i3] -> [ct, slot] : exists (e1, e2, e3, e4, e5, e6: i0 "
+      "= 0 and ct = 0 and 0 <= i1 <= 1 and 0 <= i2 <= 24 and 0 <= i3 <= 4 and "
+      "0 <= slot <= 16383 and 8192*floor((192 + slot)/8192) <= slot and -125i1 "
+      "- 5i2 - i3 <= 8192e1 <= 16383 - 125i1 - 5i2 - i3 and 8192e1 <= 7999 - "
+      "125i1 - 5i2 - i3 + 8192*floor((192 + slot)/8192) and 0 <= e2 <= 24 and "
+      "2e3 >= slot and -4 + 125i1 + 5i2 + i3 + 125slot - 8192*floor((192 + "
+      "slot)/8192) + 8192e1 - 5e2 <= 250e3 <= 125i1 + 5i2 + i3 + 125slot - "
+      "8192*floor((192 + slot)/8192) + 8192e1 - 5e2 and -3 - slot + 2e3 <= 4e4 "
+      "<= -slot + 2e3 and -1 - slot + 4e2 + 2e3 - 4e4 <= 2e5 <= -slot + 4e2 + "
+      "2e3 - 4e4 and -3 - slot + 2e3 <= 4e6 <= -slot + 2e3 and -1 - 250i1 - "
+      "10i2 - 2i3 - 249slot + 8192*floor((192 + slot)/8192) - 16384e1 + 10e2 + "
+      "500e3 - 10e5 <= 500e6 <= -250i1 - 10i2 - 2i3 - 249slot + "
+      "8192*floor((192 + slot)/8192) - 16384e1 + 10e2 + 500e3 - 10e5) }");
+}
+
 TEST(UtilsTest, ForEachRelationPointFailsWithoutCallingOnPoint) {
   // A symbol, and a range variable with no upper bound.
   for (const char* islStr :
