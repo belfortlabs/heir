@@ -1399,7 +1399,9 @@ struct UndilateConv2DNchwFchw
 // filter K into a linalg.conv_2d_nchw_fchw with the block-diagonal (C, C, KH,
 // KW) filter F[f, c] = (f == c) ? K[c] : 0. The conv sums over c, and only
 // c == f contributes, so this computes the same result. The new filter is a
-// dense resource so that assign_layout folds it regardless of its size.
+// dense resource so that assign_layout folds it regardless of its size. A
+// dilation (dh, dw) is applied here by spreading the taps of each block to
+// (i * dh, j * dw), and the new conv has dilation 1.
 struct DepthwiseConvToConv2DNchwFchw
     : public OpRewritePattern<linalg::DepthwiseConv2DNchwChwOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -1444,18 +1446,28 @@ struct DepthwiseConvToConv2DNchwFchw
     if (static_cast<int64_t>(raw.size()) != expectedBytes)
       return rewriter.notifyMatchFailure(convOp, "unexpected filter data size");
 
-    SmallVector<char> data(c * c * blockBytes, 0);
+    SmallVector<int64_t> dilations =
+        llvm::to_vector(convOp.getDilations().getValues<int64_t>());
+    int64_t dh = dilations[0];
+    int64_t dw = dilations.size() > 1 ? dilations[1] : dilations[0];
+    int64_t newKh = dh * (kh - 1) + 1, newKw = dw * (kw - 1) + 1;
+    int64_t newBlockBytes = newKh * newKw * eltBytes;
+
+    SmallVector<char> data(c * c * newBlockBytes, 0);
     for (int64_t ci = 0; ci < c; ++ci) {
-      char* dst = data.data() + (ci * c + ci) * blockBytes;
-      if (isSplat) {
-        for (int64_t k = 0; k < kh * kw; ++k)
-          std::memcpy(dst + k * eltBytes, raw.data(), eltBytes);
-      } else {
-        std::memcpy(dst, raw.data() + ci * blockBytes, blockBytes);
+      char* dst = data.data() + (ci * c + ci) * newBlockBytes;
+      for (int64_t i = 0; i < kh; ++i) {
+        for (int64_t j = 0; j < kw; ++j) {
+          const char* src =
+              isSplat ? raw.data()
+                      : raw.data() + ci * blockBytes + (i * kw + j) * eltBytes;
+          std::memcpy(dst + (i * dh * newKw + j * dw) * eltBytes, src,
+                      eltBytes);
+        }
       }
     }
 
-    auto newFilterTy = RankedTensorType::get({c, c, kh, kw}, eltTy);
+    auto newFilterTy = RankedTensorType::get({c, c, newKh, newKw}, eltTy);
     auto newFilterAttr = DenseResourceElementsAttr::get(
         newFilterTy, "depthwise_filter",
         HeapAsmResourceBlob::allocateAndCopyWithAlign(data, eltBytes));
@@ -1466,7 +1478,7 @@ struct DepthwiseConvToConv2DNchwFchw
         convOp, convOp.getResultTypes(),
         ValueRange{convOp.getInputs()[0], newFilter},
         ValueRange{convOp.getDpsInits()[0]}, convOp.getStrides(),
-        convOp.getDilations());
+        rewriter.getI64TensorAttr({1, 1}));
     return success();
   }
 };
