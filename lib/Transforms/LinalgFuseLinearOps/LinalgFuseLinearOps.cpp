@@ -15,12 +15,16 @@
 #include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"    // from @llvm-project
 #include "mlir/include/mlir/Dialect/Traits.h"              // from @llvm-project
 #include "mlir/include/mlir/Dialect/Utils/StructuredOpsUtils.h"  // from @llvm-project
-#include "mlir/include/mlir/IR/AffineExpr.h"    // from @llvm-project
-#include "mlir/include/mlir/IR/AffineMap.h"     // from @llvm-project
-#include "mlir/include/mlir/IR/Builders.h"      // from @llvm-project
-#include "mlir/include/mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/AffineExpr.h"         // from @llvm-project
+#include "mlir/include/mlir/IR/AffineMap.h"          // from @llvm-project
+#include "mlir/include/mlir/IR/AsmState.h"           // from @llvm-project
+#include "mlir/include/mlir/IR/Builders.h"           // from @llvm-project
+#include "mlir/include/mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/BuiltinTypes.h"       // from @llvm-project
+#include "mlir/include/mlir/IR/DialectResourceBlobManager.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/IRMapping.h"     // from @llvm-project
 #include "mlir/include/mlir/IR/Location.h"      // from @llvm-project
+#include "mlir/include/mlir/IR/Matchers.h"      // from @llvm-project
 #include "mlir/include/mlir/IR/Operation.h"     // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Value.h"         // from @llvm-project
@@ -103,10 +107,13 @@ LogicalResult findLinearOpAndOperand(OpTy op, Operation*& linearOp,
   Value lhs = op.getLhs();
   Value rhs = op.getRhs();
 
+  // The fused op is rewritten in place, so its result must have no other user
+  // that would see the fused scale or addend.
   auto isLinearOp = [](Operation* defOp) {
     return defOp && isa<linalg::LinalgOp>(defOp) &&
            !isa<linalg::BroadcastOp, linalg::FillOp, linalg::TransposeOp>(
-               defOp);
+               defOp) &&
+           defOp->getNumResults() == 1 && defOp->getResult(0).hasOneUse();
   };
 
   auto* lhsOp = lhs.getDefiningOp();
@@ -117,7 +124,8 @@ LogicalResult findLinearOpAndOperand(OpTy op, Operation*& linearOp,
     rawOperand = rhs;
     return success();
   }
-  if (isLinearOp(rhsOp)) {
+  // c / (x * W) and c - (x * W) are not (x * W) / c and (x * W) - c.
+  if (op->template hasTrait<OpTrait::IsCommutative>() && isLinearOp(rhsOp)) {
     linearOp = rhsOp;
     rawOperand = lhs;
     return success();
@@ -184,6 +192,80 @@ FailureOr<OpFoldResult> findOriginalScalar(Value scaleVal, Type weightsType) {
   return failure();
 }
 
+// If `scaleVal` is a constant of the linear op's result shape whose values only
+// vary along `channelDim`, as produced by folding a broadcast per-channel scale
+// (e.g. a BatchNorm's gamma / sqrt(var + eps)), return the per-channel values.
+static FailureOr<DenseElementsAttr> getPerChannelValues(Value scaleVal,
+                                                        int64_t channelDim) {
+  DenseElementsAttr attr;
+  if (!matchPattern(scaleVal, m_Constant(&attr))) return failure();
+  auto type = cast<ShapedType>(attr.getType());
+  int64_t numChannels = type.getDimSize(channelDim);
+  int64_t stride = 1;
+  for (int64_t i = channelDim + 1; i < type.getRank(); ++i)
+    stride *= type.getDimSize(i);
+
+  SmallVector<Attribute> channels(numChannels);
+  int64_t index = 0;
+  for (Attribute value : attr.getValues<Attribute>()) {
+    Attribute& channel = channels[(index++ / stride) % numChannels];
+    if (!channel)
+      channel = value;
+    else if (channel != value)
+      return failure();
+  }
+  return DenseElementsAttr::get(
+      RankedTensorType::get({numChannels}, type.getElementType()), channels);
+}
+
+// Fold `weights` op `scale` into a new resource constant when `weights` is a
+// resource constant, which the arith folders do not read. Keeping the fused
+// weights a resource lets assign_layout fold them into packed constants.
+template <typename OpTy, typename T>
+static Value foldIntoResourceWeights(PatternRewriter& rewriter, Location loc,
+                                     DenseResourceElementsAttr weights,
+                                     DenseElementsAttr scale) {
+  ArrayRef<char> raw = weights.getData();
+  int64_t numElements = weights.getType().getNumElements();
+  if (static_cast<int64_t>(raw.size()) != numElements * sizeof(T))
+    return Value();
+  ArrayRef<T> input(reinterpret_cast<const T*>(raw.data()), numElements);
+  SmallVector<T> result;
+  result.reserve(numElements);
+  auto scaleValues = scale.getValues<T>();
+  for (int64_t i = 0; i < numElements; ++i) {
+    T s = scale.isSplat() ? scaleValues[0] : scaleValues[i];
+    if constexpr (std::is_same_v<OpTy, arith::DivFOp>)
+      result.push_back(input[i] / s);
+    else
+      result.push_back(input[i] * s);
+  }
+  auto attr = DenseResourceElementsAttr::get(
+      weights.getType(), "fused_weights",
+      HeapAsmResourceBlob::allocateAndCopyInferAlign<T>(result));
+  return arith::ConstantOp::create(rewriter, loc, attr);
+}
+
+template <typename OpTy>
+static Value foldIntoResourceWeights(PatternRewriter& rewriter, Location loc,
+                                     Value weights, Value scale) {
+  auto weightsOp = weights.getDefiningOp<arith::ConstantOp>();
+  if (!weightsOp) return Value();
+  auto resource = dyn_cast<DenseResourceElementsAttr>(weightsOp.getValue());
+  DenseElementsAttr scaleAttr;
+  if (!resource || !matchPattern(scale, m_Constant(&scaleAttr)) ||
+      scaleAttr.getType().getShape() != resource.getType().getShape())
+    return Value();
+  Type elementType = resource.getType().getElementType();
+  if (elementType.isF32())
+    return foldIntoResourceWeights<OpTy, float>(rewriter, loc, resource,
+                                                scaleAttr);
+  if (elementType.isF64())
+    return foldIntoResourceWeights<OpTy, double>(rewriter, loc, resource,
+                                                 scaleAttr);
+  return Value();
+}
+
 // If `op` has a preceding LinalgOp with a compatible structure, fuse `op`
 // by multiplying or dividing it by the initializer and using that as the new
 // initializer.
@@ -205,6 +287,10 @@ LogicalResult fuseScaleOrDivIntoLinearOp(PatternRewriter& rewriter, OpTy op,
   Value weights;
   int64_t weightOperandIdx = -1;
   int64_t matchDim = -1;
+  // The dimension of the linear op's result that `matchDim` of the weights
+  // produces.
+  int64_t resultMatchDim = -1;
+  int64_t resultRank = cast<ShapedType>(op.getType()).getRank();
 
   // Opt-in only specific ops where the `addend` can be fused into the
   // corresponding cleartext weights matrix.
@@ -213,27 +299,38 @@ LogicalResult fuseScaleOrDivIntoLinearOp(PatternRewriter& rewriter, OpTy op,
         weights = op.getOperand(1);
         weightOperandIdx = 1;
         matchDim = 1;
+        resultMatchDim = resultRank - 1;
       })
       .template Case<linalg::MatvecOp>([&](auto op) {
         weights = op.getOperand(0);
         weightOperandIdx = 0;
         matchDim = 0;
+        resultMatchDim = 0;
       })
-      .template Case<linalg::Conv2DNchwFchwOp, linalg::Conv2DNhwcFhwcOp,
-                     linalg::Conv1DNcwFcwOp>([&](auto op) {
+      .template Case<linalg::Conv2DNchwFchwOp, linalg::Conv1DNcwFcwOp>(
+          [&](auto op) {
+            weights = op.getOperand(1);
+            weightOperandIdx = 1;
+            matchDim = 0;
+            resultMatchDim = 1;
+          })
+      .template Case<linalg::Conv2DNhwcFhwcOp>([&](auto op) {
         weights = op.getOperand(1);
         weightOperandIdx = 1;
         matchDim = 0;
+        resultMatchDim = 3;
       })
       .template Case<linalg::Conv2DNhwcHwcfOp>([&](auto op) {
         weights = op.getOperand(1);
         weightOperandIdx = 1;
         matchDim = 3;
+        resultMatchDim = 3;
       })
       .template Case<linalg::Conv1DNwcWcfOp>([&](auto op) {
         weights = op.getOperand(1);
         weightOperandIdx = 1;
         matchDim = 2;
+        resultMatchDim = 2;
       })
       .Default([](auto) {});
 
@@ -249,7 +346,15 @@ LogicalResult fuseScaleOrDivIntoLinearOp(PatternRewriter& rewriter, OpTy op,
   // until a dense constant or scalar SSA value is identified.
   FailureOr<OpFoldResult> maybeScaleOfr =
       findOriginalScalar(scaleVal, weightsType);
-  if (failed(maybeScaleOfr)) return failure();
+  if (failed(maybeScaleOfr)) {
+    FailureOr<DenseElementsAttr> perChannel =
+        getPerChannelValues(scaleVal, resultMatchDim);
+    if (failed(perChannel)) return failure();
+    rewriter.setInsertionPoint(linearOp);
+    maybeScaleOfr = OpFoldResult(
+        arith::ConstantOp::create(rewriter, linearOp->getLoc(), *perChannel)
+            .getResult());
+  }
   OpFoldResult scaleOfr = *maybeScaleOfr;
 
   if (auto origVal = dyn_cast<Value>(scaleOfr)) {
@@ -285,23 +390,56 @@ LogicalResult fuseScaleOrDivIntoLinearOp(PatternRewriter& rewriter, OpTy op,
           addedDims.push_back(i);
         }
       }
-      auto emptyOp = tensor::EmptyOp::create(rewriter, linearOp->getLoc(),
-                                             weightsType.getShape(),
-                                             weightsType.getElementType());
-      auto broadcastOp =
-          linalg::BroadcastOp::create(rewriter, linearOp->getLoc(), origVal,
-                                      emptyOp.getResult(), addedDims);
-      newScaleVal = broadcastOp.getResults()[0];
+      // Broadcast a constant scale as a constant, so the scaled weights fold.
+      DenseElementsAttr scaleAttr;
+      if (matchPattern(origVal, m_Constant(&scaleAttr))) {
+        SmallVector<Attribute> perChannel(scaleAttr.getValues<Attribute>());
+        int64_t stride = 1;
+        for (int64_t i = matchDim + 1; i < weightsType.getRank(); ++i)
+          stride *= weightsType.getDimSize(i);
+        SmallVector<Attribute> broadcastValues;
+        broadcastValues.reserve(weightsType.getNumElements());
+        for (int64_t i = 0; i < weightsType.getNumElements(); ++i)
+          broadcastValues.push_back(
+              perChannel[(i / stride) % weightsType.getDimSize(matchDim)]);
+        newScaleVal = arith::ConstantOp::create(
+            rewriter, linearOp->getLoc(),
+            DenseElementsAttr::get(weightsType, broadcastValues));
+      } else {
+        auto emptyOp = tensor::EmptyOp::create(rewriter, linearOp->getLoc(),
+                                               weightsType.getShape(),
+                                               weightsType.getElementType());
+        auto broadcastOp =
+            linalg::BroadcastOp::create(rewriter, linearOp->getLoc(), origVal,
+                                        emptyOp.getResult(), addedDims);
+        newScaleVal = broadcastOp.getResults()[0];
+      }
     } else {
       return failure();
     }
   }
 
-  Value scaledWeights =
-      rewriter.createOrFold<OpTy>(op.getLoc(), weights, newScaleVal);
+  Value scaledWeights = foldIntoResourceWeights<OpTy>(rewriter, op.getLoc(),
+                                                      weights, newScaleVal);
+  if (!scaledWeights)
+    scaledWeights =
+        rewriter.createOrFold<OpTy>(op.getLoc(), weights, newScaleVal);
+
+  // The linear op accumulates into its outs, so (x * W + outs) * s must also
+  // scale a nonzero outs: x * (W * s) + outs * s.
+  auto destStyleOp = dyn_cast<DestinationStyleOpInterface>(linearOp);
+  Value scaledOuts;
+  if (destStyleOp && destStyleOp.getNumDpsInits() == 1 &&
+      accumulatesIntoOuts(linearOp)) {
+    Value outs = destStyleOp.getDpsInitOperand(0)->get();
+    if (!outs.getDefiningOp<tensor::EmptyOp>() &&
+        !matchPattern(outs, m_AnyZeroFloat()))
+      scaledOuts = rewriter.createOrFold<OpTy>(op.getLoc(), outs, scaleVal);
+  }
 
   rewriter.modifyOpInPlace(linearOp, [&]() {
     linearOp->setOperand(weightOperandIdx, scaledWeights);
+    if (scaledOuts) destStyleOp.setDpsInitOperand(0, scaledOuts);
   });
   rewriter.replaceOp(op, linearOp->getResults());
   return success();

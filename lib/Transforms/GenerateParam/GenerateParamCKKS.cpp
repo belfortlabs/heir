@@ -20,6 +20,7 @@
 #include "lib/Parameters/CKKS/Params.h"
 #include "lib/Parameters/Cheddar/ParameterFile.h"
 #include "lib/Parameters/RLWEParams.h"
+#include "lib/Target/CompilationTarget/CompilationTarget.h"
 #include "lib/Utils/LogArithmetic.h"
 #include "llvm/include/llvm/ADT/SmallVector.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/Twine.h"                   // from @llvm-project
@@ -377,6 +378,12 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
     if (auto schemeParamAttr =
             getOperation()->getAttrOfType<ckks::SchemeParamAttr>(
                 ckks::CKKSDialect::kSchemeParamAttrName)) {
+      if (auto module = dyn_cast<ModuleOp>(getOperation());
+          module && failed(verifyRingDegree(
+                        module, int64_t{1} << schemeParamAttr.getLogN()))) {
+        signalPassFailure();
+        return;
+      }
       // TODO: put this in validate-noise once CKKS noise model is in
       auto schemeParam = ckks::getSchemeParamFromAttr(schemeParamAttr);
       if (schemeParam.getLevel() < maxLevel.value_or(0)) {
@@ -459,6 +466,9 @@ struct GenerateParamCKKS : impl::GenerateParamCKKSBase<GenerateParamCKKS> {
                          : 0);
 
     LDBG() << "Scheme Param:\n" << schemeParam;
+    if (auto module = dyn_cast<ModuleOp>(getOperation());
+        module && failed(verifyRingDegree(module, schemeParam.getRingDim())))
+      return signalPassFailure();
 
     auto* context = &getContext();
     OpBuilder builder(context);

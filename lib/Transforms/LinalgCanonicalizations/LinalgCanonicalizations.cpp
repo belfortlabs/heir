@@ -1401,20 +1401,73 @@ struct UndilateConv2DNchwFchw
   }
 };
 
+// Torch exports constants as dense resources, which the arith and math folders
+// do not read. Inline them so that e.g. a BatchNorm's rsqrt(var + eps) folds.
+// Operands of contractions, convolutions and transposes stay resources:
+// assign_layout folds resources of any size into packed constants but packs
+// large dense constants on the client.
+static void inlineResourceConstants(Operation* root) {
+  root->walk([](arith::ConstantOp op) {
+    auto resourceAttr = dyn_cast<DenseResourceElementsAttr>(op.getValue());
+    if (!resourceAttr) return;
+    if (llvm::any_of(op->getUsers(), [](Operation* user) {
+          if (isa<linalg::TransposeOp>(user)) return true;
+          auto linalgOp = dyn_cast<linalg::LinalgOp>(user);
+          return linalgOp && (linalg::isaContractionOpInterface(linalgOp) ||
+                              linalg::isaConvolutionOpInterface(linalgOp));
+        }))
+      return;
+    ShapedType type = resourceAttr.getType();
+    if (!type.hasStaticShape() || !type.getElementType().isIntOrFloat()) return;
+    ArrayRef<char> data = resourceAttr.getData();
+    if (data.empty()) return;
+    op.setValueAttr(DenseElementsAttr::getFromRawBuffer(type, data));
+  });
+}
+
+// arith.truncf only folds when the truncation is exact, so the f64 epsilon of a
+// BatchNorm (e.g. 1e-5) stays a runtime truncf and blocks folding
+// rsqrt(var + eps). Fold it with round-to-nearest-even.
+struct FoldConstantTruncF : public OpRewritePattern<arith::TruncFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::TruncFOp op,
+                                PatternRewriter& rewriter) const override {
+    DenseFPElementsAttr input;
+    if (!matchPattern(op.getIn(), m_Constant(&input))) return failure();
+    auto resultType = dyn_cast<RankedTensorType>(op.getType());
+    if (!resultType) return failure();
+    const llvm::fltSemantics& semantics =
+        cast<FloatType>(resultType.getElementType()).getFloatSemantics();
+    auto truncated =
+        input.mapValues(resultType.getElementType(), [&](const APFloat& value) {
+          APFloat result = value;
+          bool losesInfo;
+          result.convert(semantics, APFloat::rmNearestTiesToEven, &losesInfo);
+          return result.bitcastToAPInt();
+        });
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, resultType, truncated);
+    return success();
+  }
+};
+
 struct LinalgCanonicalizations
     : public impl::LinalgCanonicalizationsBase<LinalgCanonicalizations> {
   void runOnOperation() override {
     MLIRContext* context = &getContext();
     auto* module = getOperation();
 
+    inlineResourceConstants(module);
+
     RewritePatternSet patterns(context);
     patterns.add<
         BroadcastToExpandShape, DropCfAssertInLinalg, FoldBroadcastExtractSlice,
         FoldConstantBroadcast, FoldConstantFill, FoldConstantLinalgTranspose,
-        FuseConv2DPooling, LinalgGenericToElementwise, LinalgMapToElementwise,
-        MaterializeBroadcasts, RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D,
-        RewriteTransposedMatvec, RewriteTransposedVecmat, UndilateConv1DNcwFcw,
-        UndilateConv2DNchwFchw>(context);
+        FoldConstantTruncF, FuseConv2DPooling, LinalgGenericToElementwise,
+        LinalgMapToElementwise, MaterializeBroadcasts, RewriteAvgPoolAsConv1D,
+        RewriteAvgPoolAsConv2D, RewriteTransposedMatvec,
+        RewriteTransposedVecmat, UndilateConv1DNcwFcw, UndilateConv2DNchwFchw>(
+        context);
 
     mlir::linalg::populateDecomposeProjectedPermutationPatterns(patterns);
 
