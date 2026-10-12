@@ -1905,7 +1905,13 @@ LogicalResult LayoutPropagation::visitOperation(ReduceOp op) {
     assignedLayouts.insert({result, resultLayout});
     debugAssignLayout(result, resultLayout);
   }
-  setResultLayoutAttr(op);
+  // The inputs are row-major, so the results are not gapped.
+  auto resultType = cast<ShapedType>(op->getResult(0).getType());
+  setResultLayoutAttr(
+      op,
+      makeKernelInfoAttr(
+          ctx, KernelInfo{.resultShape = llvm::to_vector(resultType.getShape()),
+                          .gapFactor = 1}));
   return success();
 }
 
