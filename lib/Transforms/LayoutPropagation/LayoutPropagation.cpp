@@ -760,8 +760,9 @@ LogicalResult LayoutPropagation::visitOperation(VecmatOp op) {
       getRowMajorLayoutRelation(outputType, minSlotCount);
   LayoutAttr outputLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, outputLayoutResult);
-  Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(vec, outputType.getShape());
+  Attribute kernelInfoAttr = makeKernelInfoAttr(
+      ctx, KernelInfo{.resultShape = llvm::to_vector(outputType.getShape()),
+                      .gapFactor = 1});
 
   assignedLayouts.insert({result, outputLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -886,8 +887,12 @@ LogicalResult LayoutPropagation::visitOperation(MatvecOp op) {
     return failure();
   }
   LayoutAttr resultLayout = outputLayoutResult.value();
-  Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(matrix, outputType.getShape());
+  // The matrix is usually a plaintext without kernel info, and the vector's may
+  // describe a gapped layout the kernel does not produce.
+  Attribute kernelInfoAttr = makeKernelInfoAttr(
+      &getContext(),
+      KernelInfo{.resultShape = llvm::to_vector(outputType.getShape()),
+                 .gapFactor = 1});
 
   assignedLayouts.insert({result, resultLayout});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -1886,7 +1891,13 @@ LogicalResult LayoutPropagation::visitOperation(ReduceOp op) {
     assignedLayouts.insert({result, resultLayout});
     debugAssignLayout(result, resultLayout);
   }
-  setResultLayoutAttr(op);
+  // The inputs are row-major, so the results are not gapped.
+  auto resultType = cast<ShapedType>(op->getResult(0).getType());
+  setResultLayoutAttr(
+      op,
+      makeKernelInfoAttr(
+          ctx, KernelInfo{.resultShape = llvm::to_vector(resultType.getShape()),
+                          .gapFactor = 1}));
   return success();
 }
 
