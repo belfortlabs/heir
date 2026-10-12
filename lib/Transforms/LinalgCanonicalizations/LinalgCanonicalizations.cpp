@@ -619,50 +619,41 @@ struct BroadcastToExpandShape
   }
 };
 
-struct RewriteTransposedVecmat
-    : public OpRewritePattern<mlir::linalg::VecmatOp> {
+// convert-to-ciphertext-semantics lowers linalg.matvec but not linalg.vecmat,
+// so rewrite every vecmat x * W as the matvec W^T * x. When W is itself a
+// transpose W = A^T, use A directly instead of transposing twice.
+struct RewriteVecmatAsMatvec : public OpRewritePattern<mlir::linalg::VecmatOp> {
  public:
-  RewriteTransposedVecmat(MLIRContext* context)
+  RewriteVecmatAsMatvec(MLIRContext* context)
       : OpRewritePattern<mlir::linalg::VecmatOp>(context) {}
 
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mlir::linalg::VecmatOp vecmatOp,
                                 PatternRewriter& rewriter) const override {
-    auto transposeOp =
-        vecmatOp.getInputs()[1].getDefiningOp<linalg::TransposeOp>();
-    if (!transposeOp)
-      return rewriter.notifyMatchFailure(
-          vecmatOp, "second input to vecmat must be a transpose op");
+    Value vector = vecmatOp.getInputs()[0];
+    Value matrix = vecmatOp.getInputs()[1];
+
+    Value transposedMatrix;
+    auto transposeOp = matrix.getDefiningOp<linalg::TransposeOp>();
+    if (transposeOp &&
+        transposeOp.getPermutation() == ArrayRef<int64_t>{1, 0}) {
+      transposedMatrix = transposeOp.getInput();
+    } else {
+      auto matrixType = cast<RankedTensorType>(matrix.getType());
+      auto emptyOp = tensor::EmptyOp::create(
+          rewriter, vecmatOp.getLoc(),
+          {matrixType.getDimSize(1), matrixType.getDimSize(0)},
+          matrixType.getElementType());
+      transposedMatrix = linalg::TransposeOp::create(
+                             rewriter, vecmatOp.getLoc(), matrix,
+                             emptyOp.getResult(), ArrayRef<int64_t>{1, 0})
+                             .getResult()[0];
+    }
 
     rewriter.replaceOpWithNewOp<linalg::MatvecOp>(
         vecmatOp, vecmatOp.getResultTypes()[0],
-        ValueRange{transposeOp.getInput(), vecmatOp.getInputs()[0]},
-        vecmatOp.getDpsInits()[0]);
-    return success();
-  }
-};
-
-struct RewriteTransposedMatvec
-    : public OpRewritePattern<mlir::linalg::MatvecOp> {
- public:
-  RewriteTransposedMatvec(MLIRContext* context)
-      : OpRewritePattern<mlir::linalg::MatvecOp>(context) {}
-
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(mlir::linalg::MatvecOp matvecOp,
-                                PatternRewriter& rewriter) const override {
-    auto transposeOp =
-        matvecOp.getInputs()[0].getDefiningOp<linalg::TransposeOp>();
-    if (!transposeOp)
-      return rewriter.notifyMatchFailure(
-          matvecOp, "first input to matvec must be a transpose op");
-
-    rewriter.replaceOpWithNewOp<linalg::VecmatOp>(
-        matvecOp, matvecOp.getResultTypes()[0],
-        ValueRange{matvecOp.getInputs()[1], transposeOp.getInput()},
-        matvecOp.getDpsInits()[0]);
+        ValueRange{transposedMatrix, vector}, vecmatOp.getDpsInits()[0]);
     return success();
   }
 };
@@ -1465,9 +1456,8 @@ struct LinalgCanonicalizations
         FoldConstantBroadcast, FoldConstantFill, FoldConstantLinalgTranspose,
         FoldConstantTruncF, FuseConv2DPooling, LinalgGenericToElementwise,
         LinalgMapToElementwise, MaterializeBroadcasts, RewriteAvgPoolAsConv1D,
-        RewriteAvgPoolAsConv2D, RewriteTransposedMatvec,
-        RewriteTransposedVecmat, UndilateConv1DNcwFcw, UndilateConv2DNchwFchw>(
-        context);
+        RewriteAvgPoolAsConv2D, RewriteVecmatAsMatvec, UndilateConv1DNcwFcw,
+        UndilateConv2DNchwFchw>(context);
 
     mlir::linalg::populateDecomposeProjectedPermutationPatterns(patterns);
 
