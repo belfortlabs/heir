@@ -10,39 +10,25 @@ namespace mlir {
 namespace heir {
 namespace cheddar {
 
-// The levels each phase of MaxPool<word>::EvaluateMax drops from its input.
-struct MaxPoolDepths {
-  // Selection stages of the deepest chain's gather, one level each. A pool
-  // without gather stages has one scaling stage when valueBound != 0.5.
-  int gather;
-  // HierarchicalLeague's final multiplications: by the selector, and by a
-  // window mask unless the window spans the whole ciphertext.
-  int league;
-  // Selection stages of the deepest chain's compaction, one level each, with
-  // the same scaling stage rule as `gather`.
-  int compaction;
-
-  // The lowest input level that PlanMaxPool accepts.
+// What one call of Cyclops' MaxPool<word>::EvaluateMax needs from HEIR's
+// level plan, with the default comparison polynomial
+// (BuildMaxSelectorLowDepthSignApproximation).
+struct MaxPoolRequirements {
+  // input level - output level. The generated code pins the output level to
+  // input level - levelDrop (MaxPoolConfig::output_level), so the drop is the
+  // same for each valid input level and each valid bootstrap end level.
+  int levelDrop;
+  // The lowest input level, for each valid bootstrap end level.
   int minimumInputLevel;
-
-  int total() const { return gather + league + compaction; }
+  // The lowest bootstrap end level. Each higher end level is also valid.
+  int minimumBootstrapEndLevel;
 };
 
-// The depths of the pool, from Cyclops' PlanMaxPool, for a pool without the
-// small-window league level cap (requirement R2 in
-// cyclops_maxpool_requirements.md). Returns std::nullopt when Cyclops rejects
-// the shape, and then sets `error` to the reason if it is not null. The
-// results are cached per shape.
-std::optional<MaxPoolDepths> getMaxPoolDepths(const MaxPoolShape& shape,
-                                              std::string* error = nullptr);
-
-// The lowest bootstrap end level that HierarchicalLeague::Compile accepts with
-// the default comparison polynomial (BuildMaxSelectorLowDepthSignApproximation,
-// 9 levels): its minimum input level plus 2.
-//
-// TODO: take this from the planner once it exports it (requirement R3b in
-// cyclops_maxpool_requirements.md).
-inline int getMaxPoolMinimumBootstrapEndLevel() { return 11; }
+// The requirements of the pool, from Cyclops' MaxPool planner. Returns
+// std::nullopt when Cyclops rejects the shape, and then sets `error` to the
+// reason if it is not null. The results are cached per shape.
+std::optional<MaxPoolRequirements> getMaxPoolRequirements(
+    const MaxPoolShape& shape, std::string* error = nullptr);
 
 }  // namespace cheddar
 }  // namespace heir

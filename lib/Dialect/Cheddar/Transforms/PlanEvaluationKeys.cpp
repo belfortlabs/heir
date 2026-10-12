@@ -13,6 +13,7 @@
 #include "extension/boot/BootParameter.h"                // from @cyclops
 #include "extension/linalg/LinearTransformKeyPlanner.h"  // from @cyclops
 #include "extension/max/MaxPoolPlanner.h"                // from @cyclops
+#include "extension/poly/SignApproximation.h"            // from @cyclops
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/ModuleAttributes.h"
@@ -40,15 +41,6 @@ func::FuncOp findClientSetup(ModuleOp module) {
     return WalkResult::interrupt();
   });
   return found;
-}
-
-// Disables Cyclops' small-window league level cap, which HEIR's level model
-// leaves out (requirement R2 in cyclops_maxpool_requirements.md), when the
-// Cyclops planner has an option for it.
-template <typename Config>
-void disableLeagueLevelCap(Config& config) {
-  if constexpr (requires { config.cap_league_level; })
-    config.cap_league_level = false;
 }
 
 struct PlanEvaluationKeysPass
@@ -227,31 +219,28 @@ struct PlanEvaluationKeysPass
                               << " does not fit a Cyclops MaxPoolConfig";
           return signalPassFailure();
         }
-        disableLeagueLevelCap(*config);
-        // The generated code checks the same levels at run time, against the
-        // compiled MaxPool. Without the cap option, the small-window league
-        // level cap lowers the levels of a padded window of 2 to 7 slots when
-        // its input level is more than the selector depth + 1 above the
-        // gather stages.
+        // HEIR plans one level drop for each pool, and the generated code pins
+        // the output level to it (getMaxPoolRequirements). Plan the keys of
+        // that pinned pool, at this program's input and end levels.
         int level = field("level").getInt();
         int levelConsumption = field("level_consumption").getInt();
-        cyclops::MaxPoolPlan plan =
-            cyclops::PlanMaxPool(*config, level, bootstrap->GetEndLevel());
-        if (level - plan.output_level != levelConsumption) {
+        int end = bootstrap->GetEndLevel();
+        config->output_level = level - levelConsumption;
+        const cyclops::CompositePolynomial comparison =
+            cyclops::BuildMaxSelectorLowDepthSignApproximation();
+        cyclops::MaxPoolPlan plan = cyclops::PlanMaxPoolLayout(*config, end);
+        if (!cyclops::MaxPoolTryPlanLevels(plan, level, end, comparison)) {
           setup.emitOpError()
               << "cannot plan the evaluation keys of max pool " << index
-              << ": at input level " << level << " and bootstrap end level "
-              << bootstrap->GetEndLevel() << ", Cyclops' MaxPool drops "
-              << level - plan.output_level << " levels, but HEIR planned "
-              << levelConsumption
-              << "; Cyclops' small-window league level cap causes this when "
-                 "MaxPoolConfig has no cap_league_level option";
+              << ": Cyclops' MaxPool does not run from input level " << level
+              << " to output level " << level - levelConsumption
+              << " with bootstrap end level " << end;
           return signalPassFailure();
         }
         // The emitter hard-codes the imaginary-removing variant.
-        cyclops::AddMaxPoolRequiredKeys(
-            request, params, *bootstrap, *config, level,
-            cyclops::BootVariant::kImaginaryRemoving);
+        cyclops::AddMaxPoolPlanKeys(request, params, *bootstrap, plan, level,
+                                    cyclops::BootVariant::kImaginaryRemoving,
+                                    comparison);
       }
     }
 

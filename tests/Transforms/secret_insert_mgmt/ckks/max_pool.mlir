@@ -1,31 +1,33 @@
 // RUN: heir-opt --secret-insert-mgmt-ckks="level-budget=7" %s | FileCheck %s --check-prefix=BOOT
 // RUN: heir-opt --secret-insert-mgmt-ckks="level-budget=8" %s | FileCheck %s --check-prefix=NOBOOT
 
-// A window of 16 slots drops 4 levels (two league multiplications and two
-// compaction stages), but its league needs 7 levels in its input. After the
-// multiplication and its rescale, one level is consumed: 1 + 7 levels exceed a
-// budget of 7, so a bootstrap goes before the pool, and fit a budget of 8.
+// A window of 16 slots drops 3 levels (the league's multiplication by the
+// selector and two compaction stages), but its league needs 7 levels in its
+// input. After the multiplication and its rescale, one level is consumed:
+// 1 + 7 levels exceed a budget of 7, so a bootstrap goes before the pool, and
+// fit a budget of 8.
 //
-// The league also needs a bootstrap end level of at least 11, so the levels
-// are shifted until the top level is 11.
+// The league of a 16-slot window also needs a bootstrap end level of at least
+// 13 (Cyclops' MaxPoolMinimumBootstrapEndLevel), so the levels are shifted
+// until the top level is 13.
 
 // BOOT: func.func @wide_window
-// BOOT-SAME: level = 11
+// BOOT-SAME: level = 13
 // BOOT: mgmt.modreduce
-// BOOT-SAME: level = 10
+// BOOT-SAME: level = 12
 // BOOT: %[[boot:.*]] = mgmt.bootstrap
-// BOOT-SAME: level = 11
+// BOOT-SAME: level = 13
 // BOOT: kernel.max_pool %[[boot]]
-// BOOT-SAME: level = 7
+// BOOT-SAME: level = 10
 
 // NOBOOT: func.func @wide_window
-// NOBOOT-SAME: level = 11
+// NOBOOT-SAME: level = 13
 // NOBOOT-NOT: mgmt.bootstrap
 // NOBOOT: %[[rescaled:.*]] = mgmt.modreduce
-// NOBOOT-SAME: level = 10
+// NOBOOT-SAME: level = 12
 // NOBOOT-NOT: mgmt.bootstrap
 // NOBOOT: kernel.max_pool %[[rescaled]]
-// NOBOOT-SAME: level = 6
+// NOBOOT-SAME: level = 9
 
 module attributes {backend.cheddar, scheme.ckks} {
   func.func @wide_window(%arg0: !secret.secret<tensor<1x64xf32>>) -> !secret.secret<tensor<1x64xf32>> {

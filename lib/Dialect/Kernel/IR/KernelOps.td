@@ -70,10 +70,11 @@ def Kernel_MaxPoolOp : Kernel_Op<"max_pool", [
     that it gathers with `-value_bound`, which does not change a maximum.
 
     The op lowers to one call of Cyclops' `MaxPool<word>::EvaluateMax`, with
-    compact output, a padding value of `-value_bound` and no league level cap.
-    That call bootstraps only its comparisons, so the result level is the input
-    level less `getLevelsToDrop()`. Cyclops folds the scaling for a
-    `value_bound` other than 0.5 into the first gather and compaction stages.
+    compact output, a padding value of `-value_bound` and the output level
+    pinned to the input level less `getLevelsToDrop()`. That call bootstraps
+    only its comparisons, so the drop is the same for each input level.
+    Cyclops folds the scaling for a `value_bound` other than 0.5 into the
+    first gather and compaction stages.
     A pool without gather stages, or without compaction stages, uses one more
     level for each scaling that it cannot fold. The input must have at least
     `getRequiredInputLevels()` levels left, which can be more than the op

@@ -21,21 +21,18 @@ holds only negative values, so a wrong padding value gives a wrong maximum.
 ## Requirements
 
 - A CUDA GPU for the server. The client needs no GPU.
-- A Cyclops checkout with `extension/max/MaxPoolPlanner.h`, for example branch
-  `aikata/maxpool` at e8efd441 or later. HEIR must be built against the same
-  revision. `bazel/cyclops/version.bzl` pins e8efd441. For another checkout,
-  use `--override_repository=+cyclops_deps+cyclops=<checkout>` when the
-  checkout has the `REPO.bazel` and `BUILD.bazel` of
-  `bazel/cyclops/cyclops.BUILD`.
+- A Cyclops checkout of branch `aikata/maxpool` at 0e5dde7b or later. HEIR
+  must be built against the same revision. `bazel/cyclops/version.bzl` pins
+  0e5dde7b. For another checkout, use
+  `--override_repository=+cyclops_deps+cyclops=<checkout>` when the checkout
+  has the `REPO.bazel` and `BUILD.bazel` of `bazel/cyclops/cyclops.BUILD`.
 - CMake 3.30 or later, Ninja, Clang with a C++20 standard library, and
   libtommath.
 
-The windows of 8 slots keep the pool out of Cyclops' small-window league level
-cap (requirement R2 in `cyclops_maxpool_requirements.md`). With a smaller
-window, the cap lowers the levels when the input level is more than the
-selector depth + 1 above the gather stages. Key planning compares
-`PlanMaxPool` with HEIR's levels, and stops in that case until Cyclops can
-disable the cap.
+A window of fewer than 8 slots, or a ciphertext of fewer than 256 slots, needs
+the Cyclops fixes for requirements R2 and R6 in
+`cyclops_maxpool_requirements.md`. Without them, key planning stops with an
+error for these pools.
 
 ## Run
 
@@ -63,6 +60,9 @@ side waits for a file (default 3600 seconds).
 - CUDA numbers the GPUs fastest first by default. To select a GPU by its
   `nvidia-smi` index, set `CUDA_DEVICE_ORDER=PCI_BUS_ID` together with
   `CUDA_VISIBLE_DEVICES`. On a GPU with 4 GB, the server runs out of memory.
+- The script uses `CC` and `CXX` (default `clang` and `clang++`) also as the
+  CUDA host compiler. CUDA 13.2 rejects Clang 22 and later. Then set, for
+  example, `CC=gcc-15 CXX=g++-15`.
 - The server prints "WARN: Rescale is not adequate for in-place operations"
   for each in-place `Rescale` in the generated code. Cyclops rescales into a
   temporary in that case, so the result is correct.
@@ -70,3 +70,6 @@ side waits for a file (default 3600 seconds).
 On 2026-10-05, this test passed on an RTX 5090 with a worst error of 0.00035.
 The client and the server each took about 80 seconds, and the client used
 17 GB of memory.
+
+On 2026-10-09, it passed on an RTX 5090 with a worst error of 0.00022, against
+Cyclops 0e5dde7b with the patch for R2 and R6, built with gcc-15.

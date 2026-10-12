@@ -1,7 +1,5 @@
 // A ceil-mode MaxPool1d(8) over 4 channels of 61 values in [-3, 5], in the
-// form that torch-mlir gives: a -inf pad to 64 values, then the pool. The
-// windows of 8 slots keep the levels free of Cyclops' small-window league
-// level cap (requirement R2 in cyclops_maxpool_requirements.md).
+// form that torch-mlir gives: a -inf pad to 64 values, then the pool.
 func.func @max_pool(%arg0: tensor<1x4x61xf32> {secret.secret}) -> tensor<1x4x8xf32> {
   %neg_inf = arith.constant 0xFF800000 : f32
   %padded = tensor.pad %arg0 low[0, 0, 0] high[0, 0, 3] {

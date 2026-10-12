@@ -29,33 +29,33 @@ namespace {
 
 // The verifier of kernel.max_pool accepts only shapes that the planner
 // accepts, so a rejection here is a disagreement between the two.
-MaxPoolDepths getDepths(kernel::MaxPoolOp op) {
+MaxPoolRequirements getRequirements(kernel::MaxPoolOp op) {
   std::string error;
-  std::optional<MaxPoolDepths> depths =
-      getMaxPoolDepths({static_cast<int64_t>(op.getNumSlots()),
-                        static_cast<int64_t>(op.getInputLength()),
-                        static_cast<int64_t>(op.getWindowSize()),
-                        static_cast<int64_t>(op.getStride()),
-                        static_cast<int64_t>(op.getDilation()),
-                        op.getCeilMode(), op.getValueBound().convertToDouble()},
-                       &error);
-  if (!depths)
+  std::optional<MaxPoolRequirements> requirements = getMaxPoolRequirements(
+      {static_cast<int64_t>(op.getNumSlots()),
+       static_cast<int64_t>(op.getInputLength()),
+       static_cast<int64_t>(op.getWindowSize()),
+       static_cast<int64_t>(op.getStride()),
+       static_cast<int64_t>(op.getDilation()), op.getCeilMode(),
+       op.getValueBound().convertToDouble()},
+      &error);
+  if (!requirements)
     llvm::report_fatal_error(
         llvm::Twine("the Cyclops max pool planner rejects a kernel.max_pool "
                     "that the verifier accepts: ") +
         error);
-  return *depths;
+  return *requirements;
 }
 
 struct KernelMaxPoolReducesLevelModel
     : public ReducesLevelOpInterface::ExternalModel<
           KernelMaxPoolReducesLevelModel, kernel::MaxPoolOp> {
   int getLevelsToDrop(Operation* op) const {
-    return getDepths(cast<kernel::MaxPoolOp>(op)).total();
+    return getRequirements(cast<kernel::MaxPoolOp>(op)).levelDrop;
   }
 
   int getRequiredInputLevels(Operation* op) const {
-    return getDepths(cast<kernel::MaxPoolOp>(op)).minimumInputLevel;
+    return getRequirements(cast<kernel::MaxPoolOp>(op)).minimumInputLevel;
   }
 
   SmallVector<OpOperand*> getOperandsToReduce(
@@ -68,7 +68,8 @@ struct KernelMaxPoolBootstrapsInternallyModel
     : public BootstrapsInternallyOpInterface::ExternalModel<
           KernelMaxPoolBootstrapsInternallyModel, kernel::MaxPoolOp> {
   int getMinimumBootstrapEndLevel(Operation* op) const {
-    return getMaxPoolMinimumBootstrapEndLevel();
+    return getRequirements(cast<kernel::MaxPoolOp>(op))
+        .minimumBootstrapEndLevel;
   }
 };
 
@@ -78,7 +79,7 @@ struct KernelMaxPoolBootstrapsInternallyModel
 struct LinalgMaxPoolReducesLevelModel
     : public ReducesLevelOpInterface::ExternalModel<
           LinalgMaxPoolReducesLevelModel, linalg::PoolingNcwMaxOp> {
-  static std::optional<MaxPoolDepths> getDepths(Operation* op) {
+  static std::optional<MaxPoolRequirements> getRequirements(Operation* op) {
     std::string reason;
     FailureOr<SupportedMaxPool> pool =
         getSupportedMaxPool(cast<linalg::PoolingNcwMaxOp>(op), reason);
@@ -90,18 +91,18 @@ struct LinalgMaxPoolReducesLevelModel
         presburger::BoundType::UB,
         relation.getVarKindOffset(presburger::VarKind::Range) + 1);
     if (!lastSlot) return std::nullopt;
-    return getMaxPoolDepths(pool->getKernelShape(*lastSlot + 1));
+    return getMaxPoolRequirements(pool->getKernelShape(*lastSlot + 1));
   }
 
   // Before layout propagation, count one level, as for the other linalg ops.
   int getLevelsToDrop(Operation* op) const {
-    std::optional<MaxPoolDepths> depths = getDepths(op);
-    return depths ? depths->total() : 1;
+    std::optional<MaxPoolRequirements> requirements = getRequirements(op);
+    return requirements ? requirements->levelDrop : 1;
   }
 
   int getRequiredInputLevels(Operation* op) const {
-    std::optional<MaxPoolDepths> depths = getDepths(op);
-    return depths ? depths->minimumInputLevel : 1;
+    std::optional<MaxPoolRequirements> requirements = getRequirements(op);
+    return requirements ? requirements->minimumInputLevel : 1;
   }
 
   SmallVector<OpOperand*> getOperandsToReduce(

@@ -47,7 +47,7 @@ module attributes {cheddar.runtime = "cyclops"} {
   // CHECK: emitc.verbatim "_mp_cfg.pad_value = -0.5;"
   // CHECK: emitc.verbatim "_mp_cfg.compact_output = true;"
   // CHECK: emitc.verbatim "_mp_cfg.ceil_mode = false;"
-  // CHECK: emitc.verbatim "[](auto& _c) { if constexpr (requires { _c.cap_league_level; }) _c.cap_league_level = false; }(_mp_cfg);"
+  // CHECK: emitc.verbatim "_mp_cfg.output_level = 5;"
   // CHECK: emitc.verbatim "int _mp_lvl = {}->param_.NPToLevel({}[0].GetNP());"
   // CHECK: emitc.verbatim "AssertTrue(_mp_lvl == 9,
   // CHECK: emitc.verbatim "MaxPool<word> _mp(_mp_cfg, _mp_lvl, {}[0].GetScale());"

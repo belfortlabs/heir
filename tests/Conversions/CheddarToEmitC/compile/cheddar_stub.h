@@ -324,8 +324,7 @@ class BootContext : public Context<word> {
 // (common/Assert.h)
 void AssertTrue(bool expr, const char* msg);
 
-// 1-D max pooling over the slots of one ciphertext. cap_league_level is the
-// option HEIR requests in cyclops_maxpool_requirements.md (R2).
+// 1-D max pooling over the slots of one ciphertext.
 // (extension/max/MaxPoolPlanner.h, extension/max/MaxPool.h)
 struct MaxPoolConfig {
   int total_slots;
@@ -337,7 +336,7 @@ struct MaxPoolConfig {
   double pad_value = -0.5;
   bool compact_output = true;
   bool ceil_mode = true;
-  bool cap_league_level = true;
+  int output_level = -1;
 };
 
 template <typename word>

@@ -1014,7 +1014,7 @@ struct ConvertApplyPreparedLinearTransform
 
 // cheddar.max_pool -> one call of Cyclops' MaxPool:
 //   MaxPoolConfig cfg; (fields from the attributes; compact output, padding
-//                       -value_bound, no league level cap)
+//                       -value_bound, output level pinned to HEIR's plan)
 //   MaxPool<word> mp(cfg, input level, input scale);
 //   mp.Compile(cp, boot_ctx);
 //   mp.EvaluateMax(cp, out, in, evk, boot_ctx);
@@ -1067,15 +1067,9 @@ struct ConvertMaxPool : public OpConversionPattern<cheddar::MaxPoolOp> {
     emit(Twine("_mp_cfg.ceil_mode = ") + (op.getCeilMode() ? "true" : "false") +
              ";",
          {});
-    // Disable the small-window league level cap, which HEIR's level model
-    // leaves out (requirement R2 in cyclops_maxpool_requirements.md), when
-    // this Cyclops revision has the option. Without it, the key planner
-    // rejects the pools whose levels the cap changes. No operands, so the
-    // braces are not placeholders.
-    emit(
-        "[](auto& _c) { if constexpr (requires { _c.cap_league_level; }) "
-        "_c.cap_league_level = false; }(_mp_cfg);",
-        {});
+    // Pin the output to HEIR's planned level drop: Cyclops' natural drop can
+    // be lower at some bootstrap end levels (getMaxPoolRequirements).
+    emit("_mp_cfg.output_level = " + outLevel + ";", {});
     emit("int _mp_lvl = {}->param_.NPToLevel(" + inRef + ".GetNP());",
          {ctxV, in});
     emit("AssertTrue(_mp_lvl == " + level +

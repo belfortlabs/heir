@@ -2,14 +2,14 @@
 
 // The result type must be exactly the pool's level drop below the input.
 
-// CHECK: drops 4 levels; expected output level 0 but got 1
+// CHECK: drops 3 levels; expected output level 1 but got 0
 #enc = #lwe.inverse_canonical_encoding<scaling_factor = 45>
 #key = #lwe.key<>
 #chain_in = #lwe.modulus_chain<elements = <36028797018652673 : i64, 35184372121601 : i64, 35184372088833 : i64, 35184371826689 : i64, 35184371761153 : i64>, current = 4>
-#chain_out = #lwe.modulus_chain<elements = <36028797018652673 : i64, 35184372121601 : i64, 35184372088833 : i64, 35184371826689 : i64, 35184371761153 : i64>, current = 1>
+#chain_out = #lwe.modulus_chain<elements = <36028797018652673 : i64, 35184372121601 : i64, 35184372088833 : i64, 35184371826689 : i64, 35184371761153 : i64>, current = 0>
 #rf = #polynomial.ring<coefficientType = f64, polynomialModulus = <1 + x**1024>>
 !rns_in = !rns.rns<!mod_arith.int<36028797018652673 : i64>, !mod_arith.int<35184372121601 : i64>, !mod_arith.int<35184372088833 : i64>, !mod_arith.int<35184371826689 : i64>, !mod_arith.int<35184371761153 : i64>>
-!rns_out = !rns.rns<!mod_arith.int<36028797018652673 : i64>, !mod_arith.int<35184372121601 : i64>>
+!rns_out = !rns.rns<!mod_arith.int<36028797018652673 : i64>>
 #rr_in = #polynomial.ring<coefficientType = !rns_in, polynomialModulus = <1 + x**1024>>
 #rr_out = #polynomial.ring<coefficientType = !rns_out, polynomialModulus = <1 + x**1024>>
 #cs_in = #lwe.ciphertext_space<ring = #rr_in, encryption_type = mix>

@@ -13,27 +13,155 @@ Updated on 2026-10-05, still for e8efd441: HEIR now gets its levels from
 `MaxPool1d(8)` and `MaxPool1d(2)` end to end on an RTX 5090, with worst errors
 of 0.00035 and 0.00021.
 
+Updated on 2026-10-07 for commit 1716ac30 ("hoisting the shared mod-ups"), the
+tip of `aikata/maxpool`. This commit adds 2D pooling and idle-slot folding.
+HEIR still pins e8efd441 and did not build against 1716ac30. The status of
+each requirement below is from a read of the 1716ac30 source. R7 is answered.
+R17 is new: the folding makes the level drop depend on the bootstrap end level.
+
+Updated on 2026-10-08 for commit 0e5dde7b ("clang-format"), the tip of
+`aikata/maxpool`, after 468bdaef ("MaxPool: minimum input and bootstrap end
+level queries, output level pin"). Thank you for R3b and R10. HEIR still pins
+e8efd441. We built the CPU planner library at 0e5dde7b and called it from a
+test program. The numbers in this update come from that program. We did not
+run these shapes on a GPU. R2 is still open and still blocks HEIR. R17 is
+still open, but the new output level pin gives HEIR a workaround.
+
+Updated on 2026-10-09, still for 0e5dde7b, the tip of `aikata/maxpool`. We
+propose a patch for R2 and R6 on branch `mdgrs/maxpool-heir-fixes`, which
+starts at 0e5dde7b. See "Proposed patch for R2 and R6" below. HEIR now pins
+0e5dde7b, uses `MaxPoolMinimumBootstrapEndLevel`, `MaxPoolMinimumInputLevel`
+and `MaxPoolTryPlanLevels`, and uses the output level pin as the workaround
+for R17.
+
+## Terms
+
+- **Input level:** the level of the ciphertext that HEIR gives to `MaxPool`.
+- **Output level:** the level of the result, `GetOutputLevel()`.
+- **Level drop:** `input level - output level`.
+- **Bootstrap end level** (or **end level**):
+  `BootParameter::GetEndLevel()`, the level of a ciphertext immediately after a
+  bootstrap. It is a property of the parameters, not of the ciphertext. The
+  league bootstraps internally, and its comparisons run at levels below the
+  end level. So the end level must be high enough for the comparisons, for
+  each input level.
+
+HEIR needs the level drop to be a constant for each configuration: one number,
+for each valid input level and each valid end level. HEIR also needs the
+minimum end level, because HEIR selects the parameters after its level
+analysis.
+
+## The main request
+
+Most of the open items have one cause: HEIR cannot get, on the CPU and without
+an exception, the three numbers that it needs for each configuration. We
+propose one query that replaces R2, R3b, R10, R11, R12 and R17:
+
+```cpp
+struct MaxPoolRequirements
+{
+    int level_drop;                  // input_level - output_level, for each valid input and end level
+    int minimum_input_level;
+    int minimum_bootstrap_end_level; // each higher end level is also valid
+};
+
+// std::nullopt and a reason when the configuration is not supported. Does not throw.
+std::optional<MaxPoolRequirements> GetMaxPoolRequirements(
+    const MaxPoolConfig& config,
+    const CompositePolynomial& comparison = BuildMaxSelectorLowDepthSignApproximation(),
+    std::string* error = nullptr);
+```
+
+For this query to exist, `level_drop` must not depend on the end level. Today
+two features make it depend on the end level: the small-window league cap (R2)
+and the selection of the fold copies (R17). HEIR needs a configuration field
+that makes the level drop constant. HEIR then removes its fixed minimum end
+level of 11, its search for the minimum input level, its `PlanMaxPool` call at
+level 64, its cache and its `-fexceptions` build flag.
+
+**Status at 0e5dde7b: partly done.** 468bdaef adds
+`MaxPoolMinimumBootstrapEndLevel`, `MaxPoolMinimumInputLevel`, the
+non-throwing `MaxPoolTryPlanLevels`, and `MaxPoolConfig::output_level`. HEIR
+can use the first two in place of its fixed 11 and its search for the minimum
+input level.
+
+The output level pin is useful for HEIR. HEIR plans a constant level drop `D`
+for each pool. The generated code can then set
+`output_level = input_level - D`, and the output level is always the planned
+level. But the pin is a free level-down: it can only lower the output below the
+natural output level. It cannot raise the output. So the pin solves the
+problem only when `D` is at least the natural level drop for each valid input
+level and end level:
+
+- For R17, a largest natural drop exists. HEIR can find it with a search over
+  the end levels, and then pin to it. See R17.
+- For R2, no largest natural drop exists, because the drop grows with the input
+  level. So R2 still blocks HEIR. See R2.
+
 ## Summary
 
-| Id | Requirement | Status at e8efd441 |
+| Id | Requirement | Status at 0e5dde7b |
 |----|-------------|--------------------|
 | R1 | Move the stage functions to the CPU planner library. | Done. |
-| R2 | An option that disables the small-window league cap. | **Open. Blocks HEIR when the cap has an effect.** |
-| R3a | The level drop and the minimum input level. | Done: HEIR uses `PlanMaxPool`. One question. |
-| R3b | The minimum bootstrap end level. | **Open. Blocks HEIR for windows of 16 or more.** |
-| R4 | A key planner for `MaxPool`. | Done. HEIR adapts to the new signature. |
+| R2 | An option that disables the small-window league cap. | **Patch proposed:** the cap applies only to the comparison copy. |
+| R3a | The level drop and the minimum input level. | Question 2 is answered. Question 1 waits for R2 and R17. |
+| R3b | The minimum bootstrap end level. | Done: `MaxPoolMinimumBootstrapEndLevel`. |
+| R4 | A key planner for `MaxPool`. | Done. |
 | R5 | Confirm that slots after `input_length` may hold data. | Open question. |
-| R6 | Sparse ciphertexts and fewer than 256 slots. | **Open. Blocks HEIR below 256 slots.** |
-| R7 | Clarify the dilation rule. | Open question. |
+| R6 | Sparse ciphertexts and fewer than 256 slots. | **Patch proposed:** the league plans the bootstrap keys of 256 slots. |
+| R7 | Clarify the dilation rule. | Answered: overlapping dilated windows use fold copies. |
 | R8 | Planner build dependency on `libtommath`. | HEIR solves it. Request: make it optional. |
 | R9 | The `value_bound` rule. | Resolved: HEIR passes the bound. |
-| R10 | The minimum input level and the level drop in `MaxPoolPlan`. | New request. |
-| R11 | Planning without the selection maps. | New request. |
-| R12 | Validation without exceptions. | New request. |
-| R13 | A default `pad_value` of `-value_bound`. | New request. |
-| R14 | Several sequences in one call. | New request. |
-| R15 | `Compile` without the input scale. | New request. |
+| R10 | The minimum input level and the level drop in `MaxPoolPlan`. | Done: `min_input_level` and `natural_output_level`. |
+| R11 | Planning without the selection maps. | Open. One query takes up to 186 ms. |
+| R12 | Validation without exceptions. | Partly done: `MaxPoolTryPlanLevels`. A configuration that is not valid still throws. |
+| R13 | A default `pad_value` of `-value_bound`. | Open. |
+| R14 | Several sequences in one call. | Open. One question about `MaxPool2d`. |
+| R15 | `Compile` without the input scale. | Open. |
 | R16 | A stable secret-id API. | Resolved: HEIR emits `NativeSecretId()`. |
+| R17 | The fold copies must not depend on the end level. | Open. HEIR uses the workaround with the output level pin. |
+
+## Proposed patch for R2 and R6
+
+Branch `mdgrs/maxpool-heir-fixes`, from 0e5dde7b. It is not merged.
+
+**R2.** The league reads the values at `input_level - gather` for each window
+size. `Schedule` in `MaxPoolPlanner.cpp` no longer caps the league level. For
+a window below 8 slots, `HierarchicalLeagueSmallWindowLevel` now returns
+`min(input_level, bootstrap_level, comparison depth + 1)`, and
+`EvaluateSelector` levels down a copy of the input to that level for the
+comparisons. The comparisons thus run at the same level as before (10 with
+the default selector), and cost the same. The values keep their level, and
+the selector multiplies them at the league level. So the level drop is
+`gather + 1 + compaction` for each input level. The compiled league, its
+masks and its keys follow the same function, so the planner and the runtime
+agree. The rotation keys of the window sums and the compaction are at higher
+levels than before, so they are larger.
+
+**R6.** `AddHierarchicalLeagueRequiredKeys` requests the bootstrap keys for
+`max(total_slots, kMinBootstrapNumSlots)` slots. `kMinBootstrapNumSlots` (256)
+is new in `BootKeyPlanner.h`. At run time, `BootContext` already bootstraps a
+sparser ciphertext with the transform of a larger prepared slot count, and
+gives the result the input's slot count. So the runtime needed no change. The
+caller must prepare the boot context for `max(total_slots, 256)` slots, as
+HEIR does.
+
+**Tests** (`test/MaxPoolTest.cpp`, all on an RTX 5090):
+
+- `MaxPoolPlanner.LevelDropDoesNotDependOnTheInputLevel`: for 8 shapes, each
+  end level from the minimum to 24 and each input level, the drop is constant.
+- `MaxPoolEncrypted.SmallWindowsKeepTheInputLevel`: `MaxPool1d(2)`, `(3)` and
+  `(4)` from end level 15 and from the minimum input level. From level 15,
+  `MaxPool1d(2)` now gives level 12; at 0e5dde7b it gave level 7.
+- `MaxPoolEncrypted.FewerSlotsThanTheBootstrapMinimum`: pools on 64 and 128
+  slots, with only the planner's keys in a fresh testbed. Worst error 2.3e-5.
+- All other tests in `maxpool_test` and `hierarchical_league_test` pass.
+
+A note for the key parity test: for a sparse slot count,
+`AddBootstrapRequiredRotations` requests the split-format key with
+`KeyMode::kInherit`, and `BootContext` requests it with the resolved mode. Both
+give the same key, but `ExpectSameKeyRequests` reports a difference. So the
+new test runs with the planner's keys instead of comparing the requests.
 
 ## How HEIR uses `MaxPool`
 
@@ -63,23 +191,31 @@ We will delete it.
 
 ## R2: An option that disables the small-window league cap
 
-**Status: open.** This blocks HEIR for a window of 2 to 7 slots, which
-includes the common `MaxPool1d(2)`, when the cap has an effect. The cap has an
-effect when the input level is more than the selector depth + 1 (10) above the
-gather stages, for example for a pool directly after a bootstrap.
+**Status: patch proposed on 2026-10-09** (see "Proposed patch for R2 and
+R6"). The patch keeps the cap for the comparisons only, so a new field is not
+necessary. The text below describes the problem at 0e5dde7b.
 
-**Problem.** `PlanMaxPool` (`src/extension/max/MaxPoolPlanner.cpp`) sets the
-league level as follows:
+**Status: open at 0e5dde7b.** This blocks HEIR for an unfolded window of 2 to
+7 slots, which includes the common `MaxPool1d(2)`, when the cap has an effect.
+The cap has an effect when the input level is more than the selector depth + 1
+(10) above the gather stages, for example for a pool directly after a
+bootstrap. The output level pin of 468bdaef does not solve this problem (see
+"Results at 0e5dde7b" below).
+
+**Problem.** At 0e5dde7b, `Schedule` (`src/extension/max/MaxPoolPlanner.cpp`
+line 380) sets the league level as follows:
 
 ```cpp
-plan.league_level = padded > 1 && padded < 8
-    ? std::min(bootstrap_level, comparison.GetTotalLevelConsumption() + 1)
-    : bootstrap_level;
-// ... then, for each chain:
-plan.league_level = std::min(plan.league_level, input_level - plan.gather_stages.back());
+s.league = plan.padded > 1 && plan.padded < 8 && plan.copies == 1
+               ? std::min(bootstrap_level, comparison.GetTotalLevelConsumption() + 1)
+               : bootstrap_level;
+s.league = std::min(s.league, input_level - StageDepth(plan.gather_maps));
 ```
 
-So for a padded window of fewer than 8 slots, the output level is:
+The cap applies only to unfolded windows (`copies == 1`). For a folded window,
+the copy count depends on the end level (R17).
+
+So for an unfolded padded window of fewer than 8 slots, the output level is:
 
 ```
 output = min(end, selector depth + 1, input - gather) - league - compaction
@@ -97,6 +233,42 @@ The cap applies in all HEIR programs. The league needs an end level of at
 least 11 (R3b), and 11 is more than 10. So the cap lowers each input at the end
 level.
 
+**Results at 0e5dde7b.** We called `MaxPoolTryPlanLevels` for
+`MaxPool1d(2)` on 4096 slots with `input_length = 4096`. The plan has 1 gather
+stage, 2 compaction stages, a minimum input level of 4 and a minimum end level
+of 11. For each end level, we tried each input level from 4 to the end level:
+
+| End level | Level drop over the valid input levels | Highest output level |
+|-----------|----------------------------------------|----------------------|
+| 11 | 4 | 7 |
+| 12 | 4 to 5 | 7 |
+| 16 | 4 to 9 | 7 |
+| 24 | 4 to 17 | 7 |
+
+`MaxPool1d(4)` on 4096 slots, and `MaxPool1d(2)` on 512 of 4096 slots, give the
+same table. `MaxPool1d(3)` on 999 of 4096 slots gives drops of 5 to 17 and a
+highest output level of 7. Padded windows of 8 or more do not have the cap,
+and their drop is constant (4 for `MaxPool1d(8)`, `MaxPool1d(16)` and
+`MaxPool1d(64)` on 4096 full slots).
+
+The pin cannot remove this dependency, because it can only lower the output.
+At end level 16 we pinned `output_level = input_level - D`:
+
+| Input level | D = 3 | D = 4 | D = 6 | D = 8 |
+|-------------|-------|-------|-------|-------|
+| 8 | rejected | accepted | accepted | accepted |
+| 12 | rejected | rejected | accepted | accepted |
+| 16 | rejected | rejected | rejected | rejected |
+
+For a constant `D`, an input level above `10 + D - league - compaction` is
+always rejected (above `10 + D - 3` for these shapes). HEIR selects the end
+level after its level analysis, so HEIR cannot put an upper limit on the input
+level. A pin to a
+fixed absolute level, for example `output_level = 7`, makes the output level
+the same for each input level. But HEIR counts levels down from the end level,
+so a fixed absolute level is a different HEIR level for each end level. HEIR
+does not know the end level when it plans the pool.
+
 **Request.** Add a field to `MaxPoolConfig`, for example:
 
 ```cpp
@@ -110,7 +282,13 @@ the field. HEIR will set it to `false`. The cap is only a speed optimization: it
 makes the comparisons cheaper when the input level is high. The name of the
 field is only a proposal. HEIR will use the name that you select.
 
-**HEIR status.** The key planner call and the generated code set
+**HEIR status (2026-10-09).** HEIR no longer sets `cap_league_level`. It pins
+the output level to its planned drop, and key planning checks the pinned pool
+with `MaxPoolTryPlanLevels`. With the patch, a `MaxPool1d(2)` on 64 slots with
+its input at level 11 and no gather stage plans its keys and runs end to end.
+Without the patch, key planning stops with an error for such a pool.
+
+**HEIR status (2026-10-05).** The key planner call and the generated code set
 `cap_league_level = false` only when the field exists (`if constexpr`), so both
 compile against e8efd441. Key planning calls `PlanMaxPool` with the input level
 and the bootstrap end level of the program, and compares the level drop with
@@ -119,149 +297,81 @@ is, when the cap has an effect. The generated code also checks at run time that
 `GetOutputLevel()` is the level that HEIR planned. A `MaxPool1d(2)` with its
 input at level 9 passed end to end on a GPU.
 
+With the field, HEIR can also use the pin for R17. HEIR then sets both
+`cap_league_level = false` and `output_level = input_level - D`.
+
 ## R3a: The level drop and the minimum input level
 
-**Status: done.** HEIR gets these values from `PlanMaxPool` and no longer
-copies the rules. HEIR calls `PlanMaxPool` at input level 64 and bootstrap
-level 64. The cap changes only the league input level, so these values do not
-depend on it:
+**Status at 0e5dde7b: Question 1 waits for R2 and R17.** R10 gives the
+minimum input level directly. With the pin, HEIR can also pin the output to its
+planned level drop when R2 is solved. Question 1 is then the question that
+remains for this item.
 
-- **Level drop:** the largest `gather_stages` entry, plus
-  `league_level - league_output_level`, plus the largest `compaction_stages`
-  entry.
+At e8efd441 this was done. HEIR gets these values
+from `PlanMaxPool` and does not copy the rules. HEIR calls `PlanMaxPool` at
+input level 64 and bootstrap level 64. At e8efd441 the cap changed only the
+league input level, so these values did not depend on it. At 1716ac30 the
+fold copies depend on the bootstrap level, so the values at level 64 can differ
+from the values at the end level of the program (R17). HEIR calculates:
+
+- **Level drop:** the largest number of gather stages of a chain, plus
+  `league_level - league_output_level`, plus the largest number of compaction
+  stages of a chain.
 - **Minimum input level:** the lowest `input_level` for which `PlanMaxPool`
   does not throw. HEIR searches up from the level drop. See R10.
 
-**Question.** With the cap disabled (R2), please confirm these two points:
+**Question 1 (open).** With the cap disabled (R2) and the copies fixed (R17),
+please confirm that `input_level - plan.output_level` is the same for each
+valid input level and each valid bootstrap level.
 
-1. `input_level - plan.output_level` is the same for each valid input level and
-   each valid bootstrap level.
-2. When `PlanMaxPool` accepts an input level, `MaxPool::Compile` also accepts
-   it. We read that the `level >= 1` check in `CompileSelections`
-   (`MaxPool.cpp:46`) follows from the checks in `PlanMaxPool`. Is this
-   correct?
+**Question 2 (answered at 1716ac30).** We asked: when `PlanMaxPool` accepts an
+input level, does `MaxPool::Compile` also accept it? At 1716ac30,
+`MaxPool::Compile` calls `PlanMaxPool` with the end level of the boot context,
+and then asserts that each phase agrees with the plan (`MaxPool.cpp:172`, 189
+and 195). So the selection stages follow the plan. Only the league checks in
+`HierarchicalLeague::Compile` can still reject an accepted plan (R3b).
 
 ## R3b: The minimum bootstrap end level
 
-**Status: open.**
-
-**Problem.** HEIR selects the bootstrap end level at compile time, during
-parameter generation. Cyclops checks that level only at run time, in
-`HierarchicalLeague::Compile`. If the level is too low, the compiled program
-stops at run time with an assert, for example "HierarchicalLeague: insufficient
-levels for the running selector".
-
-`Compile` has several conditions on `end`:
-
-| Check | Line in `HierarchicalLeague.cpp` |
-|-------|----------------------------------|
-| `end >= round_cost_ + 2` | 376 |
-| `indicator_level >= 1` for each round | 400 |
-| `selector_level_ >= 0`, 1 level lower for each round | 393-403 |
-| `plan->output_level >= 2` between rounds | 462 |
-| each comparison stage fits one bootstrap | `MaxCommon.h:214` |
-
-There are also implicit conditions. `Compile` builds masks and constants at
-levels that it calculates in the function, for example
-`CompileBleach(context, end - 3, kBleachTouchUp)` (line 428). The `Round`
-constructor (line 221) also calculates its own levels.
-
-HEIR now uses a fixed minimum of 11. That value is from line 376 only. From the
-explicit checks above, we calculate these values:
-
-| Padded window | League rounds | Minimum end level |
-|---------------|---------------|-------------------|
-| 2 to 8 | 0 | 11 |
-| 16 | 1 (2 candidates) | 12 |
-| 64 | 1 (8 candidates) | 12 |
-| 256 | 2 (8, then 4) | 13 |
-
-We did not run these shapes. A HEIR copy of these rules can drift from the
-Cyclops code without warning, and it can miss an implicit condition.
-
-**Request.** Add this CPU-only function to `MaxPoolPlanner.h`:
+**Status: done at 468bdaef.** Thank you. `MaxPoolPlanner.h` now has:
 
 ```cpp
-// The lowest bootstrap end level for which MaxPool::Compile accepts this
-// configuration and comparison, for each valid input level. Each higher end
-// level is also accepted.
 int MaxPoolMinimumBootstrapEndLevel(
     const MaxPoolConfig& config,
     const CompositePolynomial& comparison = BuildMaxSelectorLowDepthSignApproximation());
 ```
 
-**Recommended form.** Please do for the league what e8efd441 does for the pool
-with `MaxPoolPlan`. Move each level that `HierarchicalLeague::Compile` uses into
-a CPU-only plan:
+It is the "simple form" of our request: `MaxPoolTryPlanLevels` calls the new
+`HierarchicalLeagueSupportsBootstrapLevel`, and the function searches down
+from end level 32 to the first end level that fails. So the set of valid end
+levels is closed upward by construction (our Question 2). The new GPU test
+`MaxPoolEncrypted.RunsAtEveryEndLevelThePlannerAccepts` runs the pool with
+parameter sets of 7 to 17 levels, at each end level that the planner accepts.
 
-```cpp
-struct HierarchicalLeaguePlan
-{
-    int round_cost, selector_level, output_level;
-    int pair_level, weighted_level;     // windows of 8 slots or more
-    std::vector<int> round_mask_levels; // one for each round
-    // ... each level that Compile uses
-};
+**Results at 0e5dde7b.** The planner gives these minimum end levels:
 
-// Throws when Compile would reject the arguments.
-HierarchicalLeaguePlan PlanHierarchicalLeague(int total_slots, int window_size, int input_level,
-                                              int end, const CompositePolynomial& comparison);
-```
+| Shape (4096 slots) | Minimum end level |
+|--------------------|-------------------|
+| `MaxPool1d(2)`, `MaxPool1d(4)`, `MaxPool1d(8)`, full slots | 11 |
+| `MaxPool1d(16)`, `MaxPool1d(64)`, full slots | 13 |
+| `MaxPool1d(64)` on 64 to 512 values (folded, 8 copies) | 12 |
+| `MaxPool1d(9)`, `MaxPool1d(16)`, `MaxPool1d(32)` on few values (folded) | 11 |
 
-`Compile` then reads its levels from this plan. `MaxPoolMinimumBootstrapEndLevel`
-is a search for the lowest `end` that `PlanMaxPool` and `PlanHierarchicalLeague`
-accept. The planner and the run-time code then cannot disagree.
+For the full-slot shapes, we tried each end level from the minimum to 24, and
+each input level from the minimum input level to the end level. The planner
+accepted all of them. So the minimum end level does not depend on the
+input level.
 
-**Simple form.** If the plan is too much work now, a check function is
-sufficient. This sketch shows the explicit checks only. We did not compile it.
+**Remaining risk (no action needed now).** `HierarchicalLeagueSupportsBootstrapLevel`
+is a second copy of the checks in `HierarchicalLeague::Compile` (lines 442,
+476, 480 and 552 at 0e5dde7b). `Compile` does not call it. So the two copies
+can drift. The "recommended form" of our earlier request, a
+`HierarchicalLeaguePlan` that `Compile` reads, removes this risk. A test that
+`Compile` fails one level below `MaxPoolMinimumBootstrapEndLevel` also shows
+that the minimum is not too high.
 
-```cpp
-bool HierarchicalLeagueEndLevelValid(int total_slots, int window_size, int end,
-                                     const CompositePolynomial& comparison)
-{
-    using namespace max_detail;
-    if (window_size == 1)
-        return true;
-    for (const auto& stage : comparison.stages)          // MaxCommon.h:214
-        if (stage.GetLevelConsumption() > end)
-            return false;
-    const int round_cost = ComparisonMinimumInputLevel(comparison, end);
-    if (end < round_cost + 2)                            // line 376
-        return false;
-    int selector = window_size < 8 ? end - 2 * kBleachTouchUp - (window_size - 2)
-                                   : end - kWarmupSelectorCost;
-    const auto rounds = LeagueRounds(window_size);
-    for (size_t r = 0; r < rounds.size(); ++r)
-    {
-        const int indicator = LeagueIndicatorLevel(end, rounds[r].first);
-        if (indicator < 1)                               // line 400
-            return false;
-        if (r + 1 < rounds.size() && indicator < 2)      // line 462
-            return false;
-        selector = std::min(selector, indicator) - 1;
-    }
-    return selector >= 0;                                // line 403
-}
-```
-
-**Questions.**
-
-1. Do the implicit conditions ever need a higher end level than the explicit
-   checks?
-2. Is the set of valid end levels closed upward? `ComparisonMinimumInputLevel`
-   returns the full depth when `depth <= end`, and the first stage when it does
-   not. So a low end level can pass the check at line 376, and a higher one can
-   fail it. HEIR assumes that each end level above the minimum is valid. If
-   this is not true, please export the check function in place of a minimum.
-
-**Test proposal.** Next to `MaxPoolPlanner.KeysAndLevelsMatchCompiledMaxPool`,
-check for each configuration that `Compile` passes at
-`MaxPoolMinimumBootstrapEndLevel(config)` and fails one level below it.
-
-**HEIR status.** `MaxPoolOp::getMinimumBootstrapEndLevel` returns the fixed 11.
-`annotate-mgmt` raises the base level so that the end level is at least this
-value. When the function exists, HEIR calls it with the configuration of each
-pool.
+**HEIR status.** Done: HEIR calls `MaxPoolMinimumBootstrapEndLevel` for each
+pool, in place of its fixed 11.
 
 ## R4: Key planner
 
@@ -274,14 +384,15 @@ cyclops::AddMaxPoolRequiredKeys(request, params, bootstrap, config, input_level,
                                 cyclops::BootVariant::kImaginaryRemoving);
 ```
 
-No action from Cyclops is necessary.
+No action from Cyclops is necessary. The signature is the same at 1716ac30.
 
 ## R5: Data in the slots after `input_length`
 
-**Status: open question.**
+**Status: open question at 0e5dde7b.**
 
-The header still says: "Input slots at or beyond input_length must be zero."
-In e8efd441, the empty gather slots read `pad_value`.
+At 0e5dde7b the `MaxPool.h` header (line 5) still says: "Input slots at or beyond
+input_length must be zero." Since e8efd441, the empty gather slots read
+`pad_value` (`MaxPoolPlan::pad_slots` at 1716ac30).
 
 HEIR's default layout repeats the data with a period of
 `nextPow2(input_length)`. So the slots after `input_length` hold copies of the
@@ -300,7 +411,13 @@ the bootstraps inside the league? If yes, can the header say so?
 
 ## R6: Sparse ciphertexts and fewer than 256 slots
 
-**Status: open. Blocks HEIR for ciphertexts with fewer than 256 slots.**
+**Status: patch proposed on 2026-10-09** (see "Proposed patch for R2 and
+R6"). The patch is the first option of the request below: the league plans the
+keys of the 256-slot bootstrap. The questions are answered by the new GPU test:
+yes, for 64 and 128 slots with a boot context prepared for 256 slots.
+
+**Status: open at 0e5dde7b. Blocks HEIR for ciphertexts with fewer than 256
+slots.** `BootKeyPlanner.cpp:60` still requires 256 slots or more.
 
 HEIR ciphertexts have fewer slots than N/2: the slot count is the program's
 requested slot count, for example 8192 with N = 2^16. HEIR prepares the
@@ -311,7 +428,8 @@ ciphertext.
 `AddMaxPoolRequiredKeys` requests the bootstrap keys for `config.total_slots`
 (through `AddHierarchicalLeagueRequiredKeys`). With `total_slots = 64`,
 `AddBootstrapRequiredRotations` throws "Currently only high number of slots are
-supported" (`BootKeyPlanner.cpp:58`), because it requires at least 256 slots.
+supported" (`BootKeyPlanner.cpp:60` at 1716ac30), because it requires at least
+256 slots.
 So no max pool on a ciphertext with fewer than 256 slots can get its keys.
 
 **Request.** Let `MaxPool` bootstrap at the slot count of the boot context when
@@ -326,17 +444,19 @@ bootstrap context was prepared for more slots? Are the bootstrap keys for
 
 ## R7: The dilation rule
 
-**Status: open question.**
+**Status: answered at 1716ac30.**
 
-`MaxPoolPlanner.h` says: "Dilation > 1 with overlapping window spans
-(stride < dilation*(window_size-1)+1) is rejected at construction."
+At e8efd441, `MaxPoolPlanner.h` said that overlapping dilated windows are
+rejected, but the code rejected only shapes whose gather stages collide.
 
-The code rejects only shapes whose gather stages collide
-(`StagesFromPositions`). For example, `window_size = 4, stride = 4,
-dilation = 2` has overlapping spans, and `ValidateMaxPoolConfig` accepts it.
+At 1716ac30, `ValidateMaxPoolConfig` does not reject overlapping dilated
+windows. `MaxPoolRequiredCopies` selects the smallest power-of-two copy count
+that gives a collision-free gather. It throws only when no copy count up to
+`total_slots / P` is collision-free. The header now says this. Thank you.
 
-**Question.** Which rule is correct? HEIR now uses the stricter rule from the
-header.
+HEIR supports only `dilation == 1` in the first version, so this change does
+not affect HEIR now. A shape that needs 2 or more copies uses more slots for
+each window, and it can need more chains.
 
 The `kernel.max_pool` verifier cannot call the planner, because the HEIR Kernel
 dialect does not depend on Cyclops. So the verifier copies the rules of
@@ -371,7 +491,15 @@ not more than any real value.
 
 ## R10: The minimum input level and the level drop in `MaxPoolPlan`
 
-**Status: new request.**
+**Status: done at 468bdaef.** Thank you. `MaxPoolPlan` now has
+`min_input_level` and `natural_output_level`, and `MaxPoolMinimumInputLevel`
+gives the minimum input level from the configuration. HEIR can remove its
+search through exceptions. The level drop is `input_level -
+natural_output_level`, but it is constant only after R2 and R17. At 4096 slots,
+the minimum input level is 4 for `MaxPool1d(2)`, `MaxPool1d(4)` and
+`MaxPool1d(8)` on full slots, and 8 for `MaxPool1d(16)` and `MaxPool1d(64)`.
+
+The text below is the original request.
 
 HEIR needs two values for each pool: the level drop and the lowest input level.
 `MaxPoolPlan` gives neither directly. HEIR takes the largest entry of each
@@ -387,12 +515,26 @@ int level_drop = -1;          // input_level - output_level without the league c
 
 ## R11: Planning without the selection maps
 
-**Status: new request.**
+**Status: open at 0e5dde7b.** "The main request" covers this item.
+
+At 0e5dde7b we measured the new queries at 32768 slots, with full slots:
+
+| Shape | `MaxPoolMinimumBootstrapEndLevel` | `MaxPoolMinimumInputLevel` |
+|-------|-----------------------------------|----------------------------|
+| `MaxPool1d(2)` | 68 ms | 3 ms |
+| `MaxPool1d(8)` | 100 ms | 4 ms |
+| `MaxPool1d(64)` | 186 ms | 10 ms |
+
+The end-level search builds a new layout, with all the maps, for each end
+level from 32 down. So HEIR must keep its cache. This is not a blocker.
 
 `PlanMaxPool` builds every gather and compaction map over all slots, for each
-chain, only to count the stages. One HEIR depth query (with the R10 search)
-takes up to 23 ms at 32768 slots. HEIR's level analyses ask for the same pool
-many times, so HEIR caches the result for each shape.
+chain, only to count the stages. At 1716ac30, `MaxPoolFoldCopies` also builds
+the gather stages once for each copy count that it tries, so a query does more
+work than at e8efd441. We did not measure it. At e8efd441, one HEIR depth
+query (with the R10 search) took up to 23 ms at 32768 slots. HEIR's level
+analyses ask for the same pool many times, so HEIR caches the result for each
+shape.
 
 **Request.** Add functions that count the stages without the maps, for example
 `MaxPoolNumGatherStages(config, chain)` and
@@ -401,7 +543,20 @@ HEIR can then remove its cache.
 
 ## R12: Validation without exceptions
 
-**Status: new request.**
+**Status: partly done at 468bdaef.** `MaxPoolTryPlanLevels` returns `false`
+and does not throw when the levels do not fit. But `PlanMaxPoolLayout`,
+`MaxPoolMinimumInputLevel` and `MaxPoolMinimumBootstrapEndLevel` still call
+`ValidateMaxPoolConfig`, which throws for a configuration that is not valid.
+For example, `MaxPoolMinimumBootstrapEndLevel` on
+`NonOverlapping(32768, 1, 4)` throws "MaxPool: bad input_length". So HEIR
+keeps `-fexceptions` for its planner wrappers. The request below is still
+open.
+
+1716ac30 adds a C interface to the planner
+(`planner/include/cyclops_planner.h`). Its functions return an error code and a message, and do not throw. This is
+the form that HEIR needs. But the C interface does not cover `MaxPool` yet. A
+`MaxPool` function in it, for example for the query in "The main request",
+also solves this item.
 
 The planner reports an invalid configuration only with an exception. HEIR
 builds its planner wrappers with `-fexceptions` and catches the exception,
@@ -418,7 +573,8 @@ A similar non-throwing form of `PlanMaxPool` is also useful.
 
 ## R13: A default `pad_value` of `-value_bound`
 
-**Status: new request.**
+**Status: open at 0e5dde7b.** The default `pad_value` is still `-0.5`, in
+`MaxPoolConfig` and in `MaxPool2dConfig`.
 
 HEIR sets the same fields of `MaxPoolConfig` in three places: the planner
 wrapper, the key planner and the generated C++. One of them is always
@@ -433,7 +589,8 @@ value_bound, ceil_mode)`.
 
 ## R14: Several sequences in one call
 
-**Status: new request.** This is the largest possible simplification for HEIR.
+**Status: open at 0e5dde7b.** This is the largest possible simplification for
+HEIR.
 
 HEIR puts all channels of a pool end to end in one sequence. A window must not
 cross into the next channel. So for a ceil-mode pool, HEIR first pads each
@@ -448,9 +605,24 @@ of two sequences). Each sequence then has its own windows, its own ceil-mode
 tail and its own padding with `pad_value`. HEIR then passes `ceil_mode`
 directly, and removes its padding and trimming patterns.
 
+**Question.** 1716ac30 adds `MaxPool2d`, which has a channel axis. Can HEIR
+express a 1-D pool over C channels as a `MaxPool2d` with `height = 1` and
+`kernel_height = 1`? We see three limits:
+
+- `MaxPool2dConfig` has no `ceil_mode`, only symmetric `padding`.
+- The output uses the Orion layout, not a compact layout.
+- The vertical pass possibly costs levels, also with `kernel_height = 1`.
+
+At 0e5dde7b, `MaxPool2d` can run one pass over all kernel taps
+(`MaxPool2dStrategy::kSingle`), so the third limit is possibly gone. The first
+two limits are still in `MaxPool2dConfig`. So HEIR still needs R14 for
+`MaxPool1d`.
+
 ## R15: `Compile` without the input scale
 
-**Status: new request.**
+**Status: open at 0e5dde7b.** Both constructors of `MaxPool` (`MaxPool.h`
+lines 68 and 71) and the constructor of `MaxPool2d` still take the input
+scale.
 
 `MaxPool` takes the input scale in its constructor, so HEIR builds and compiles
 the object in the generated function, from the scale of the ciphertext. Then
@@ -474,3 +646,118 @@ generated code needs Cyclops 8de7c716 or later. HEIR pins e8efd441.
 **Request.** Before a future rename of a public API that HEIR emits, please
 keep the old name as a deprecated alias for some releases, so that HEIR can
 move to the new name without a break.
+
+## R17: The fold copies must not depend on the end level
+
+**Status: open at 0e5dde7b. HEIR has a workaround with the output level pin.**
+
+**Problem.** `PlanMaxPoolLayout` selects the copy count with
+`MaxPoolFoldCopies(config, bootstrap_level)` (`MaxPoolPlanner.cpp` line 272).
+A higher copy count is selected only when
+`LeagueIndicatorLevel(bootstrap_level, candidates) >= 1` for each round. The
+copy count changes the gather and compaction maps, so the number of stages, and
+it changes whether the small-window cap of R2 applies (only when
+`copies == 1`). So the level drop and the minimum input level of one
+configuration can be different at two end levels.
+
+HEIR has a circular dependency here. HEIR calculates the level drop of each
+pool first, and it selects the parameters, and so the end level, from those
+drops.
+
+**Results at 0e5dde7b.** We tested `MaxPool1d(k)` for k in {2, 3, 4, 5, 8, 9,
+16, 32, 64}, at 4096 and 32768 slots, with input lengths of k, 2k, 4k and up
+to the slot count, and each end level from the minimum to 32. In 48 shapes, the
+copy count changes with the end level. Some examples at 4096 slots:
+
+| Shape | Copies |
+|-------|--------|
+| `MaxPool1d(16)` on 16 to 256 values | 4 at end level 11 to 13, 16 from 14 |
+| `MaxPool1d(32)` on 32 to 128 values | 4 at end level 11 to 16, 32 from 17 |
+| `MaxPool1d(64)` on 64 to 512 values | 8 at end level 12 to 13, 4 from 14 |
+| `MaxPool1d(64)` on 1024 values | 1 at end level 13, 4 from 14 |
+
+The copy count is not monotonic in the end level: for `MaxPool1d(64)` on 64
+values, it goes from 8 down to 4.
+
+In 46 of the 48 shapes, the level drop and the minimum input level do not
+change. In 2 shapes they change: `MaxPool1d(64)` on 1024 of 4096 slots, and on
+8192 of 32768 slots:
+
+| End level | Copies | Gather stages | Level drop | Minimum input level |
+|-----------|--------|---------------|------------|---------------------|
+| 13 | 1 | 1 | 4 | 8 |
+| 14 or more | 4 | 3 | 6 | 10 |
+
+The fold of small windows (padded window below 8) did not change in our tests.
+These windows stay at one copy, so the cap of R2 always applies to them.
+
+**HEIR workaround.** HEIR can call `PlanMaxPoolLayout` and
+`MaxPoolTryPlanLevels` for each end level from the minimum end level to 32,
+and take the largest level drop and the largest minimum input level. The
+generated code then pins `output_level = input_level - D`. For the shape in
+the table, the pin with `D = 6` is accepted at each end level from 13 to 20
+and each input level from 10 to the end level. At end level 13 the pin is a
+free level-down of 2. This workaround costs one level for these shapes at end
+level 13, and a search over the end levels in HEIR.
+
+**Request.** Make the copy count a function of the configuration only. Two
+options are good for HEIR:
+
+1. A configuration field that sets the copy count, or that disables the fold
+   (copy count `MaxPoolRequiredCopies(config)`). This can be the same field as
+   in R2.
+2. Select the copy count at the minimum end level of the configuration (R3b),
+   and use the same count at each higher end level.
+
+With either option, HEIR removes its search over the end levels. With option
+2, `MaxPoolMinimumBootstrapEndLevel` must agree with the selected copy count.
+
+**HEIR status.** HEIR uses the workaround above: it takes the largest level
+drop and the largest minimum input level over the end levels from the minimum
+to 32, and pins the output level in the key planner and in the generated code.
+A request for option 1 or 2 is still open.
+
+## Architecture review for the next session
+
+Saved on 2026-10-05 for the session on 2026-10-06. These are proposed changes,
+not completed work or approval to implement them.
+
+The main proposal is one complete CPU plan in Cyclops. HEIR consumes a small
+requirements summary. Keep the Cyclops adapter in `lib/Target/Cheddar`.
+
+- Export `level_consumption`, `minimum_input_level`, and
+  `bootstrap_end_level_floor` together. Define the floor as a threshold above
+  which all higher bootstrap end levels satisfy the algorithm's level requirements.
+- Keep two steps: analyze the configuration before parameter selection, then
+  assign exact levels after parameter selection. Share the rules between both steps.
+- Include every intermediate level in the concrete plan: league, selector,
+  masks, and selection stages. Key generation and GPU compilation consume this plan.
+- Make the execution policy explicit. HEIR needs a constant level drop for
+  valid input levels. Remove conditional cap detection after the pinned Cyclops
+  revision supports that policy.
+- Replace HEIR's search through exceptions and its fixed bootstrap level of
+  11 with the requirements query. The earlier standalone formula is only a
+  proposal; it does not verify every runtime requirement.
+- Keep generic IR verification separate from Cyclops support checks. Validate
+  target support before level analysis. Report a compiler diagnostic for an
+  unsupported configuration instead of `report_fatal_error`.
+- Keep any cached analysis within one compilation. Invalidate it when the
+  configuration changes.
+- Use a separate output buffer until Cyclops supports input/output aliasing
+  across multiple chains.
+- Later, move GPU compilation into server preprocessing. Retain the compiled
+  object with its context, configuration, level, scale, and policy.
+
+Suggested implementation order:
+
+1. Extract the complete CPU level plan from the Cyclops runtime checks.
+2. Make key generation and GPU compilation consume the plan.
+3. Export the requirements and remove HEIR's level search and fixed threshold.
+4. Move GPU compilation into preprocessing after the correctness tests pass.
+
+Tests must compare planner acceptance with runtime compilation at the selected
+boundaries. Execute with exactly the planned keys. Include pools with multiple chains.
+
+Resume from `lib/Target/Cheddar/MaxPoolPlan.cpp` and
+`lib/Target/Cheddar/MaxPoolInterfaces.cpp`. The Cyclops checkout is
+`/volume2/mdesgros/cyclops-dev/review`. Check both checkout revisions before work.

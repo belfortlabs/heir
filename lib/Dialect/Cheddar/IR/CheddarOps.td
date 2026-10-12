@@ -877,8 +877,8 @@ def Cheddar_MaxPoolOp : Cheddar_DpsOp<"max_pool"> {
   let description = [{
     Calls Cyclops' `MaxPool<word>::EvaluateMax` (Cyclops runtime only) with a
     `MaxPoolConfig` built from the attributes, compact output, a padding value
-    of `-value_bound` and no league level cap. See `kernel.max_pool` for the
-    semantics.
+    of `-value_bound` and the output level pinned to `level -
+    levelConsumption`. See `kernel.max_pool` for the semantics.
 
     The kernel bootstraps its comparisons, so it requires a
     `!cheddar.boot_context`. `level` is the input level, and
