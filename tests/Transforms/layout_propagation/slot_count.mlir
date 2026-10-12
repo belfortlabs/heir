@@ -41,9 +41,9 @@ func.func @conv2d_nchw_strided(%arg0: !secret.secret<tensor<1x3x32x32xf32>>) -> 
 
 // -----
 
-// A kernel that fits in min-slot-count leaves the slot count alone.
+// A kernel that fits in min-slot-count leaves the slot count at the option.
 
-// CHECK-NOT: scheme.layout_slot_count
+// CHECK: module attributes {scheme.layout_slot_count = 1024 : i64}
 // CHECK: @small_matvec
 func.func @small_matvec(%arg0: !secret.secret<tensor<16xf32>>) -> !secret.secret<tensor<4xf32>> {
   %cst = arith.constant dense<0.0> : tensor<4xf32>
@@ -51,6 +51,40 @@ func.func @small_matvec(%arg0: !secret.secret<tensor<16xf32>>) -> !secret.secret
   %0 = secret.generic(%arg0 : !secret.secret<tensor<16xf32>>) {
   ^body(%input0: tensor<16xf32>):
     %1 = linalg.matvec ins(%matrix, %input0 : tensor<4x16xf32>, tensor<16xf32>) outs(%cst : tensor<4xf32>) -> tensor<4xf32>
+    secret.yield %1 : tensor<4xf32>
+  } -> !secret.secret<tensor<4xf32>>
+  return %0 : !secret.secret<tensor<4xf32>>
+}
+
+// -----
+
+// The first matvec needs 2048 slots and the second 4096, so propagation
+// restarts twice and packs both kernels for 4096 slots.
+
+// CHECK-NOT: slot <= {{(1023|2047)}}
+// CHECK: module attributes {scheme.layout_slot_count = 4096 : i64}
+// CHECK: @first_matvec
+// CHECK-NOT: slot <= {{(1023|2047)}}
+// CHECK: @second_matvec
+// CHECK-NOT: slot <= {{(1023|2047)}}
+// CHECK: return
+func.func @first_matvec(%arg0: !secret.secret<tensor<1500xf32>>) -> !secret.secret<tensor<4xf32>> {
+  %cst = arith.constant dense<0.0> : tensor<4xf32>
+  %matrix = arith.constant dense<1.0> : tensor<4x1500xf32>
+  %0 = secret.generic(%arg0 : !secret.secret<tensor<1500xf32>>) {
+  ^body(%input0: tensor<1500xf32>):
+    %1 = linalg.matvec ins(%matrix, %input0 : tensor<4x1500xf32>, tensor<1500xf32>) outs(%cst : tensor<4xf32>) -> tensor<4xf32>
+    secret.yield %1 : tensor<4xf32>
+  } -> !secret.secret<tensor<4xf32>>
+  return %0 : !secret.secret<tensor<4xf32>>
+}
+
+func.func @second_matvec(%arg0: !secret.secret<tensor<3000xf32>>) -> !secret.secret<tensor<4xf32>> {
+  %cst = arith.constant dense<0.0> : tensor<4xf32>
+  %matrix = arith.constant dense<1.0> : tensor<4x3000xf32>
+  %0 = secret.generic(%arg0 : !secret.secret<tensor<3000xf32>>) {
+  ^body(%input0: tensor<3000xf32>):
+    %1 = linalg.matvec ins(%matrix, %input0 : tensor<4x3000xf32>, tensor<3000xf32>) outs(%cst : tensor<4xf32>) -> tensor<4xf32>
     secret.yield %1 : tensor<4xf32>
   } -> !secret.secret<tensor<4xf32>>
   return %0 : !secret.secret<tensor<4xf32>>
