@@ -2819,17 +2819,17 @@ class ConvertTensorExtractSlice
     sourceRel.compose(extractSliceLayout.value());
     sourceRel.compose(resultRel);
 
-    LayoutAttr sliceLayoutAttr =
+    LayoutAttr remapLayoutAttr =
         LayoutAttr::getFromIntegerRelation(ctx, sourceRel);
     auto resultCiphertextSemanticType = cast<RankedTensorType>(
         getTypeConverter()->convertType(op.getResultType(), resultLayout));
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);
     auto remapAndExtract = remapAndExtractResult(
-        b, adaptor.getSource(), sliceLayoutAttr, resultCiphertextSemanticType);
+        b, adaptor.getSource(), remapLayoutAttr, resultCiphertextSemanticType);
 
     setMaterializedAttr(remapAndExtract);
     setAttributeAssociatedWith(remapAndExtract->getResult(0), kLayoutAttrName,
-                               sliceLayoutAttr);
+                               resultLayout);
     rewriter.replaceOp(op, remapAndExtract->getResult(0));
     return success();
   }
@@ -3486,6 +3486,17 @@ struct ConvertToCiphertextSemantics
   void runOnOperation() override {
     MLIRContext* context = &getContext();
     auto* module = getOperation();
+
+    // There is no pattern for a secret vecmat below, and the generic
+    // conversion would only retype its operands into an invalid op.
+    WalkResult vecmatResult = module->walk([&](linalg::VecmatOp op) {
+      if (!op->hasAttr(kLayoutAttrName)) return WalkResult::advance();
+      op.emitError() << "a secret linalg.vecmat has no ciphertext lowering; "
+                        "linalg-canonicalizations rewrites it as a "
+                        "linalg.matvec";
+      return WalkResult::interrupt();
+    });
+    if (vecmatResult.wasInterrupted()) return signalPassFailure();
 
     int64_t ctSize = minSlotCount;
     LayoutMaterializationTypeConverter typeConverter =

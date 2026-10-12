@@ -1,15 +1,17 @@
-"""Checks that HEIR's copy of cyclops_planner.h matches the stub and Cyclops.
+"""Checks that HEIR's copy of cyclops_planner.h matches Cyclops'.
 
-header_check.py HEADER --stub planner_stub.cc
-  every function the header declares is defined in the stub (the stub
-  includes the header, so the compiler already checks their signatures)
-header_check.py HEADER --cyclops CYCLOPS_HEADER
-  the copy declares Cyclops' functions with the same signatures, its
-  constants have Cyclops' values, and its structs Cyclops' fields
+python3 bazel/cyclops/header_check.py CYCLOPS_DIR
+
+CYCLOPS_DIR is a Cyclops checkout or an unpacked Cyclops release. The copy must
+declare Cyclops' functions with the same signatures, its constants must have
+Cyclops' values, and its structs Cyclops' fields.
 """
 
 import re
 import sys
+from pathlib import Path
+
+HEADER = Path(__file__).with_name("cyclops_planner.h")
 
 
 def normalize(text):
@@ -51,14 +53,6 @@ def structs(header):
   }
 
 
-def check_stub(header, stub):
-  defined = set(re.findall(r"^[\w ]+?\*? ?(cyclops_\w+)\(", stub, re.M))
-  return [
-      f"{name} is declared but the stub does not define it"
-      for name in sorted(functions(header).keys() - defined)
-  ]
-
-
 def check_cyclops(header, cyclops):
   errors = []
   ours, theirs = functions(header), functions(cyclops)
@@ -83,13 +77,17 @@ def check_cyclops(header, cyclops):
 
 
 def main(argv):
-  header_path, mode, other_path = argv[1:]
-  with open(header_path) as f:
-    header = f.read()
-  with open(other_path) as f:
-    other = f.read()
-  check = check_stub if mode == "--stub" else check_cyclops
-  errors = check(header, other)
+  (cyclops_dir,) = argv[1:]
+  candidates = [
+      Path(cyclops_dir, "planner/include/cyclops_planner.h"),
+      Path(cyclops_dir, "include/cyclops_planner.h"),
+  ]
+  cyclops_header = next((path for path in candidates if path.exists()), None)
+  if cyclops_header is None:
+    print(f"no cyclops_planner.h in {cyclops_dir}")
+    return 1
+  header = HEADER.read_text()
+  errors = check_cyclops(header, cyclops_header.read_text())
   if not functions(header):
     errors.append("no functions found in the header")
   for error in errors:

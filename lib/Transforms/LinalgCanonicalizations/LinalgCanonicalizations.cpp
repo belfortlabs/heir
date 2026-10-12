@@ -619,50 +619,41 @@ struct BroadcastToExpandShape
   }
 };
 
-struct RewriteTransposedVecmat
-    : public OpRewritePattern<mlir::linalg::VecmatOp> {
+// convert-to-ciphertext-semantics lowers linalg.matvec but not linalg.vecmat,
+// so rewrite every vecmat x * W as the matvec W^T * x. When W is itself a
+// transpose W = A^T, use A directly instead of transposing twice.
+struct RewriteVecmatAsMatvec : public OpRewritePattern<mlir::linalg::VecmatOp> {
  public:
-  RewriteTransposedVecmat(MLIRContext* context)
+  RewriteVecmatAsMatvec(MLIRContext* context)
       : OpRewritePattern<mlir::linalg::VecmatOp>(context) {}
 
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mlir::linalg::VecmatOp vecmatOp,
                                 PatternRewriter& rewriter) const override {
-    auto transposeOp =
-        vecmatOp.getInputs()[1].getDefiningOp<linalg::TransposeOp>();
-    if (!transposeOp)
-      return rewriter.notifyMatchFailure(
-          vecmatOp, "second input to vecmat must be a transpose op");
+    Value vector = vecmatOp.getInputs()[0];
+    Value matrix = vecmatOp.getInputs()[1];
+
+    Value transposedMatrix;
+    auto transposeOp = matrix.getDefiningOp<linalg::TransposeOp>();
+    if (transposeOp &&
+        transposeOp.getPermutation() == ArrayRef<int64_t>{1, 0}) {
+      transposedMatrix = transposeOp.getInput();
+    } else {
+      auto matrixType = cast<RankedTensorType>(matrix.getType());
+      auto emptyOp = tensor::EmptyOp::create(
+          rewriter, vecmatOp.getLoc(),
+          {matrixType.getDimSize(1), matrixType.getDimSize(0)},
+          matrixType.getElementType());
+      transposedMatrix = linalg::TransposeOp::create(
+                             rewriter, vecmatOp.getLoc(), matrix,
+                             emptyOp.getResult(), ArrayRef<int64_t>{1, 0})
+                             .getResult()[0];
+    }
 
     rewriter.replaceOpWithNewOp<linalg::MatvecOp>(
         vecmatOp, vecmatOp.getResultTypes()[0],
-        ValueRange{transposeOp.getInput(), vecmatOp.getInputs()[0]},
-        vecmatOp.getDpsInits()[0]);
-    return success();
-  }
-};
-
-struct RewriteTransposedMatvec
-    : public OpRewritePattern<mlir::linalg::MatvecOp> {
- public:
-  RewriteTransposedMatvec(MLIRContext* context)
-      : OpRewritePattern<mlir::linalg::MatvecOp>(context) {}
-
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(mlir::linalg::MatvecOp matvecOp,
-                                PatternRewriter& rewriter) const override {
-    auto transposeOp =
-        matvecOp.getInputs()[0].getDefiningOp<linalg::TransposeOp>();
-    if (!transposeOp)
-      return rewriter.notifyMatchFailure(
-          matvecOp, "first input to matvec must be a transpose op");
-
-    rewriter.replaceOpWithNewOp<linalg::VecmatOp>(
-        matvecOp, matvecOp.getResultTypes()[0],
-        ValueRange{matvecOp.getInputs()[1], transposeOp.getInput()},
-        matvecOp.getDpsInits()[0]);
+        ValueRange{transposedMatrix, vector}, vecmatOp.getDpsInits()[0]);
     return success();
   }
 };
@@ -1401,19 +1392,71 @@ struct UndilateConv2DNchwFchw
   }
 };
 
+// Torch exports constants as dense resources, which the arith and math folders
+// do not read. Inline them so that e.g. a BatchNorm's rsqrt(var + eps) folds.
+// Operands of contractions, convolutions and transposes stay resources:
+// assign_layout folds resources of any size into packed constants but packs
+// large dense constants on the client.
+static void inlineResourceConstants(Operation* root) {
+  root->walk([](arith::ConstantOp op) {
+    auto resourceAttr = dyn_cast<DenseResourceElementsAttr>(op.getValue());
+    if (!resourceAttr) return;
+    if (llvm::any_of(op->getUsers(), [](Operation* user) {
+          if (isa<linalg::TransposeOp>(user)) return true;
+          auto linalgOp = dyn_cast<linalg::LinalgOp>(user);
+          return linalgOp && (linalg::isaContractionOpInterface(linalgOp) ||
+                              linalg::isaConvolutionOpInterface(linalgOp));
+        }))
+      return;
+    ShapedType type = resourceAttr.getType();
+    if (!type.hasStaticShape() || !type.getElementType().isIntOrFloat()) return;
+    ArrayRef<char> data = resourceAttr.getData();
+    if (data.empty()) return;
+    op.setValueAttr(DenseElementsAttr::getFromRawBuffer(type, data));
+  });
+}
+
+// arith.truncf only folds when the truncation is exact, so the f64 epsilon of a
+// BatchNorm (e.g. 1e-5) stays a runtime truncf and blocks folding
+// rsqrt(var + eps). Fold it with round-to-nearest-even.
+struct FoldConstantTruncF : public OpRewritePattern<arith::TruncFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::TruncFOp op,
+                                PatternRewriter& rewriter) const override {
+    DenseFPElementsAttr input;
+    if (!matchPattern(op.getIn(), m_Constant(&input))) return failure();
+    auto resultType = dyn_cast<RankedTensorType>(op.getType());
+    if (!resultType) return failure();
+    const llvm::fltSemantics& semantics =
+        cast<FloatType>(resultType.getElementType()).getFloatSemantics();
+    auto truncated =
+        input.mapValues(resultType.getElementType(), [&](const APFloat& value) {
+          APFloat result = value;
+          bool losesInfo;
+          result.convert(semantics, APFloat::rmNearestTiesToEven, &losesInfo);
+          return result.bitcastToAPInt();
+        });
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, resultType, truncated);
+    return success();
+  }
+};
+
 struct LinalgCanonicalizations
     : public impl::LinalgCanonicalizationsBase<LinalgCanonicalizations> {
   void runOnOperation() override {
     MLIRContext* context = &getContext();
     auto* module = getOperation();
 
+    inlineResourceConstants(module);
+
     RewritePatternSet patterns(context);
     patterns.add<
         BroadcastToExpandShape, DropCfAssertInLinalg, FoldBroadcastExtractSlice,
         FoldConstantBroadcast, FoldConstantFill, FoldConstantLinalgTranspose,
-        FuseConv2DPooling, LinalgGenericToElementwise, LinalgMapToElementwise,
-        MaterializeBroadcasts, RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D,
-        RewriteTransposedMatvec, RewriteTransposedVecmat, UndilateConv1DNcwFcw,
+        FoldConstantTruncF, FuseConv2DPooling, LinalgGenericToElementwise,
+        LinalgMapToElementwise, MaterializeBroadcasts, RewriteAvgPoolAsConv1D,
+        RewriteAvgPoolAsConv2D, RewriteVecmatAsMatvec, UndilateConv1DNcwFcw,
         UndilateConv2DNchwFchw>(context);
 
     mlir::linalg::populateDecomposeProjectedPermutationPatterns(patterns);
