@@ -3487,6 +3487,17 @@ struct ConvertToCiphertextSemantics
     MLIRContext* context = &getContext();
     auto* module = getOperation();
 
+    // There is no pattern for a secret vecmat below, and the generic
+    // conversion would only retype its operands into an invalid op.
+    WalkResult vecmatResult = module->walk([&](linalg::VecmatOp op) {
+      if (!op->hasAttr(kLayoutAttrName)) return WalkResult::advance();
+      op.emitError() << "a secret linalg.vecmat has no ciphertext lowering; "
+                        "linalg-canonicalizations rewrites it as a "
+                        "linalg.matvec";
+      return WalkResult::interrupt();
+    });
+    if (vecmatResult.wasInterrupted()) return signalPassFailure();
+
     int64_t ctSize = minSlotCount;
     LayoutMaterializationTypeConverter typeConverter =
         LayoutMaterializationTypeConverter(ctSize);
