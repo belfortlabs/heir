@@ -2660,12 +2660,12 @@ void LayoutPropagation::setResultLayoutAttr(Operation* op,
 
 LogicalResult LayoutPropagation::requireSlots(Operation* op, int64_t slots) {
   if (slots <= minSlotCount) return success();
-  if (maxSlotCount > 0 && slots > maxSlotCount) {
+  int64_t needed = llvm::PowerOf2Ceil(slots);
+  if (maxSlotCount > 0 && needed > maxSlotCount) {
     return op->emitOpError() << "needs " << slots
                              << " slots, but the backend's largest ring degree "
                              << maxRingDegree << " holds " << maxSlotCount;
   }
-  int64_t needed = llvm::PowerOf2Ceil(slots);
   requiredSlotCount = std::max(requiredSlotCount, needed);
   return failure();
 }
