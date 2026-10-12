@@ -23,6 +23,7 @@
 #include "lib/Dialect/TensorExt/IR/TensorExtAttributes.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
+#include "lib/Dialect/TensorExt/Transforms/ImplementRotateAndReduce.h"
 #include "lib/Kernel/AbstractValue.h"
 #include "lib/Kernel/ArithmeticDag.h"
 #include "lib/Kernel/IRMaterializingVisitor.h"
@@ -62,20 +63,22 @@
 #include "mlir/include/mlir/Dialect/Utils/StaticValueUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/AffineExpr.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/AffineMap.h"              // from @llvm-project
+#include "mlir/include/mlir/IR/AsmState.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/Attributes.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinOps.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
-#include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
-#include "mlir/include/mlir/IR/OpDefinition.h"           // from @llvm-project
-#include "mlir/include/mlir/IR/OperationSupport.h"       // from @llvm-project
-#include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
-#include "mlir/include/mlir/IR/TypeUtilities.h"          // from @llvm-project
-#include "mlir/include/mlir/IR/Value.h"                  // from @llvm-project
-#include "mlir/include/mlir/Support/LLVM.h"              // from @llvm-project
-#include "mlir/include/mlir/Support/LogicalResult.h"     // from @llvm-project
+#include "mlir/include/mlir/IR/DialectResourceBlobManager.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/Matchers.h"            // from @llvm-project
+#include "mlir/include/mlir/IR/OpDefinition.h"        // from @llvm-project
+#include "mlir/include/mlir/IR/OperationSupport.h"    // from @llvm-project
+#include "mlir/include/mlir/IR/PatternMatch.h"        // from @llvm-project
+#include "mlir/include/mlir/IR/TypeUtilities.h"       // from @llvm-project
+#include "mlir/include/mlir/IR/Value.h"               // from @llvm-project
+#include "mlir/include/mlir/Support/LLVM.h"           // from @llvm-project
+#include "mlir/include/mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/include/mlir/Transforms/DialectConversion.h"  // from @llvm-project
 #include "mlir/include/mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
 
@@ -785,6 +788,59 @@ class ConvertLinalgReduce : public ConversionBase<linalg::ReduceOp> {
   }
 };
 
+// Attributes on a packed constant with several consumers: the gathered
+// diagonals, their row indices, and the number of consumers not yet converted.
+// Later consumers reuse the gathered diagonals, so the full matrix is freed
+// after the first.
+constexpr StringLiteral kGatheredDiagonalsAttr =
+    "tensor_ext.gathered_diagonals";
+constexpr StringLiteral kGatheredRemainingAttr =
+    "tensor_ext.gathered_remaining";
+constexpr StringLiteral kGatheredRowsAttr = "tensor_ext.gathered_rows";
+
+// Zero rows (diagonals) of the packed matrix. A constant's rows are read from
+// its data, which also catches diagonals that are zero by value; otherwise the
+// rows the layout leaves empty are enumerated.
+static std::map<int, bool> getZeroDiagonals(
+    Value matrix, const presburger::IntegerRelation& layout) {
+  std::map<int, bool> zeroDiagonals;
+  auto type = cast<RankedTensorType>(matrix.getType());
+  int64_t numRows = type.getDimSize(0);
+  ArrayRef<char> raw;
+  if (auto constantOp = matrix.getDefiningOp<arith::ConstantOp>()) {
+    // Gathered for an earlier consumer, which may have freed the data.
+    if (auto rows =
+            constantOp->getAttrOfType<DenseI64ArrayAttr>(kGatheredRowsAttr)) {
+      for (int64_t row = 0; row < numRows; ++row) zeroDiagonals[row] = true;
+      for (int64_t row : rows.asArrayRef()) zeroDiagonals.erase(row);
+      return zeroDiagonals;
+    }
+    if (auto resource =
+            dyn_cast<DenseResourceElementsAttr>(constantOp.getValue())) {
+      raw = resource.getData();
+    } else if (auto dense = dyn_cast<DenseElementsAttr>(constantOp.getValue());
+               dense && !dense.isSplat()) {
+      raw = dense.getRawData();
+    }
+  }
+  bool byteAligned = type.getElementType().isIntOrFloat() &&
+                     type.getElementTypeBitWidth() % 8 == 0;
+  if (!raw.empty() && byteAligned && numRows > 0 &&
+      static_cast<int64_t>(raw.size()) % numRows == 0) {
+    size_t rowBytes = raw.size() / numRows;
+    for (int64_t row = 0; row < numRows; ++row) {
+      ArrayRef<char> bytes = raw.slice(row * rowBytes, rowBytes);
+      if (llvm::all_of(bytes, [](char c) { return c == 0; }))
+        zeroDiagonals[row] = true;
+    }
+    return zeroDiagonals;
+  }
+  PointCollector collector;
+  getCtComplementPoints(layout, collector, type);
+  for (const auto& point : collector.points) zeroDiagonals[point[0]] = true;
+  return zeroDiagonals;
+}
+
 struct ConvertLinalgDot : public ConversionBase<linalg::DotOp> {
  public:
   using ConversionBase<linalg::DotOp>::ConversionBase;
@@ -972,10 +1028,10 @@ class ConvertLinalgTranspose
     return success();
   }
 };
-static Value emitCompactLinearTransform(
+static FailureOr<Value> emitCompactLinearTransform(
     ContextAwareConversionPatternRewriter& rewriter, Location loc,
     TypedValue<RankedTensorType> input, TypedValue<RankedTensorType> matrix,
-    ArrayRef<int64_t> matrixShape, Attribute layoutAttr,
+    Value originalMatrix, ArrayRef<int64_t> matrixShape, Attribute layoutAttr,
     const std::map<int, bool>& zeroDiagonals);
 
 struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
@@ -995,7 +1051,7 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
     return kernelAttr && kernelAttr.getName() == KernelName::MatvecDiagonal;
   }
 
-  void haleviShoupKernel(
+  LogicalResult haleviShoupKernel(
       linalg::MatvecOp op, OpAdaptor adaptor,
       ContextAwareConversionPatternRewriter& rewriter) const {
     LLVM_DEBUG(llvm::dbgs()
@@ -1012,12 +1068,8 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
     LayoutAttr matrixLayout = getLayoutAttr(matrix);
     auto matrixRelation = matrixLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(matrixRelation, collector, matrix.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(matrix, matrixRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << matrix << "\n");
@@ -1028,13 +1080,14 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
     Attribute resultLayout = op->getAttr(kLayoutAttrName);
     if (resultLayout && succeeded(target) &&
         target->has_kernel_linear_transform) {
-      Value compact = emitCompactLinearTransform(
-          rewriter, op.getLoc(), input, matrix,
+      FailureOr<Value> compact = emitCompactLinearTransform(
+          rewriter, op.getLoc(), input, matrix, op.getInputs()[0],
           cast<RankedTensorType>(op.getInputs()[0].getType()).getShape(),
           resultLayout, zeroDiagonals);
-      addBiasAndReplace(rewriter, op, compact, adaptor.getOutputs()[0],
+      if (failed(compact)) return failure();
+      addBiasAndReplace(rewriter, op, *compact, adaptor.getOutputs()[0],
                         resultLayout);
-      return;
+      return success();
     }
 
     auto dagType = kernel::mlirTypeToDagType(input.getType());
@@ -1055,6 +1108,7 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
     // Add the initial accumulator value.
     Value result = adaptor.getOutputs()[0];
     addBiasAndReplace(rewriter, op, finalOutput, result, layoutAttr);
+    return success();
   }
 
   LogicalResult matchAndRewrite(
@@ -1070,8 +1124,7 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
           op, "missing new layout attribute for matrix and vector");
 
     if (supportsHaleviShoup(op, adaptor)) {
-      haleviShoupKernel(op, adaptor, rewriter);
-      return success();
+      return haleviShoupKernel(op, adaptor, rewriter);
     }
 
     // TODO(#1589): implement row-major naive matvec kernel
@@ -1252,6 +1305,31 @@ struct PreserveLinalgMatvecAsLinearTransform
   }
 };
 
+// Number of users of `originalMatrix` when it is an assign_layout result whose
+// users all take the compact path; otherwise 0. This assumes every user of
+// these op types takes the compact path when the backend evaluates linear
+// transforms directly.
+static unsigned numPackingConsumers(Value originalMatrix) {
+  if (!originalMatrix.getDefiningOp<tensor_ext::AssignLayoutOp>()) return 0;
+  if (!llvm::all_of(originalMatrix.getUsers(), [](Operation* user) {
+        return isa<linalg::MatvecOp, linalg::Conv1DNcwFcwOp,
+                   linalg::Conv2DNchwFchwOp>(user);
+      }))
+    return 0;
+  return llvm::range_size(originalMatrix.getUsers());
+}
+
+// Drops the data of the packed constant that folding an assign_layout created;
+// the blob manager would otherwise keep it until the context is destroyed.
+// Callers cache the gathered rows first for any remaining consumers.
+static void releaseFoldedMatrix(arith::ConstantOp packed) {
+  auto resource = dyn_cast<DenseResourceElementsAttr>(packed.getValue());
+  if (!resource || !resource.getRawHandle().getKey().contains("_packed"))
+    return;
+  if (auto* entry = resource.getRawHandle().getResource())
+    entry->setBlob(AsmResourceBlob());
+}
+
 // Emits the Halevi-Shoup transform as a compact rotate_and_reduce carrying the
 // diagonals, rather than expanding it into a rotate/multiply/accumulate DAG.
 // The op is marked as a linear transform so implement-rotate-and-reduce leaves
@@ -1262,10 +1340,10 @@ struct PreserveLinalgMatvecAsLinearTransform
 //
 // A squat packing (rows < cols) still needs the partial-rotate-and-reduce
 // afterwards, mirroring implementHaleviShoup.
-static Value emitCompactLinearTransform(
+static FailureOr<Value> emitCompactLinearTransform(
     ContextAwareConversionPatternRewriter& rewriter, Location loc,
     TypedValue<RankedTensorType> input, TypedValue<RankedTensorType> matrix,
-    ArrayRef<int64_t> matrixShape, Attribute layoutAttr,
+    Value originalMatrix, ArrayRef<int64_t> matrixShape, Attribute layoutAttr,
     const std::map<int, bool>& zeroDiagonals) {
   int64_t numDiagonals = matrix.getType().getShape()[0];
 
@@ -1278,9 +1356,66 @@ static Value emitCompactLinearTransform(
     nonzeroIndices.clear();
   }
 
+  // Gather the nonzero diagonals of a constant matrix here so the full packed
+  // matrix can be freed; implement-rotate-and-reduce would otherwise gather
+  // them later.
+  Value plaintexts = matrix;
+  auto packedOp = matrix.getDefiningOp<arith::ConstantOp>();
+  if (!nonzeroIndices.empty()) {
+    SmallVector<int64_t> rows(nonzeroIndices.begin(), nonzeroIndices.end());
+    auto compactType = RankedTensorType::get(
+        {static_cast<int64_t>(rows.size()), matrix.getType().getDimSize(1)},
+        matrix.getType().getElementType());
+    TypedAttr gathered;
+    if (packedOp) {
+      auto cached = packedOp->getAttrOfType<TypedAttr>(kGatheredDiagonalsAttr);
+      if (cached && cached.getType() == compactType) gathered = cached;
+    }
+    if (!gathered)
+      gathered = tensor_ext::gatherRowsIfConstant(matrix, compactType, rows);
+    if (gathered) {
+      auto gatheredOp = arith::ConstantOp::create(rewriter, loc, gathered);
+      setMaterializedAttr(gatheredOp);
+      plaintexts = gatheredOp.getResult();
+      // The consumer count is read on the first consumer only; later ones
+      // decrement the stored remainder.
+      std::optional<int64_t> remaining;
+      if (packedOp) {
+        if (auto remainingAttr =
+                packedOp->getAttrOfType<IntegerAttr>(kGatheredRemainingAttr))
+          remaining = remainingAttr.getInt() - 1;
+        else if (unsigned consumers = numPackingConsumers(originalMatrix))
+          remaining = static_cast<int64_t>(consumers) - 1;
+      }
+      if (remaining) {
+        if (*remaining > 0) {
+          packedOp->setAttr(kGatheredDiagonalsAttr, gathered);
+          packedOp->setAttr(kGatheredRowsAttr,
+                            rewriter.getDenseI64ArrayAttr(rows));
+          packedOp->setAttr(kGatheredRemainingAttr,
+                            rewriter.getI64IntegerAttr(*remaining));
+        } else {
+          packedOp->removeAttr(kGatheredDiagonalsAttr);
+          packedOp->removeAttr(kGatheredRowsAttr);
+          packedOp->removeAttr(kGatheredRemainingAttr);
+        }
+        releaseFoldedMatrix(packedOp);
+      }
+    }
+  }
+  if (plaintexts == matrix && packedOp) {
+    auto resource = dyn_cast<DenseResourceElementsAttr>(packedOp.getValue());
+    AsmResourceBlob* blob =
+        resource ? resource.getRawHandle().getBlob() : nullptr;
+    if (blob && blob->getData().empty())
+      return emitError(loc)
+             << "the data of packed matrix " << resource.getRawHandle().getKey()
+             << " was freed before this consumer read it";
+  }
+
   bool isFloat = isa<FloatType>(input.getType().getElementType());
   auto rar = tensor_ext::RotateAndReduceOp::create(
-      rewriter, loc, input, matrix, /*period=*/int64_t{1},
+      rewriter, loc, input, plaintexts, /*period=*/int64_t{1},
       /*steps=*/numDiagonals,
       /*reduceOp=*/llvm::StringRef(isFloat ? "arith.addf" : "arith.addi"));
   rar->setAttr(tensor_ext::TensorExtDialect::kLintransAttrName,
@@ -1373,12 +1508,8 @@ struct ConvertLinalgConv1D : public ConversionBase<linalg::Conv1DOp> {
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
     auto filterRelation = filterLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(filterRelation, collector, filter.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(filter, filterRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << filter << "\n");
@@ -1484,12 +1615,8 @@ struct ConvertLinalgConv2D : public ConversionBase<linalg::Conv2DOp> {
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
     auto filterRelation = filterLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(filterRelation, collector, matrix.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(matrix, filterRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << matrix << "\n");
@@ -1623,12 +1750,8 @@ struct ConvertLinalgConv1DNcwFcw
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
     auto filterRelation = filterLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(filterRelation, collector, matrix.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(matrix, filterRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << matrix << "\n");
@@ -1647,10 +1770,11 @@ struct ConvertLinalgConv1DNcwFcw
     auto target = getTargetConfig(op->getParentOfType<ModuleOp>());
     if (resultLayout && succeeded(target) &&
         target->has_kernel_linear_transform) {
-      Value compact = emitCompactLinearTransform(rewriter, op.getLoc(), data,
-                                                 matrix, matrixShapeForLayout,
-                                                 resultLayout, zeroDiagonals);
-      addBiasAndReplace(rewriter, op, compact, adaptor.getOutputs()[0],
+      FailureOr<Value> compact = emitCompactLinearTransform(
+          rewriter, op.getLoc(), data, matrix, op.getInputs()[1],
+          matrixShapeForLayout, resultLayout, zeroDiagonals);
+      if (failed(compact)) return failure();
+      addBiasAndReplace(rewriter, op, *compact, adaptor.getOutputs()[0],
                         resultLayout);
       return success();
     }
@@ -1788,12 +1912,8 @@ struct ConvertLinalgConv2DNchwFchw
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
     auto filterRelation = filterLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(filterRelation, collector, matrix.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(matrix, filterRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << matrix << "\n");
@@ -1811,10 +1931,11 @@ struct ConvertLinalgConv2DNchwFchw
     auto target = getTargetConfig(op->getParentOfType<ModuleOp>());
     if (resultLayout && succeeded(target) &&
         target->has_kernel_linear_transform) {
-      Value compact = emitCompactLinearTransform(rewriter, op.getLoc(), data,
-                                                 matrix, matrixShapeForLayout,
-                                                 resultLayout, zeroDiagonals);
-      addBiasAndReplace(rewriter, op, compact, adaptor.getOutputs()[0],
+      FailureOr<Value> compact = emitCompactLinearTransform(
+          rewriter, op.getLoc(), data, matrix, op.getInputs()[1],
+          matrixShapeForLayout, resultLayout, zeroDiagonals);
+      if (failed(compact)) return failure();
+      addBiasAndReplace(rewriter, op, *compact, adaptor.getOutputs()[0],
                         resultLayout);
       return success();
     }
@@ -3538,6 +3659,9 @@ struct ConvertToCiphertextSemantics
       signalPassFailure();
     });
 
+    clearAttrs(module, kGatheredDiagonalsAttr);
+    clearAttrs(module, kGatheredRowsAttr);
+    clearAttrs(module, kGatheredRemainingAttr);
     clearAttrs(module, kLayoutAttrName);
     clearAttrs(module, kMaterializedAttrName);
   }
