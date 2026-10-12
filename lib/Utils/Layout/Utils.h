@@ -256,12 +256,14 @@ void forEachPointPair(
     llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair);
 
 // Call `onPoint(domainPoint, rangePoint)` for every point of the relation,
-// without ISL: candidates come from the constraints over earlier variables and
-// each is checked exactly. Fails without calling `onPoint` when the relation
-// has symbols, a local variable has no division representation, or a variable
-// has no bounds from constraints over earlier variables. Also fails after a
-// budget of complete candidates, after calling `onPoint` for the points
-// visited so far.
+// without enumerating with ISL: candidates come from the constraints over
+// earlier variables and each is checked exactly. When a local variable has no
+// division representation, ISL is asked for one (with a small effort budget),
+// which may split the relation into disjoint pieces. Fails without calling
+// `onPoint` when the relation has symbols, ISL finds no division
+// representations within its budget, or a variable has no bounds from
+// constraints over earlier variables. Also fails after a budget of complete
+// candidates, after calling `onPoint` for the points visited so far.
 LogicalResult forEachRelationPoint(
     const presburger::IntegerRelation& relation,
     llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint);

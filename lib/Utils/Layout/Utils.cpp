@@ -12,6 +12,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -34,6 +35,7 @@
 #include "include/isl/ctx.h"         // from @isl
 #include "include/isl/map.h"         // from @isl
 #include "include/isl/map_type.h"    // from @isl
+#include "include/isl/options.h"     // from @isl
 #include "include/isl/point.h"       // from @isl
 #include "include/isl/set.h"         // from @isl
 #include "include/isl/space.h"       // from @isl
@@ -1295,12 +1297,71 @@ class RelationPointEnumerator {
 
 }  // namespace
 
+// Bounds the isl operations spent finding division representations. Within
+// it, isl handles the layouts whose locals are merely implicit in tens of
+// milliseconds, and gives up within seconds on compositions it would spend
+// minutes on.
+static constexpr unsigned long kMaxIslDivisionOperations = 100000;
+
+// Rewrites `relation` as disjoint pieces whose locals all have division
+// representations, or fails if isl cannot within its operation budget.
+static FailureOr<std::vector<presburger::IntegerRelation>>
+withDivisionRepresentations(const presburger::IntegerRelation& relation) {
+  isl_ctx* ctx = isl_ctx_alloc();
+  isl_options_set_on_error(ctx, ISL_ON_ERROR_CONTINUE);
+  isl_map* map =
+      isl_map_from_basic_map(convertRelationToBasicMap(relation, ctx));
+  isl_ctx_reset_operations(ctx);
+  isl_ctx_set_max_operations(ctx, kMaxIslDivisionOperations);
+  map = isl_map_make_disjoint(isl_map_compute_divs(map));
+  isl_ctx_set_max_operations(ctx, 0);
+  bool computed = map != nullptr;
+  std::vector<std::string> pieces;
+  if (computed) {
+    isl_map_foreach_basic_map(
+        map,
+        [](__isl_take isl_basic_map* piece, void* user) {
+          char* str = isl_basic_map_to_str(piece);
+          static_cast<std::vector<std::string>*>(user)->push_back(str);
+          free(str);
+          isl_basic_map_free(piece);
+          return isl_stat_ok;
+        },
+        &pieces);
+    isl_map_free(map);
+  }
+  isl_ctx_free(ctx);
+  if (!computed) return failure();
+
+  std::vector<presburger::IntegerRelation> relations;
+  for (const std::string& piece : pieces) {
+    FailureOr<presburger::IntegerRelation> pieceRelation =
+        getIntegerRelationFromIslStr(piece);
+    if (failed(pieceRelation)) return failure();
+    relations.push_back(std::move(*pieceRelation));
+  }
+  return relations;
+}
+
 LogicalResult forEachRelationPoint(
     const presburger::IntegerRelation& relation,
     llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint) {
   RelationPointEnumerator enumerator(relation);
-  if (failed(enumerator.init())) return failure();
-  return enumerator.run(onPoint);
+  if (succeeded(enumerator.init())) return enumerator.run(onPoint);
+
+  if (relation.getNumSymbolVars() != 0) return failure();
+  FailureOr<std::vector<presburger::IntegerRelation>> pieces =
+      withDivisionRepresentations(relation);
+  if (failed(pieces)) return failure();
+  std::vector<RelationPointEnumerator> enumerators;
+  enumerators.reserve(pieces->size());
+  for (const presburger::IntegerRelation& piece : *pieces) {
+    enumerators.emplace_back(piece);
+    if (failed(enumerators.back().init())) return failure();
+  }
+  for (RelationPointEnumerator& pieceEnumerator : enumerators)
+    if (failed(pieceEnumerator.run(onPoint))) return failure();
+  return success();
 }
 
 LogicalResult forEachComposedRelationPoint(
