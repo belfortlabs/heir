@@ -24,6 +24,7 @@
 #include "lib/Utils/ADT/FrozenVector.h"
 #include "lib/Utils/Graph/Graph.h"
 #include "lib/Utils/Layout/Utils.h"
+#include "llvm/include/llvm/ADT/DenseMap.h"              // from @llvm-project
 #include "llvm/include/llvm/ADT/DenseSet.h"              // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"             // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"             // from @llvm-project
@@ -65,19 +66,21 @@ ShiftScheme VosVosErkinShiftNetworks::findShiftScheme(
   for (const auto& [roundNum, round] : llvm::enumerate(strategy.getRounds())) {
     if (roundNum == 0) continue;
 
-    auto posns = round.positions;
-    for (auto it1 = posns.begin(); it1 != posns.end(); ++it1) {
-      for (auto it2 = std::next(it1); it2 != posns.end(); ++it2) {
-        const SourceShift& ss1 = it1->first;
-        const SourceShift& ss2 = it2->first;
-        if (ss1.source != ss2.source && it1->second == it2->second) {
+    // Two sources conflict when they share a position in this round, so
+    // group the sources by position instead of comparing all pairs.
+    DenseMap<CtSlot, SmallVector<CtSlot>> sourcesAtPosition;
+    for (const auto& [ss, position] : round.positions)
+      sourcesAtPosition[position].push_back(ss.source);
+    for (const auto& [position, sources] : sourcesAtPosition) {
+      for (auto it1 = sources.begin(); it1 != sources.end(); ++it1) {
+        for (auto it2 = std::next(it1); it2 != sources.end(); ++it2) {
+          if (*it1 == *it2) continue;
           LLVM_DEBUG(llvm::dbgs()
                      << "Round " << roundNum << ": collision between " << "{"
-                     << ss1.source.ct << "," << ss1.source.slot << "}"
-                     << " and " << "{" << ss2.source.ct << ","
-                     << ss2.source.slot << "}" << " at " << "{"
-                     << it1->second.ct << "," << it1->second.slot << "}\n");
-          conflictGraph.addEdge(ss1.source, ss2.source);
+                     << it1->ct << "," << it1->slot << "}" << " and " << "{"
+                     << it2->ct << "," << it2->slot << "}" << " at " << "{"
+                     << position.ct << "," << position.slot << "}\n");
+          conflictGraph.addEdge(*it1, *it2);
         }
       }
     }
