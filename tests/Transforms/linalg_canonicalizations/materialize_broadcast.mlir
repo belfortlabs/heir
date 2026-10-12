@@ -110,3 +110,48 @@ func.func @broadcast_type_mismatch(%arg0: tensor<3xi32>, %arg1: tensor<3x16xf32>
   } -> tensor<3x16xf32>
   return %0 : tensor<3x16xf32>
 }
+
+// -----
+
+// A squeeze-excite scale multiplied into a feature map, as torch exports it:
+// the unit spatial dims of the scale are indexed with constant zeros.
+
+// CHECK: @channel_broadcast
+func.func @channel_broadcast(%arg0: tensor<1x4x1x1xf32>, %arg1: tensor<1x4x4x4xf32>) -> tensor<1x4x4x4xf32> {
+  %cst = tensor.empty() : tensor<1x4x4x4xf32>
+  // CHECK: %[[COLLAPSED:.*]] = tensor.collapse_shape %arg0 {{.*}} : tensor<1x4x1x1xf32> into tensor<1x4xf32>
+  // CHECK: %[[BCAST:.*]] = linalg.broadcast ins(%[[COLLAPSED]] : tensor<1x4xf32>) outs({{.*}} : tensor<1x4x4x4xf32>) dimensions = [2, 3]
+  // CHECK: arith.mulf %[[BCAST]], %arg1 : tensor<1x4x4x4xf32>
+  // CHECK-NOT: linalg.generic
+  %0 = linalg.generic {
+    indexing_maps = [affine_map<(d0, d1, d2, d3) -> (d0, d1, 0, 0)>, affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>, affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>],
+    iterator_types = ["parallel", "parallel", "parallel", "parallel"]
+  } ins(%arg0, %arg1 : tensor<1x4x1x1xf32>, tensor<1x4x4x4xf32>) outs(%cst : tensor<1x4x4x4xf32>) {
+  ^bb0(%in: f32, %in_0: f32, %out: f32):
+    %1 = arith.mulf %in, %in_0 : f32
+    linalg.yield %1 : f32
+  } -> tensor<1x4x4x4xf32>
+  return %0 : tensor<1x4x4x4xf32>
+}
+
+// -----
+
+// The same with constant per-channel parameters folds to a constant.
+
+// CHECK: @constant_channel_broadcast
+func.func @constant_channel_broadcast(%arg0: tensor<1x4x4x4xf32>) -> tensor<1x4x4x4xf32> {
+  %scale = arith.constant dense<[[[1.0]], [[2.0]], [[3.0]], [[4.0]]]> : tensor<4x1x1xf32>
+  %cst = tensor.empty() : tensor<1x4x4x4xf32>
+  // CHECK-NOT: linalg.broadcast
+  // CHECK: %[[SCALE:.*]] = arith.constant dense<{{.*}}> : tensor<1x4x4x4xf32>
+  // CHECK: arith.mulf %arg0, %[[SCALE]] : tensor<1x4x4x4xf32>
+  %0 = linalg.generic {
+    indexing_maps = [affine_map<(d0, d1, d2, d3) -> (d1, 0, 0)>, affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>, affine_map<(d0, d1, d2, d3) -> (d0, d1, d2, d3)>],
+    iterator_types = ["parallel", "parallel", "parallel", "parallel"]
+  } ins(%scale, %arg0 : tensor<4x1x1xf32>, tensor<1x4x4x4xf32>) outs(%cst : tensor<1x4x4x4xf32>) {
+  ^bb0(%in: f32, %in_0: f32, %out: f32):
+    %1 = arith.mulf %in, %in_0 : f32
+    linalg.yield %1 : f32
+  } -> tensor<1x4x4x4xf32>
+  return %0 : tensor<1x4x4x4xf32>
+}
