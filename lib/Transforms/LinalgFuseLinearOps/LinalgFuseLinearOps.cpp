@@ -339,6 +339,15 @@ LogicalResult fuseScaleOrDivIntoLinearOp(PatternRewriter& rewriter, OpTy op,
     return failure();
   }
 
+  // Scale the transpose's input and transpose the result, so the weights stay a
+  // transpose that linalg-canonicalizations can turn a vecmat into a matvec
+  // over.
+  auto transposeOp = weights.getDefiningOp<linalg::TransposeOp>();
+  if (transposeOp) {
+    weights = transposeOp.getInput();
+    matchDim = transposeOp.getPermutation()[matchDim];
+  }
+
   auto weightsType = cast<RankedTensorType>(weights.getType());
 
   // In this pattern, we support fusing only a scalar multiplication or
@@ -424,6 +433,11 @@ LogicalResult fuseScaleOrDivIntoLinearOp(PatternRewriter& rewriter, OpTy op,
   if (!scaledWeights)
     scaledWeights =
         rewriter.createOrFold<OpTy>(op.getLoc(), weights, newScaleVal);
+  if (transposeOp)
+    scaledWeights = linalg::TransposeOp::create(
+                        rewriter, op.getLoc(), scaledWeights,
+                        transposeOp.getInit(), transposeOp.getPermutation())
+                        .getResult()[0];
 
   // The linear op accumulates into its outs, so (x * W + outs) * s must also
   // scale a nonzero outs: x * (W * s) + outs * s.
