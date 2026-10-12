@@ -29,6 +29,7 @@
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/Layout/Utils.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"               // from @llvm-project
+#include "llvm/include/llvm/ADT/STLFunctionalExtras.h"     // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVectorExtras.h"       // from @llvm-project
 #include "llvm/include/llvm/ADT/TypeSwitch.h"              // from @llvm-project
@@ -164,7 +165,9 @@ struct FoldedConvPadding {
 // keeps the unfolded path.
 std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
     Value data, RankedTensorType matrixDataType, LayoutAttr dataLayout,
-    int64_t ciphertextSize) {
+    int64_t ciphertextSize,
+    llvm::function_ref<IntegerRelation(RankedTensorType)> unpaddedLayout =
+        nullptr) {
   int64_t rank = matrixDataType.getRank();
   if ((rank != 3 && rank != 4) || matrixDataType.getDimSize(0) != 1) {
     return std::nullopt;
@@ -228,12 +231,14 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
       foldConvSpatialPadding(matrixDataType, p);
   if (!matrixOperand) return std::nullopt;
 
-  // The layout we expect on the padded value: the unpadded row-major layout
-  // with each spatial index shifted by `p`. If the actual layout is anything
-  // else (a conversion intervened, a non-row-major producer, reshapes that did
-  // not cancel) do not fold.
+  // The layout we expect on the padded value: the unpadded layout (row-major
+  // unless `unpaddedLayout` says otherwise) with each spatial index shifted by
+  // `p`. If the actual layout is anything else (a conversion intervened, a
+  // different producer layout, reshapes that did not cancel) do not fold.
   IntegerRelation expected =
-      getRowMajorLayoutRelation(matrixOperand->dataType, ciphertextSize);
+      unpaddedLayout
+          ? unpaddedLayout(matrixOperand->dataType)
+          : getRowMajorLayoutRelation(matrixOperand->dataType, ciphertextSize);
   unsigned domainOffset =
       expected.getVarKindOffset(presburger::VarKind::Domain);
   for (int64_t dim = 2; dim < rank; ++dim) {
@@ -243,7 +248,7 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
     LLVM_DEBUG(llvm::dbgs()
                << "conv found a pad of " << p
                << " but the operand layout does not match the shifted "
-                  "unpadded row-major layout; not folding\n");
+                  "unpadded layout; not folding\n");
     return std::nullopt;
   }
 
@@ -1223,6 +1228,22 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
                                    resultLayoutAttr);
 }
 
+// The layout of a 2-D conv result pixel-shuffled by `gap`, as the list of
+// layouts to compose: the row-major result, then the shuffle.
+static ArrayAttr get2dConvGappedLayouts(MLIRContext* ctx,
+                                        RankedTensorType resultType,
+                                        int64_t gap, int64_t minSlotCount) {
+  SmallVector<int64_t> gaps = {gap, gap};
+  IntegerRelation rowMajor =
+      get2dConvResultRelation(resultType, gaps, /*padding=*/0, minSlotCount,
+                              /*interchangeRows=*/true);
+  IntegerRelation shuffle =
+      get2dConvRowInterchangeLayoutRelation(resultType, gaps, minSlotCount);
+  return ArrayAttr::get(ctx,
+                        {LayoutAttr::getFromIntegerRelation(ctx, rowMajor),
+                         LayoutAttr::getFromIntegerRelation(ctx, shuffle)});
+}
+
 LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   MLIRContext* ctx = &getContext();
 
@@ -1240,11 +1261,6 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     return op->emitOpError() << "Expected equal strides for Conv2DNchwFchwOp";
   }
 
-  // Interchange rows only if the stride is greater than 1. Otherwise, we can
-  // densely pack the rows and outputs without channel gapping.
-  bool interchangeRows = strides[0] > 1;
-
-  // Ensure data is in gapped row-major layout with current inputGap.
   // We expect 4-D tensor (N, C, H, W) but only support N=1.
   if (dataType.getRank() != 4 || dataType.getDimSize(0) != 1) {
     return op->emitOpError() << "Expected 4-D data tensor (N=1, C, H, W)";
@@ -1258,37 +1274,53 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   if (!dataKernelInfo) {
     return op->emitOpError() << "Failed to get kernel info for data input";
   }
-  // The gap factor accumulates the producer's gap, so it can exceed the stride
-  // when this conv follows another strided one.
-  auto gapFactor = strides[0] * dataKernelInfo->gapFactor;
-  // The layout relations shuffle by this conv's own stride, so that is the
-  // block size the channel padding below rounds up to. A conv whose gap exceeds
-  // its stride packs its result against gap^2 instead, and padding cannot
-  // reconcile the two, so keep rejecting those rather than mis-packing them.
-  if (interchangeRows && gapFactor != strides[0] &&
-      outputType.getDimSize(1) % (gapFactor * gapFactor) != 0) {
-    return op->emitOpError()
-           << "Expected number of output channels (" << outputType.getDimSize(1)
-           << ") to be divisible by gap^2 (" << gapFactor * gapFactor << ")";
-  }
+  // Gapped data is the pixel-shuffled result of an earlier strided conv. The
+  // Toeplitz matrix reads it in place, and the result is shuffled by the input
+  // gap times the stride, so the result reserves whole blocks of gap^2
+  // channels.
+  int64_t inputGap = dataKernelInfo->gapFactor;
+  int64_t gapFactor = strides[0] * inputGap;
 
-  RankedTensorType fheInputType = RankedTensorType::get(
-      dataKernelInfo->resultShape, outputType.getElementType());
+  // Interchange rows only if the result is gapped. Otherwise, we can densely
+  // pack the rows and outputs without channel gapping.
+  bool interchangeRows = gapFactor > 1;
+
+  // The matrix of gapped data is built against its logical shape, and the
+  // filter relation places each element at its shuffled position.
+  RankedTensorType fheInputType =
+      inputGap > 1 ? dataType
+                   : RankedTensorType::get(dataKernelInfo->resultShape,
+                                           outputType.getElementType());
 
   LayoutAttr dataLayout = getComposedLayoutAttr(data);
 
   // The Toeplitz matrix is built against the FHE input shape, unless a zero
   // `tensor.pad` on the spatial dims folds into the conv's own `padding`
   // parameter. When it does, the ciphertext holds only the unpadded data and
-  // the matrix must be built against that smaller operand.
+  // the matrix must be built against that smaller operand. Gapped data keeps
+  // its producer's shuffled layout, padded or not.
   ConvMatrixOperand matrixOperand{fheInputType};
   IntegerRelation targetDataRelation =
       getRowMajorLayoutRelation(fheInputType, minSlotCount);
   // A fold only succeeds once `data` is proven to already carry the target
   // relation, so only the unfolded path can still need a conversion.
   bool dataLayoutMatchesTarget = false;
-  if (auto folded = tryFoldPadIntoConvPadding(data, fheInputType, dataLayout,
-                                              minSlotCount)) {
+  if (inputGap > 1) {
+    auto gappedLayout = [&](RankedTensorType type) {
+      return LayoutAttr::composeLayouts(
+                 get2dConvGappedLayouts(ctx, type, inputGap, minSlotCount), ctx)
+          .getIntegerRelation();
+    };
+    if (auto folded = tryFoldPadIntoConvPadding(data, fheInputType, dataLayout,
+                                                minSlotCount, gappedLayout)) {
+      matrixOperand = folded->matrixOperand;
+      targetDataRelation = folded->targetRelation;
+      dataLayoutMatchesTarget = true;
+    } else {
+      targetDataRelation = gappedLayout(dataType);
+    }
+  } else if (auto folded = tryFoldPadIntoConvPadding(
+                 data, fheInputType, dataLayout, minSlotCount)) {
     matrixOperand = folded->matrixOperand;
     targetDataRelation = folded->targetRelation;
     dataLayoutMatchesTarget = true;
@@ -1311,10 +1343,13 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     // If interchangeRows is on, then the output shape may include reshaping the
     // striding and gapping. The spatial extents come from the operand the
     // ciphertext actually holds, i.e. the unpadded one when the pad folded.
-    int64_t hFhe = std::max(matrixOperand.dataType.getDimSize(2),
-                            outputType.getDimSize(2) * gapFactor);
-    int64_t wFhe = std::max(matrixOperand.dataType.getDimSize(3),
-                            outputType.getDimSize(3) * gapFactor);
+    // Gapped data is read in place, so only the shuffled result counts.
+    int64_t hFhe = outputType.getDimSize(2) * gapFactor;
+    int64_t wFhe = outputType.getDimSize(3) * gapFactor;
+    if (inputGap == 1) {
+      hFhe = std::max(hFhe, matrixOperand.dataType.getDimSize(2));
+      wFhe = std::max(wFhe, matrixOperand.dataType.getDimSize(3));
+    }
     // The interchanged layout groups the output channels into gap x gap blocks,
     // so the ciphertext holds whole blocks. A channel count that is not a
     // multiple of gap^2 rounds up, and the extra channels stay empty.
@@ -1325,8 +1360,10 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
         RankedTensorType::get({outputType.getDimSize(0), cFhe, hFhe, wFhe},
                               outputType.getElementType());
   }
-  // `inputShape` stays the padded FHE shape; ConvertToCiphertextSemantics
-  // re-derives the unpadded operand from it and the folded padding attribute.
+  // `inputShape` is the shape the matrix is built against before a folded pad
+  // is removed: the padded FHE shape, or the logical data shape for gapped
+  // data. ConvertToCiphertextSemantics re-derives the unpadded operand from it
+  // and the folded padding attribute.
   KernelInfo kernelInfo = {
       .inputShape = llvm::to_vector(fheInputType.getShape()),
       .resultShape = llvm::to_vector(fheOutputType.getShape()),
@@ -1352,7 +1389,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   }
   auto maybeRels = get2dConvChwFchwFilterAsSequence(
       filterType, matrixOperand.dataType, strides, matrixOperand.padding,
-      minSlotCount, interchangeRows);
+      minSlotCount, interchangeRows, inputGap);
   if (failed(maybeRels)) {
     return failure();
   }
@@ -1382,17 +1419,13 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   // pixel-shuffled gap. Future users may need to insert a layout conversion.
   auto result = op->getResult(0);
   Attribute resultLayoutAttr;
-  presburger::IntegerRelation rel1 = get2dConvResultRelation(
-      outputType, strides, /*padding=*/0, minSlotCount, interchangeRows);
-
   if (interchangeRows) {
-    presburger::IntegerRelation rel2 = get2dConvRowInterchangeLayoutRelation(
-        outputType, strides, minSlotCount);
-    LayoutAttr layout1 = LayoutAttr::getFromIntegerRelation(ctx, rel1);
-    LayoutAttr layout2 = LayoutAttr::getFromIntegerRelation(ctx, rel2);
-    resultLayoutAttr = ArrayAttr::get(ctx, {layout1, layout2});
+    resultLayoutAttr =
+        get2dConvGappedLayouts(ctx, outputType, gapFactor, minSlotCount);
   } else {
-    resultLayoutAttr = LayoutAttr::getFromIntegerRelation(ctx, rel1);
+    resultLayoutAttr = LayoutAttr::getFromIntegerRelation(
+        ctx, get2dConvResultRelation(outputType, strides, /*padding=*/0,
+                                     minSlotCount, interchangeRows));
   }
 
   // Record what the filter was diagonalized against, so that
@@ -1980,11 +2013,36 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
            << "layout propagation only supports zero-padding tensor.pad";
   }
 
+  RankedTensorType paddedType = op.getResultType();
+  LayoutAttr sourceLayout = getComposedLayoutAttr(op.getSource());
+  Attribute kernelInfoAttr =
+      cloneKernelInfoWithResultShape(op.getSource(), paddedType.getShape());
+  std::optional<KernelInfo> info =
+      kernelInfoAttr ? getKernelInfo(kernelInfoAttr) : std::nullopt;
+  // A 1-D conv reads only row-major data, so it would convert gapped data after
+  // the pad anyway. Un-shuffle before the pad instead, so the conv can fold the
+  // pad into its padding parameter. A 2-D conv folds the pad into its read of
+  // the gapped data and needs no conversion. The producing conv's input rank
+  // tells them apart; DropUnitDims leaves 2-D pads at rank 3 too.
+  if (info && info->gapFactor > 1 && info->inputShape.size() == 3) {
+    IntegerRelation rowMajor =
+        getRowMajorLayoutRelation(op.getSourceType(), minSlotCount);
+    if (!isRelationEqual(sourceLayout.getIntegerRelation(), rowMajor)) {
+      mlir::IRRewriter builder(op.getContext());
+      auto [converted, convertedLayout] = convertToLayout(
+          op.getContext(), builder, op, op.getSource(), sourceLayout, rowMajor);
+      debugAssignLayout(converted, convertedLayout);
+      assignedLayouts.insert({converted, convertedLayout});
+      sourceLayout = convertedLayout;
+    }
+    info->gapFactor = 1;
+    kernelInfoAttr = makeKernelInfoAttr(op.getContext(), *info);
+  }
+
   // Check if this pad is eligible to be folded forward into a conv op.
   // If so, we use the shifted relation (special case) to ensure the fold
   // pattern matches.
   bool isEligibleForConvFusion = false;
-  RankedTensorType paddedType = op.getResultType();
   if (paddedType.getRank() == 3 && paddedType.getDimSize(0) == 1) {
     ArrayRef<int64_t> low = op.getStaticLow();
     ArrayRef<int64_t> high = op.getStaticHigh();
@@ -2002,8 +2060,7 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
     // low padding. Pad positions stay unmapped in the relation; unmapped points
     // are zero-filled when a layout is materialized, which matches the
     // zero-fill pad body.
-    IntegerRelation padRelation =
-        getComposedLayoutAttr(op.getSource()).getIntegerRelation();
+    IntegerRelation padRelation = sourceLayout.getIntegerRelation();
     auto domainVarOffset =
         padRelation.getVarKindOffset(presburger::VarKind::Domain);
     for (auto [dim, low] : llvm::enumerate(op.getStaticLow())) {
@@ -2014,8 +2071,6 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
 
     LayoutAttr outputLayout =
         LayoutAttr::getFromIntegerRelation(op.getContext(), padRelation);
-    Attribute kernelInfoAttr = cloneKernelInfoWithResultShape(
-        op.getSource(), op.getResultType().getShape());
     assignedLayouts.insert({op.getResult(), outputLayout});
     debugAssignLayout(op.getResult(), outputLayout);
     setResultLayoutAttr(op, kernelInfoAttr);
@@ -2024,17 +2079,11 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
 
   // General case: use getPaddingRelation and compose.
   SmallVector<int64_t> lowPadding = llvm::to_vector(op.getStaticLow());
-  IntegerRelation sourceLayout =
-      getComposedLayoutAttr(op.getSource()).getIntegerRelation();
-
   RankedTensorType unpaddedType = op.getSourceType();
   IntegerRelation paddingRel =
       getPaddingRelation(paddedType, unpaddedType, lowPadding);
 
-  paddingRel.compose(sourceLayout);
-
-  Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(op.getSource(), paddedType.getShape());
+  paddingRel.compose(sourceLayout.getIntegerRelation());
 
   LayoutAttr outputLayout =
       LayoutAttr::getFromIntegerRelation(op.getContext(), paddingRel);
