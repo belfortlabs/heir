@@ -5,7 +5,7 @@
 #layout2 = #tensor_ext.layout<"{ [i0, i1] -> [ct, slot] : ct = 0 and (-48i0 - i1 + slot) mod 512 = 0 and 0 <= i0 <= 9 and 0 <= i1 <= 47 and 0 <= slot <= 4095 and 4096*floor((-512 + 48i0 + i1)/4096) <= -4096 + 48i0 + i1 }">
 
 // CHECK: #[[layout:.*]] = #tensor_ext.layout<"{ [i0, i1] -> [ct, slot] : ct = 0 and (1 - 48i0 - i1 + slot) mod 512 = 0 and 0 <= i0 <= 9 and 0 < i1 <= 48 and 0 <= slot <= 4095 and 4096*floor((-513 + 48i0 + i1)/4096) <= -4097 + 48i0 + i1 }">
-// CHECK: #[[layout1:.*]] = #tensor_ext.layout<"{ [i0, i1] -> [ct, slot] : exists (e0, e1, e2, e3, e4: i0 = 0 and ct = 0 and 512e3 = -i1 + slot + 512e1 and 0 <= i1 <= 4095 and 0 <= slot <= 4095 and -4607 + i1 - 4096e0 <= 512e1 <= -4096 + i1 - 4096e0 and -4607 + i1 - 512e1 <= 4096e2 <= -4096 + i1 - 512e1 and 0 <= e4 <= 9 and -47 + i1 - 512e1 <= 48e4 <= i1 - 512e1) }">
+// CHECK: #[[layout1:.*]] = #tensor_ext.layout<"{ [i0, i1] -> [ct, slot] : ct = 0 and (-48i0 - i1 + slot) mod 512 = 0 and 0 <= i0 <= 9 and 0 <= i1 <= 47 and 0 <= slot <= 4095 and 4096*floor((-512 + 48i0 + i1)/4096) <= -4096 + 48i0 + i1 }">
 
 module attributes {backend.lattigo, scheme.ckks} {
   // CHECK: func.func @tcresnet8small
@@ -18,7 +18,7 @@ module attributes {backend.lattigo, scheme.ckks} {
     ^body(%input0: tensor<1x10x48xf32>):
       // CHECK: debug.validate
       debug.validate %input0 {metadata = "input", name = "input", tensor_ext.layout = []} : tensor<1x10x48xf32>
-      // CHECK: %[[remap:.*]] = tensor_ext.remap %[[input0]] {permutation = #[[layout1]]} : tensor<1x4096xf32>
+      // CHECK: %[[remap:.*]] = tensor_ext.remap %[[input0]] {permutation = [#[[layout1]], #[[layout1]]]} : tensor<1x4096xf32>
       %collapsed = tensor.collapse_shape %input0 [[0, 1], [2]] {heir.kernel_info = {gap_factor = 1 : i64, result_shape = array<i64: 10, 48>}, tensor_ext.layout = #layout2} : tensor<1x10x48xf32> into tensor<10x48xf32>
       %padded = tensor.pad %collapsed low[0, 1] high[0, 1] {
       ^bb0(%arg1: index, %arg2: index):
