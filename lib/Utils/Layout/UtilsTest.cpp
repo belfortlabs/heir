@@ -1273,53 +1273,67 @@ TEST(UtilsTest, ForEachRelationPointLocalsWithoutDivisions) {
       "10i2 - 2i3 - 249slot + 8192*floor((192 + slot)/8192) - 16384e1 + 10e2 + "
       "500e3 - 10e5 <= 500e6 <= -250i1 - 10i2 - 2i3 - 249slot + "
       "8192*floor((192 + slot)/8192) - 16384e1 + 10e2 + 500e3 - 10e5) }");
-}
 
-TEST(UtilsTest, ForEachRelationPointFailsWithoutCallingOnPoint) {
-  // A symbol, and a range variable with no upper bound.
-  for (const char* islStr :
-       {"[N] -> { [i] -> [j] : j = i and 0 <= i <= 3 and 0 <= N <= 3 }",
-        "{ [i] -> [j] : j >= i and 0 <= i <= 3 }"}) {
-    presburger::IntegerRelation rel =
-        getIntegerRelationFromIslStr(islStr).value();
-    bool called = false;
-    EXPECT_TRUE(failed(forEachRelationPoint(
-        rel, [&](ArrayRef<int64_t>, ArrayRef<int64_t>) { called = true; })));
-    EXPECT_FALSE(called);
+  TEST(UtilsTest, ForEachRelationPointFloorOfRangeVariable) {
+    // A channel-concat layout, scaled down: the slot is only bounded tightly
+    // through l0 = floor(slot / 8192), a local that depends on the slot itself.
+    expectSamePoints(
+        "{ [i0, i1, i2, i3] -> [ct, slot] : i0 = 0 and ct = 0 and 0 <= i1 <= 3 "
+        "and 0 <= i2 <= 3 and 0 <= i3 <= 3 and 0 <= slot <= 30719 and (i1 + "
+        "slot) mod 2 = 0 and exists (l0 : 8192l0 <= slot <= 8192l0 + 6143 and "
+        "0 "
+        "<= slot - 8192l0 - 64i2 - 2i3 - 32*floor(i1/2) - 960*floor(i1/4) <= "
+        "1) "
+        "}");
   }
-}
 
-TEST(UtilsTest, ForEachComposedRelationPoint) {
-  // Two stages, an expansion then a diagonal packing, followed stage by stage.
-  presburger::IntegerRelation first =
-      getIntegerRelationFromIslStr(
-          "{ [i0, i1] -> [a, b] : a = i0 and b = 2i1 + 1 and 0 <= i0 <= 3 and "
-          "0 <= i1 <= 3 }")
-          .value();
-  presburger::IntegerRelation second =
-      getIntegerRelationFromIslStr(
-          "{ [a, b] -> [ct, slot] : (a - b + ct) mod 8 = 0 and (-a + slot) "
-          "mod 8 = 0 and 0 <= a <= 7 and 0 <= b <= 7 and 0 <= ct <= 7 and 0 "
-          "<= slot <= 15 }")
-          .value();
-  presburger::IntegerRelation composed = first;
-  composed.compose(second);
+  TEST(UtilsTest, ForEachRelationPointFailsWithoutCallingOnPoint) {
+    // A symbol, and a range variable with no upper bound.
+    for (const char* islStr :
+         {"[N] -> { [i] -> [j] : j = i and 0 <= i <= 3 and 0 <= N <= 3 }",
+          "{ [i] -> [j] : j >= i and 0 <= i <= 3 }"}) {
+      presburger::IntegerRelation rel =
+          getIntegerRelationFromIslStr(islStr).value();
+      bool called = false;
+      EXPECT_TRUE(failed(forEachRelationPoint(
+          rel, [&](ArrayRef<int64_t>, ArrayRef<int64_t>) { called = true; })));
+      EXPECT_FALSE(called);
+    }
+  }
 
-  using Pair = std::pair<std::vector<int64_t>, std::vector<int64_t>>;
-  std::set<Pair> expected, actual;
-  PointPairCollector collector(composed.getNumDomainVars(),
-                               composed.getNumRangeVars());
-  enumeratePoints(composed, collector);
-  for (const auto& [domain, range] : collector.points)
-    expected.insert({domain, range});
-  ASSERT_TRUE(succeeded(forEachComposedRelationPoint(
-      {first, second}, [&](ArrayRef<int64_t> domain, ArrayRef<int64_t> range) {
-        actual.insert({std::vector<int64_t>(domain.begin(), domain.end()),
-                       std::vector<int64_t>(range.begin(), range.end())});
-      })));
-  EXPECT_FALSE(expected.empty());
-  EXPECT_EQ(actual, expected);
-}
+  TEST(UtilsTest, ForEachComposedRelationPoint) {
+    // Two stages, an expansion then a diagonal packing, followed stage by
+    // stage.
+    presburger::IntegerRelation first = getIntegerRelationFromIslStr(
+                                            "{ [i0, i1] -> [a, b] : a = i0 and "
+                                            "b = 2i1 + 1 and 0 <= i0 <= 3 and "
+                                            "0 <= i1 <= 3 }")
+                                            .value();
+    presburger::IntegerRelation second =
+        getIntegerRelationFromIslStr(
+            "{ [a, b] -> [ct, slot] : (a - b + ct) mod 8 = 0 and (-a + slot) "
+            "mod 8 = 0 and 0 <= a <= 7 and 0 <= b <= 7 and 0 <= ct <= 7 and 0 "
+            "<= slot <= 15 }")
+            .value();
+    presburger::IntegerRelation composed = first;
+    composed.compose(second);
+
+    using Pair = std::pair<std::vector<int64_t>, std::vector<int64_t>>;
+    std::set<Pair> expected, actual;
+    PointPairCollector collector(composed.getNumDomainVars(),
+                                 composed.getNumRangeVars());
+    enumeratePoints(composed, collector);
+    for (const auto& [domain, range] : collector.points)
+      expected.insert({domain, range});
+    ASSERT_TRUE(succeeded(forEachComposedRelationPoint(
+        {first, second},
+        [&](ArrayRef<int64_t> domain, ArrayRef<int64_t> range) {
+          actual.insert({std::vector<int64_t>(domain.begin(), domain.end()),
+                         std::vector<int64_t>(range.begin(), range.end())});
+        })));
+    EXPECT_FALSE(expected.empty());
+    EXPECT_EQ(actual, expected);
+  }
 
 }  // namespace
 }  // namespace heir
