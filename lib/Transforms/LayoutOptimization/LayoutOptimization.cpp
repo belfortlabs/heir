@@ -26,6 +26,7 @@
 #include "lib/Transforms/LayoutOptimization/LayoutConversionCost.h"
 #include "lib/Transforms/LayoutOptimization/Patterns.h"
 #include "lib/Utils/AttributeUtils.h"
+#include "llvm/include/llvm/ADT/DenseMap.h"                // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"               // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"               // from @llvm-project
 #include "llvm/include/llvm/Support/raw_ostream.h"         // from @llvm-project
@@ -93,6 +94,11 @@ struct LayoutOptimization : impl::LayoutOptimizationBase<LayoutOptimization> {
 
   // Computes cost of layout conversion.
   Cost costOfLayoutConversion(Attribute fromLayout, Attribute toLayout);
+
+  // Hoisting asks for the same conversions many times (e.g. the conversion
+  // being hoisted, once per hoisting option), and each one builds a shift
+  // network, so the costs are cached.
+  DenseMap<std::pair<Attribute, Attribute>, Cost> conversionCosts;
 
   // Computes cost of changed operand.
   OperandChange costOfChangedOperand(OpOperand& operand, Operation* kernel,
@@ -335,8 +341,12 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
 
 Cost LayoutOptimization::costOfLayoutConversion(Attribute fromLayout,
                                                 Attribute toLayout) {
-  return computeCostOfLayoutConversion(slotCount, fromLayout, toLayout,
-                                       vveRandomSeed, vveRandomTries);
+  auto [it, inserted] =
+      conversionCosts.try_emplace(std::make_pair(fromLayout, toLayout), 0);
+  if (inserted)
+    it->second = computeCostOfLayoutConversion(slotCount, fromLayout, toLayout,
+                                               vveRandomSeed, vveRandomTries);
+  return it->second;
 }
 
 OperandChange LayoutOptimization::costOfChangedOperand(OpOperand& operand,
