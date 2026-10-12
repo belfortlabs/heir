@@ -19,7 +19,8 @@ func.func @dense_filter(%arg0: tensor<1x2x4x4xf32>) -> tensor<1x2x3x3xf32> {
 
 // -----
 
-// torch-mlir collapses a Cx1xKHxKW resource filter to CxKHxKW.
+// torch-mlir collapses a Cx1xKHxKW resource filter to CxKHxKW. The resource
+// feeds a collapse_shape, so it is inlined before the pattern runs.
 // CHECK: func.func @collapsed_resource_filter
 // CHECK: %[[filter:.*]] = arith.constant dense_resource<depthwise_filter> : tensor<2x2x2x2xf32>
 // CHECK: linalg.conv_2d_nchw_fchw
@@ -38,6 +39,30 @@ func.func @collapsed_resource_filter(%arg0: tensor<1x2x4x4xf32>) -> tensor<1x2x3
   dialect_resources: {
     builtin: {
       torch_tensor_2_1_2_2_torch.float32: "0x040000000000803F0000004000004040000080400000A0400000C0400000E04000000041"
+    }
+  }
+#-}
+
+// -----
+
+// A resource filter used directly by the depthwise conv stays a resource.
+// CHECK: func.func @resource_filter
+// CHECK: %[[filter:.*]] = arith.constant dense_resource<depthwise_filter> : tensor<2x2x2x2xf32>
+// CHECK: linalg.conv_2d_nchw_fchw
+// CHECK-SAME: tensor<1x2x4x4xf32>, tensor<2x2x2x2xf32>
+// CHECK-NOT: linalg.depthwise_conv_2d_nchw_chw
+// CHECK: depthwise_filter: "0x040000000000803F00000040000040400000804000000000000000000000000000000000000000000000000000000000000000000000A0400000C0400000E04000000041"
+func.func @resource_filter(%arg0: tensor<1x2x4x4xf32>) -> tensor<1x2x3x3xf32> {
+  %init = arith.constant dense<0.000000e+00> : tensor<1x2x3x3xf32>
+  %filter = arith.constant dense_resource<torch_tensor_2_2_2_torch.float32> : tensor<2x2x2xf32>
+  %0 = linalg.depthwise_conv_2d_nchw_chw {dilations = dense<1> : vector<2xi64>, strides = dense<1> : vector<2xi64>} ins(%arg0, %filter : tensor<1x2x4x4xf32>, tensor<2x2x2xf32>) outs(%init : tensor<1x2x3x3xf32>) -> tensor<1x2x3x3xf32>
+  return %0 : tensor<1x2x3x3xf32>
+}
+
+{-#
+  dialect_resources: {
+    builtin: {
+      torch_tensor_2_2_2_torch.float32: "0x040000000000803F0000004000004040000080400000A0400000C0400000E04000000041"
     }
   }
 #-}
