@@ -20,6 +20,7 @@ cc_library(
         "@heir//lib/Dialect/Secret/IR:SecretAttributes",
         "@heir//lib/Dialect/Secret/IR:SecretPatterns",
         "@heir//lib/Dialect/TensorExt/IR:Dialect",
+        "@heir//lib/Dialect/TensorExt/Transforms:ImplementRotateAndReduce",
         "@heir//lib/Kernel",
         "@heir//lib/Kernel:AbstractValue",
         "@heir//lib/Kernel:ArithmeticDag",
