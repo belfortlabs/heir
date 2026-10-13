@@ -5249,6 +5249,17 @@ bootstrap defined by the lookup table.&lt;/p>
 &lt;p>&lt;em>Lower &lt;code>cggi&lt;/code> to &lt;code>tfhe_rust_bool&lt;/code> dialect.&lt;/em>&lt;/p>
 &lt;h3 id="-cggi-to-tfhe-rust">&lt;code>-cggi-to-tfhe-rust&lt;/code>&lt;/h3>
 &lt;p>&lt;em>Lower &lt;code>cggi&lt;/code> to &lt;code>tfhe_rust&lt;/code> dialect.&lt;/em>&lt;/p>
+&lt;h3 id="-cheddar-fuse-ops">&lt;code>-cheddar-fuse-ops&lt;/code>&lt;/h3>
+&lt;p>&lt;em>Fuse Cheddar operations into compound GPU kernels&lt;/em>&lt;/p>
+&lt;p>Fuses Cheddar operation sequences that scale-snu/cheddar implements as a
+single GPU kernel:&lt;/p>
+&lt;ul>
+&lt;li>mult + relinearize + rescale -&amp;gt; hmult (with rescale=true)&lt;/li>
+&lt;li>mult + relinearize -&amp;gt; hmult (with rescale=false)&lt;/li>
+&lt;li>mult + relinearize_rescale -&amp;gt; hmult (with rescale=true)&lt;/li>
+&lt;li>hrot + add -&amp;gt; hrot_add&lt;/li>
+&lt;li>hconj + add -&amp;gt; hconj_add&lt;/li>
+&lt;/ul>
 &lt;h3 id="-ckks-decompose-relinearize">&lt;code>-ckks-decompose-relinearize&lt;/code>&lt;/h3>
 &lt;p>&lt;em>Decomposes ckks:relinearize into ckks:keyswitchinner and addition&lt;/em>&lt;/p>
 &lt;h4 id="example-9">Example&lt;/h4>
@@ -8957,35 +8968,39 @@ arguments in the function body.&lt;/li>
 &lt;/ul>
 &lt;h4 id="statistics-1">Statistics&lt;/h4>
 &lt;pre tabindex="0">&lt;code>total circuit size : The total circuit size for all optimized circuits, after optimization is done.
-&lt;/code>&lt;/pre></description></item><item><title>Blog: FHE.org 2025 conference talk and slides</title><link>https://heir.dev/blog/2025/04/11/fhe.org-2025-conference-talk-and-slides/</link><pubDate>Fri, 11 Apr 2025 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2025/04/11/fhe.org-2025-conference-talk-and-slides/</guid><description>
-&lt;p>Jeremy Kun gave a talk at the FHE.org 2025 conference in Sofia last month. The
-&lt;a href="https://www.youtube.com/watch?v=6JPwpTOcydM&amp;amp;list=PLnbmMskCVh1cCnWbmgxI0BM0UD2JHH9fz&amp;amp;index=5">video&lt;/a>
-has been posted on YouTube, and the slides can be found
-&lt;a href="https://docs.google.com/presentation/d/1nKj0i0tyBSGUAI-tYMUDeji-EgqCj4PBrgw_NgMb3fM/edit?usp=sharing">here&lt;/a>.&lt;/p>
-&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2024-04-04</title><link>https://heir.dev/blog/2024/04/04/heir-meeting-2024-04-04/</link><pubDate>Thu, 04 Apr 2024 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2024/04/04/heir-meeting-2024-04-04/</guid><description>
+&lt;/code>&lt;/pre></description></item><item><title>Blog: HEIR meeting 2026-08-13</title><link>https://heir.dev/blog/2026/08/13/heir-meeting-2026-08-13/</link><pubDate>Thu, 13 Aug 2026 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2026/08/13/heir-meeting-2026-08-13/</guid><description>
 &lt;p>Here are the
-&lt;a href="https://docs.google.com/document/d/121_0mzqYIWYMc7rcW2Et5qS-ux4ut3b-kno1dI9sQq8/edit?usp=sharing">notes&lt;/a>
-and
-&lt;a href="https://drive.google.com/file/d/1_Ksjx8s8nD4cLsuZp5_KitYI2mPN72Je/view?usp=sharing">video recording&lt;/a>
-from the HEIR meeting on 2024-04-04.&lt;/p>
-&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2024-01-25</title><link>https://heir.dev/blog/2024/01/25/heir-meeting-2024-01-25/</link><pubDate>Thu, 25 Jan 2024 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2024/01/25/heir-meeting-2024-01-25/</guid><description>
+&lt;a href="https://docs.google.com/document/d/1QVICajEL2iIDpd1gRODoBDJmW_0CgXK16KBZtr0qa2g/edit?usp=sharing">notes&lt;/a>
+and &lt;a href="https://youtu.be/1k0yCCcJqqk">video recording&lt;/a> from the HEIR meeting on
+2026-08-13.&lt;/p>
+&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2026-04-23</title><link>https://heir.dev/blog/2026/04/23/heir-meeting-2026-04-23/</link><pubDate>Thu, 23 Apr 2026 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2026/04/23/heir-meeting-2026-04-23/</guid><description>
 &lt;p>Here are the
-&lt;a href="https://docs.google.com/document/d/1yrkAVR_348vT3SD7apb9QDoFIgz0bjHn-SzT2GOacfs/edit?usp=sharing">notes&lt;/a>
-and
-&lt;a href="https://drive.google.com/file/d/11JTfRy_3LvHjJQe0nJuqe8WGa8F9oHu1/view?usp=sharing">video recording&lt;/a>
-from the HEIR meeting on 2024-01-25.&lt;/p>
-&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2024-01-11</title><link>https://heir.dev/blog/2024/01/11/heir-meeting-2024-01-11/</link><pubDate>Thu, 11 Jan 2024 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2024/01/11/heir-meeting-2024-01-11/</guid><description>
+&lt;a href="https://docs.google.com/document/d/1KZZRqw5206xGRMhluajmmdkGyyVUWU4OYFgHFR7Qabc/edit?usp=sharing">notes&lt;/a>
+and &lt;a href="https://youtu.be/734P3CbLYP4">video recording&lt;/a> from the HEIR meeting on
+2026-04-23.&lt;/p>
+&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2026-03-26</title><link>https://heir.dev/blog/2026/03/26/heir-meeting-2026-03-26/</link><pubDate>Thu, 26 Mar 2026 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2026/03/26/heir-meeting-2026-03-26/</guid><description>
 &lt;p>Here are the
-&lt;a href="https://docs.google.com/document/d/133yuywcbI1AWnbsJezq8QlCpgXfX5HMk7YjXQBSTwoE/edit?usp=sharing">notes&lt;/a>
-and
-&lt;a href="https://drive.google.com/file/d/1gLwcshtNda6M6YMWSsyGrNDvlQ8QiL0O/view?usp=sharing">video recording&lt;/a>
-from the HEIR meeting on 2024-01-11.&lt;/p>
-&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2023-11-07</title><link>https://heir.dev/blog/2023/11/07/heir-meeting-2023-11-07/</link><pubDate>Tue, 07 Nov 2023 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2023/11/07/heir-meeting-2023-11-07/</guid><description>
+&lt;a href="https://docs.google.com/document/d/19nIJWHZR8Cj7TGX0jyl92hBUxpqeRs1H9xczQycyETs/edit?usp=sharing">notes&lt;/a>
+and &lt;a href="https://youtu.be/ZxPxAKdWDiY">video recording&lt;/a> from the HEIR meeting on
+2026-03-26.&lt;/p>
+&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2025-10-30</title><link>https://heir.dev/blog/2025/10/30/heir-meeting-2025-10-30/</link><pubDate>Thu, 30 Oct 2025 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2025/10/30/heir-meeting-2025-10-30/</guid><description>
 &lt;p>Here are the
-&lt;a href="https://docs.google.com/document/d/1nOlAhul4DwZU8UQPpTF1i3OldSY9EmwaWG3EPSZIhHs/edit?usp=sharing">notes&lt;/a>
+&lt;a href="https://docs.google.com/document/d/1nUfA6YtOQCGVEE-StS-oxJst6VvGYSz14lCL-x6D2MA/edit?usp=sharing">notes&lt;/a>
+and &lt;a href="https://www.youtube.com/watch?v=74nh6R5Ex5Q">video recording&lt;/a> from the HEIR
+meeting on 2025-10-30.&lt;/p>
+&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2024-11-26</title><link>https://heir.dev/blog/2024/11/26/heir-meeting-2024-11-26/</link><pubDate>Tue, 26 Nov 2024 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2024/11/26/heir-meeting-2024-11-26/</guid><description>
+&lt;p>Here are the
+&lt;a href="https://docs.google.com/document/d/10WTpdVaLz4mgmTwlJ3lVMGD4qmiNEl2Uvt3R3h0XFmc/edit?hl=en&amp;amp;forcehl=1&amp;amp;tab=t.0#heading=h.w3lar3vbuip1">notes&lt;/a>,
+&lt;a href="https://drive.google.com/file/d/13yvX_ap09tTqwJsdABDf3WDl79GF3bJx/view?usp=sharing">video recording&lt;/a>,
 and
-&lt;a href="https://drive.google.com/file/d/1I7aIipm54CCcDcLyRYXI_gARfT1z93cN/view?usp=sharing">video recording&lt;/a>
-from the HEIR meeting on 2023-11-07.&lt;/p>
+&lt;a href="https://docs.google.com/document/d/1s5iXtOSpIDJX3JOEB5gQqUPm5lo1gLpRUM10pBfAdoo/edit?usp=sharing">a transcription of the recording&lt;/a>
+from the HEIR meeting on 2024-11-26.&lt;/p>
+&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2024-10-31</title><link>https://heir.dev/blog/2024/10/31/heir-meeting-2024-10-31/</link><pubDate>Thu, 31 Oct 2024 00:00:00 +0000</pubDate><guid>https://heir.dev/blog/2024/10/31/heir-meeting-2024-10-31/</guid><description>
+&lt;p>Here are the
+&lt;a href="https://docs.google.com/document/d/1QUxT00gd1ZSayzdtxY5T5-Wiod-eNnCFGoqVceWQ83Y/edit?usp=sharing">notes&lt;/a>
+and
+&lt;a href="https://drive.google.com/file/d/1Q9a7O7HwxKMDqI23l3154KIOw1ofANkX/view?usp=sharing">video recording&lt;/a>
+from the HEIR meeting on 2024-10-31.&lt;/p>
 &lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2023-07-18</title><link>https://heir.dev/blog/2023/07/18/heir-meeting-2023-07-18/</link><pubDate>Tue, 18 Jul 2023 10:43:16 -0700</pubDate><guid>https://heir.dev/blog/2023/07/18/heir-meeting-2023-07-18/</guid><description>
 &lt;p>The third HEIR meeting was 2023-07-18
 (&lt;a href="https://docs.google.com/document/d/1DXdyUCmevqY8RJI3kM8oO5nWDEITFIVBPIbucONOB-k/edit?usp=sharing">notes&lt;/a>).&lt;/p>
@@ -8993,19 +9008,6 @@ from the HEIR meeting on 2023-11-07.&lt;/p>
 on MLIR and Hardware. See the &lt;a href="https://heir.dev/community/">meeting calendar&lt;/a> to
 join.
 (&lt;a href="https://calendar.google.com/calendar/u/0/embed?src=c85ecb3cda4bfb7daa3da95d5aeb19672930501b49d17896e65fa3f963f17a80@group.calendar.google.com&amp;amp;ctz=America/Los_Angeles">direct link to the calendar&lt;/a>)&lt;/p>
-&lt;!-- mdformat global-off --></description></item><item><title>Blog: HEIR meeting 2023-06-30</title><link>https://heir.dev/blog/2023/06/30/heir-meeting-2023-06-30/</link><pubDate>Fri, 30 Jun 2023 12:42:22 -0700</pubDate><guid>https://heir.dev/blog/2023/06/30/heir-meeting-2023-06-30/</guid><description>
-&lt;p>The second HEIR meeting was 2023-05-30
-(&lt;a href="https://docs.google.com/document/d/1wxaEtpEDdO2yv5YKmFTc8FVlqHxm49gHzEdcnBFBKWs/edit?usp=sharing">notes&lt;/a>,
-and
-&lt;a href="https://drive.google.com/file/d/1S893iJdeL08BAonLenmkUGNC34PX1qpg/view?usp=sharing">video recording&lt;/a>).&lt;/p>
-&lt;p>There are some initial design discussion threads started on
-&lt;a href="https://github.com/google/heir/discussions">GitHub Discussions&lt;/a> to get the
-design rolling.&lt;/p>
-&lt;ul>
-&lt;li>&lt;a href="https://github.com/google/heir/discussions/53">High-Level FHE Dialect&lt;/a>&lt;/li>
-&lt;li>&lt;a href="https://github.com/google/heir/discussions/54">Scheme Dialects&lt;/a>&lt;/li>
-&lt;li>&lt;a href="https://github.com/google/heir/discussions/55">Poly/Math Dialects&lt;/a>&lt;/li>
-&lt;/ul>
 &lt;!-- mdformat global-off --></description></item><item><title>Docs: BGV</title><link>https://heir.dev/docs/dialects/bgv/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://heir.dev/docs/dialects/bgv/</guid><description>
 &lt;!-- Autogenerated by mlir-tblgen; don't manually edit -->
 &lt;h1 id="bgv-dialect">&amp;lsquo;bgv&amp;rsquo; Dialect&lt;/h1>
@@ -12929,15 +12931,27 @@ DenseI64ArrayAttr, # Q
 DenseI64ArrayAttr, # P
 int, # logDefaultScale
 CKKSEncryptionType, # encryptionType
-CKKSEncryptionTechnique # encryptionTechnique
+CKKSEncryptionTechnique, # encryptionTechnique
+DenseI32ArrayAttr # moduliPerLevel
 &amp;gt;
 &lt;/code>&lt;/pre>&lt;p>This attribute is used for recording the scheme parameters for CKKS.&lt;/p>
 &lt;p>The attribute is a struct with the following fields:&lt;/p>
 &lt;ul>
-&lt;li>&lt;code>int&lt;/code> logN: The log of the degree of the polynomial modulus.&lt;/li>
-&lt;li>&lt;code>DenseI64ArrayAttr&lt;/code> Q: The array of primes in the ciphertext modulus.&lt;/li>
-&lt;li>&lt;code>DenseI64ArrayAttr&lt;/code> P: The array of primes in the special modulus, used for key switching.&lt;/li>
-&lt;li>&lt;code>int&lt;/code> logDefaultScale: The log of the default scale.&lt;/li>
+&lt;li>`logN1: The log of the degree of the polynomial modulus.&lt;/li>
+&lt;li>&lt;code>Q&lt;/code>: The array of moduli whose product is the ciphertext modulus,
+ordered from level 0 (the base modulus remaining after all rescalings)
+up to the maximum level L (the fresh encryption level).&lt;/li>
+&lt;li>&lt;code>P&lt;/code>: The array of moduli in the special modulus, used for key switching.&lt;/li>
+&lt;li>&lt;code>logDefaultScale&lt;/code>: The log of the default scale.&lt;/li>
+&lt;li>&lt;code>encryptionType&lt;/code>: The encryption type (optional, defaults to &lt;code>pk&lt;/code>).&lt;/li>
+&lt;li>&lt;code>encryptionTechnique&lt;/code>: The encryption technique (optional, defaults to &lt;code>standard&lt;/code>).&lt;/li>
+&lt;li>&lt;code>moduliPerLevel&lt;/code>: Optional array specifying how many moduli in &lt;code>Q&lt;/code> belong to each
+level, ordered from level 0. I.e., if &lt;code>moduliPerLevel = {2, 3}&lt;/code>, then the first
+level uses moduli &lt;code>Q[0], Q[1]&lt;/code>, and the second level uses moduli &lt;code>Q[2], Q[3], Q[4]&lt;/code>.
+This is useful for variants of CKKS that require 32-bit word arithmetic, and employ
+techniques like composite rescaling to achieve intermediate widths of rescaling.
+When omitted, defaults to all 1s. When provided, all entries must be
+positive and their sum must equal &lt;code>Q.size()&lt;/code>.&lt;/li>
 &lt;/ul>
 &lt;h4 id="parameters">Parameters:&lt;/h4>
 &lt;table>
@@ -12977,6 +12991,11 @@ CKKSEncryptionTechnique # encryptionTechnique
 &lt;tr>
 &lt;td style="text-align:center">encryptionTechnique&lt;/td>
 &lt;td style="text-align:center">&lt;code>CKKSEncryptionTechnique&lt;/code>&lt;/td>
+&lt;td>&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">moduliPerLevel&lt;/td>
+&lt;td style="text-align:center">&lt;code>DenseI32ArrayAttr&lt;/code>&lt;/td>
 &lt;td>&lt;/td>
 &lt;/tr>
 &lt;/tbody>
