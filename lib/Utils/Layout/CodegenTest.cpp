@@ -389,7 +389,8 @@ TEST(CodegenTest, Conv2dChwFchwAsSequenceTest) {
   int64_t minSlotCount = 4096;
 
   auto maybeRels = get2dConvChwFchwFilterAsSequence(
-      filterType, dataType, strides, padding, minSlotCount, true);
+      filterType, dataType, strides, padding, minSlotCount, true,
+      /*inputGap=*/1);
   ASSERT_TRUE(succeeded(maybeRels));
   auto rels = maybeRels.value();
 
@@ -411,7 +412,8 @@ TEST(CodegenTest, Conv2dChwFchwAsSequenceNoInterchangeTest) {
   int64_t minSlotCount = 4096;
 
   auto maybeRels = get2dConvChwFchwFilterAsSequence(
-      filterType, dataType, strides, padding, minSlotCount, false);
+      filterType, dataType, strides, padding, minSlotCount, false,
+      /*inputGap=*/1);
   ASSERT_TRUE(succeeded(maybeRels));
   auto rels = maybeRels.value();
 
