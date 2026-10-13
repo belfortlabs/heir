@@ -691,8 +691,11 @@ struct RewriteAvgPoolAsConv1D
     Value avgPoolOutput;
     if (poolOp->hasOneUse()) {
       Operation* scaleOp = *poolOp->getUsers().begin();
-      if (isa<arith::DivFOp, arith::MulFOp>(scaleOp)) {
-        OpOperand& use = *poolOp->getUses().begin();
+      OpOperand& use = *poolOp->getUses().begin();
+      // `c / pool` is not an average; only `pool / c` and `pool * c` are.
+      bool poolIsDividend =
+          !isa<arith::DivFOp>(scaleOp) || use.getOperandNumber() == 0;
+      if (isa<arith::DivFOp, arith::MulFOp>(scaleOp) && poolIsDividend) {
         if (auto constantAttr = dyn_cast<Attribute>(getAsOpFoldResult(
                 scaleOp->getOperand(1 - use.getOperandNumber())))) {
           if (auto splatAttr = dyn_cast<SplatElementsAttr>(
@@ -815,8 +818,11 @@ struct RewriteAvgPoolAsConv2D
     Value avgPoolOutput;
     if (poolOp->hasOneUse()) {
       Operation* scaleOp = *poolOp->getUsers().begin();
-      if (isa<arith::DivFOp, arith::MulFOp>(scaleOp)) {
-        OpOperand& use = *poolOp->getUses().begin();
+      OpOperand& use = *poolOp->getUses().begin();
+      // `c / pool` is not an average; only `pool / c` and `pool * c` are.
+      bool poolIsDividend =
+          !isa<arith::DivFOp>(scaleOp) || use.getOperandNumber() == 0;
+      if (isa<arith::DivFOp, arith::MulFOp>(scaleOp) && poolIsDividend) {
         if (auto constantAttr = dyn_cast<Attribute>(getAsOpFoldResult(
                 scaleOp->getOperand(1 - use.getOperandNumber())))) {
           if (auto splatAttr = dyn_cast<SplatElementsAttr>(
