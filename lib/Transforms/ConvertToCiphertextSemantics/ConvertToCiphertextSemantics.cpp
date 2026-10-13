@@ -3898,7 +3898,7 @@ struct ConvertToCiphertextSemantics
     });
     if (vecmatResult.wasInterrupted()) return signalPassFailure();
 
-    int64_t ctSize = minSlotCount;
+    int64_t ctSize = getLayoutSlotCount(module, minSlotCount);
     LayoutMaterializationTypeConverter typeConverter =
         LayoutMaterializationTypeConverter(ctSize);
 
@@ -3921,7 +3921,7 @@ struct ConvertToCiphertextSemantics
                  ConvertLinalgConv2D, ConvertLinalgConv2DNchwFchw,
                  ConvertLinalgConv1DNcwFcw>(typeConverter, context,
                                             unrollKernels);
-    patterns.add<ConvertAssignLayout>(typeConverter, context, minSlotCount,
+    patterns.add<ConvertAssignLayout>(typeConverter, context, ctSize,
                                       codegenStrategy);
 
     ConversionConfig config;
