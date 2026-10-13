@@ -15,6 +15,7 @@
 
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/MathUtils.h"
+#include "llvm/include/llvm/ADT/DenseSet.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/STLFunctionalExtras.h"  // from @llvm-project
 #include "llvm/include/llvm/Support/ErrorHandling.h"    // from @llvm-project
@@ -1154,12 +1155,15 @@ FailureOr<presburger::IntegerRelation> getSliceInsertionRelation(
   }
 
   // Source tensor's dimensions (d0, d1, ...) are mapped sequentially to the
-  // destination tensor's dimensions (r0, r1, ...) for which the slice size is
-  // greater than 1.
+  // destination tensor's dimensions (r0, r1, ...) that the rank reduction
+  // keeps.
+  std::optional<llvm::SmallDenseSet<unsigned>> droppedDims =
+      computeRankReductionMask(sizes, sliceType.getShape());
+  if (!droppedDims) return failure();
   auto constOffset = result.getNumCols() - 1;
   unsigned int sourceDim = 0;
   for (auto destDim = 0; destDim < resultType.getRank(); ++destDim) {
-    if (sizes[destDim] > 1) {
+    if (!droppedDims->contains(destDim)) {
       // Map from the i-th source dimension
       // r_j = offsets[j] + d_i * strides[j]
       addConstraint(result,
@@ -1258,12 +1262,15 @@ FailureOr<presburger::IntegerRelation> getSliceExtractionRelation(
   }
 
   // Destination tensor's dimensions (d0, d1, ...) are mapped sequentially
-  // from the source tensor's dimensions (r0, r1, ...) for which the slice
-  // size is greater than 1.
+  // from the source tensor's dimensions (r0, r1, ...) that the rank reduction
+  // keeps.
+  std::optional<llvm::SmallDenseSet<unsigned>> droppedDims =
+      computeRankReductionMask(sizes, resultType.getShape());
+  if (!droppedDims) return failure();
   auto constOffset = result.getNumCols() - 1;
   unsigned int resultDim = 0;
   for (auto sourceDim = 0; sourceDim < sourceType.getRank(); ++sourceDim) {
-    if (sizes[sourceDim] > 1) {
+    if (!droppedDims->contains(sourceDim)) {
       // Map to the i-th result dimension
       // d_j = offsets[j] + r_i * strides[j]
       addConstraint(result,
