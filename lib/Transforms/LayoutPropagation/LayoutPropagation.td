@@ -3,7 +3,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def LayoutPropagation : Pass<"layout-propagation"> {
+def LayoutPropagation : Pass<"layout-propagation", "ModuleOp"> {
   let summary = "Propagate ciphertext layouts through the IR";
   let description = [{
   This pass performs a forward propagation of layout (packing) information

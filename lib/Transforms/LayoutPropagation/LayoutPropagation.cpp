@@ -2758,18 +2758,14 @@ void LayoutPropagation::runOnOperation() {
   // The backend's largest ring bounds the slots a ciphertext holds: half the
   // ring degree, as parameter generation sizes the ring at twice the slot
   // count for every scheme.
-  Operation* root = getOperation();
-  ModuleOp module = dyn_cast<ModuleOp>(root);
-  if (!module) module = root->getParentOfType<ModuleOp>();
-  maxRingDegree = 0;
-  if (module) {
-    FailureOr<int64_t> degree = getMaxRingDegree(module);
-    if (failed(degree)) {
-      signalPassFailure();
-      return;
-    }
-    maxRingDegree = *degree;
+  ModuleOp module = getOperation();
+  Operation* root = module;
+  FailureOr<int64_t> degree = getMaxRingDegree(module);
+  if (failed(degree)) {
+    signalPassFailure();
+    return;
   }
+  maxRingDegree = *degree;
   maxSlotCount = maxRingDegree / 2;
 
   // minSlotCount is a lower bound: it starts at the count an earlier run
@@ -2812,11 +2808,9 @@ void LayoutPropagation::runOnOperation() {
   }
 
   // Later passes pack and size ciphertexts for the same slot count.
-  if (module) {
-    module->setAttr(
-        kLayoutSlotCountAttrName,
-        IntegerAttr::get(IntegerType::get(&getContext(), 64), minSlotCount));
-  }
+  module->setAttr(
+      kLayoutSlotCountAttrName,
+      IntegerAttr::get(IntegerType::get(&getContext(), 64), minSlotCount));
 
   RewritePatternSet cleanupPatterns(&getContext());
   cleanupPatterns.add<tensor_ext::FoldConvertLayoutIntoAssignLayoutPattern>(
