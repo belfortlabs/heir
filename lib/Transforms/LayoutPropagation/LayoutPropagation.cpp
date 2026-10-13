@@ -261,17 +261,36 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
   return FoldedConvPadding{*matrixOperand, expected};
 }
 
-// Return a copy of the kernel info associated with the value and update the
-// result shape to the new result shape. If the value does not have a kernel
-// info, return an empty Attribute.
-
-Attribute cloneKernelInfoWithResultShape(Value value,
-                                         ArrayRef<int64_t> resultShape) {
+// Return a copy of the kernel info associated with the value, with the new
+// result shape. If the value does not have a kernel info, return an empty
+// Attribute. Use it only for a result whose layout is the value's layout
+// (reshaped, sliced or padded): the gap factor describes that layout, so a
+// result with a new layout takes makeUngappedKernelInfoAttr instead.
+Attribute layoutPreservingKernelInfo(Value value,
+                                     ArrayRef<int64_t> resultShape) {
   auto kernelInfo = findAttributeAssociatedWith(value, kKernelInfoAttrName);
   if (succeeded(kernelInfo)) {
     auto info = getKernelInfo(kernelInfo.value()).value();
     info.resultShape = llvm::to_vector(resultShape);
     return makeKernelInfoAttr(value.getContext(), info);
+  }
+  return Attribute{};
+}
+
+Attribute makeUngappedKernelInfoAttr(MLIRContext* ctx,
+                                     ArrayRef<int64_t> resultShape) {
+  return makeKernelInfoAttr(
+      ctx,
+      KernelInfo{.resultShape = llvm::to_vector(resultShape), .gapFactor = 1});
+}
+
+// Return the kernel info of the first operand that has one, unchanged, for an
+// op whose results keep that operand's layout. If no operand has one, return
+// an empty Attribute.
+Attribute findOperandKernelInfo(Operation* op) {
+  for (Value operand : op->getOperands()) {
+    auto info = findAttributeAssociatedWith(operand, kKernelInfoAttrName);
+    if (succeeded(info)) return info.value();
   }
   return Attribute{};
 }
@@ -361,6 +380,8 @@ struct LayoutPropagation : impl::LayoutPropagationBase<LayoutPropagation> {
 
   // Add an op attribute denoting the layouts of the op results. Assumes the
   // assignedLayouts map contains the layout for the result SSA values already.
+  // Without `kernelInfoAttr`, each tensor result gets an ungapped kernel info:
+  // an op that keeps an operand's layout must pass that operand's kernel info.
   void setResultLayoutAttr(Operation* op, Attribute kernelInfoAttr = {});
 
   // Fails when `op`'s kernel, whose packing spans `slots` values per
@@ -553,10 +574,7 @@ LogicalResult LayoutPropagation::visitOperation(func::FuncOp op) {
             cast<SecretType>(arg.getType()).getValueType())) {
       setAttributeAssociatedWith(
           arg, kKernelInfoAttrName,
-          makeKernelInfoAttr(
-              arg.getContext(),
-              KernelInfo{.resultShape = llvm::to_vector(tensorType.getShape()),
-                         .gapFactor = 1}));
+          makeUngappedKernelInfoAttr(arg.getContext(), tensorType.getShape()));
     }
   }
 
@@ -661,7 +679,7 @@ LogicalResult LayoutPropagation::visitOperation(CollapseShapeOp op) {
   LayoutAttr resultLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, relation);
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(tensor, op.getResultType().getShape());
+      layoutPreservingKernelInfo(tensor, op.getResultType().getShape());
 
   assignedLayouts.insert({op.getResult(), resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -688,7 +706,7 @@ LogicalResult LayoutPropagation::visitOperation(ExpandShapeOp op) {
   LayoutAttr resultLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, expandedRelation);
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(tensor, op.getResultType().getShape());
+      layoutPreservingKernelInfo(tensor, op.getResultType().getShape());
 
   assignedLayouts.insert({op.getResult(), resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -753,16 +771,15 @@ LogicalResult LayoutPropagation::visitOperation(VecmatOp op) {
     matrix = toReplace;
   }
 
-  // The output has the same per-row layout as the input matrix.
+  // The output is a row-major vector, so it is not gapped.
   auto result = vecmatOp->getResult(0);
   RankedTensorType outputType = cast<RankedTensorType>(result.getType());
   IntegerRelation outputLayoutResult =
       getRowMajorLayoutRelation(outputType, minSlotCount);
   LayoutAttr outputLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, outputLayoutResult);
-  Attribute kernelInfoAttr = makeKernelInfoAttr(
-      ctx, KernelInfo{.resultShape = llvm::to_vector(outputType.getShape()),
-                      .gapFactor = 1});
+  Attribute kernelInfoAttr =
+      makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
   assignedLayouts.insert({result, outputLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -790,13 +807,13 @@ LogicalResult LayoutPropagation::visitOperation(BroadcastOp op) {
   // squeeze-excite scale multiplied into a feature map), use that layout so
   // the user needs no conversion. Layouts are assigned in program order, so
   // this applies only when the sibling is defined before the broadcast;
-  // otherwise, assign the row-major default layout. The broadcast also takes
-  // the sibling's kernel info, because the elementwise user inherits kernel
-  // info from its first operand, which in torch's operand order is the
-  // broadcast.
+  // otherwise, assign the row-major default layout. A new layout is not
+  // gapped. A borrowed one takes the sibling's kernel info too, because the
+  // elementwise user inherits kernel info from its first operand, which in
+  // torch's operand order is the broadcast.
   LayoutAttr resultLayoutAttr;
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(input, resultType.getShape());
+      makeUngappedKernelInfoAttr(ctx, resultType.getShape());
   IntegerRelation cyclicResultRel =
       getCyclicLayoutRelation(resultType, minSlotCount);
   Value sibling;
@@ -847,7 +864,7 @@ LogicalResult LayoutPropagation::visitOperation(TransposeOp op) {
   LayoutAttr resultLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, relation);
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(input, resultType.getShape());
+      layoutPreservingKernelInfo(input, resultType.getShape());
   assignedLayouts.insert({result, resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
   debugAssignLayout(result, resultLayoutAttr);
@@ -913,10 +930,8 @@ LogicalResult LayoutPropagation::visitOperation(MatvecOp op) {
   LayoutAttr resultLayout = outputLayoutResult.value();
   // The matrix is usually a plaintext without kernel info, and the vector's may
   // describe a gapped layout the kernel does not produce.
-  Attribute kernelInfoAttr = makeKernelInfoAttr(
-      &getContext(),
-      KernelInfo{.resultShape = llvm::to_vector(outputType.getShape()),
-                 .gapFactor = 1});
+  Attribute kernelInfoAttr =
+      makeUngappedKernelInfoAttr(&getContext(), outputType.getShape());
 
   assignedLayouts.insert({result, resultLayout});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -938,9 +953,9 @@ LogicalResult LayoutPropagation::visitOperation(DotOp op) {
   if (failed(layout)) {
     return failure();
   }
-  Attribute kernelInfoAttr = cloneKernelInfoWithResultShape(
-      op.getInputs().front(),
-      cast<RankedTensorType>(result.getType()).getShape());
+  // The result has the default layout, so it is not gapped.
+  Attribute kernelInfoAttr = makeUngappedKernelInfoAttr(
+      &getContext(), cast<RankedTensorType>(result.getType()).getShape());
   assignedLayouts.insert({result, layout.value()});
   setResultLayoutAttr(op, kernelInfoAttr);
   debugAssignLayout(result, layout.value());
@@ -1047,8 +1062,9 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DOp op) {
     return failure();
   }
   LayoutAttr resultLayout = outputLayoutResult.value();
+  // The kernel reads row-major data, so the result is not gapped.
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(data, outputType.getShape());
+      makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
   assignedLayouts.insert({result, resultLayout});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -1119,8 +1135,9 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DOp op) {
     return failure();
   }
   LayoutAttr resultLayout = outputLayoutResult.value();
+  // The kernel reads row-major data, so the result is not gapped.
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(data, outputType.getShape());
+      makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
   assignedLayouts.insert({result, resultLayout});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -1453,16 +1470,10 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   setConvFoldedPadding(op, matrixOperand.padding);
 
   assignedLayouts.insert({result, resultLayoutAttr});
-  auto resultKernelInfo =
-      cloneKernelInfoWithResultShape(data, outputType.getShape());
-
-  setResultLayoutAttr(op, resultKernelInfo);
+  setResultLayoutAttr(op, kernelInfoAttr);
   auto kernelAttr =
       secret::KernelAttr::get(ctx, KernelName::MatvecDiagonal, /*force=*/false);
   op->setAttr(secret::SecretDialect::kKernelAttrName, kernelAttr);
-
-  setAttributeAssociatedWith(op.getResult(0), kKernelInfoAttrName,
-                             kernelInfoAttr);
 
   return alignInitWithResultLayout(op, op.getOutputs().front(),
                                    resultLayoutAttr);
@@ -1717,8 +1728,9 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
         getBicyclicLayoutRelation(outputType, minSlotCount);
     LayoutAttr outputLayoutAttr =
         LayoutAttr::getFromIntegerRelation(ctx, outputLayoutResult);
+    // The operands are bicyclic, so the result is not gapped.
     auto kernelInfoAttr =
-        cloneKernelInfoWithResultShape(lhs, outputType.getShape());
+        makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
     assignedLayouts.insert({result, outputLayoutAttr});
     setResultLayoutAttr(op, kernelInfoAttr);
@@ -1805,8 +1817,9 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
     RankedTensorType outputType = cast<RankedTensorType>(result.getType());
     LayoutAttr outputLayoutAttr = LayoutAttr::getFromIntegerRelation(
         ctx, getBicyclicLayoutRelation(outputType, minSlotCount));
+    // The secret operand is bicyclic, so the result is not gapped.
     auto kernelInfoAttr =
-        cloneKernelInfoWithResultShape(secretOperand, outputType.getShape());
+        makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
     assignedLayouts.insert({result, outputLayoutAttr});
     debugAssignLayout(result, outputLayoutAttr);
@@ -1872,8 +1885,8 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
       getPerRowLayoutRelation(outputType, minSlotCount);
   LayoutAttr outputLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, outputLayoutResult);
-  auto kernelInfoAttr =
-      cloneKernelInfoWithResultShape(lhs, outputType.getShape());
+  // The input matrix is per-row, so the result is not gapped.
+  auto kernelInfoAttr = makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
   assignedLayouts.insert({result, outputLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -1917,11 +1930,8 @@ LogicalResult LayoutPropagation::visitOperation(ReduceOp op) {
   }
   // The inputs are row-major, so the results are not gapped.
   auto resultType = cast<ShapedType>(op->getResult(0).getType());
-  setResultLayoutAttr(
-      op,
-      makeKernelInfoAttr(
-          ctx, KernelInfo{.resultShape = llvm::to_vector(resultType.getShape()),
-                          .gapFactor = 1}));
+  setResultLayoutAttr(op,
+                      makeUngappedKernelInfoAttr(ctx, resultType.getShape()));
   return success();
 }
 
@@ -1955,7 +1965,7 @@ LogicalResult LayoutPropagation::visitOperation(affine::AffineForOp op) {
     debugAssignLayout(result, layout);
   }
 
-  setResultLayoutAttr(op);
+  setResultLayoutAttr(op, findOperandKernelInfo(op));
   return success();
 }
 
@@ -1965,10 +1975,10 @@ LogicalResult LayoutPropagation::visitOperation(tensor::ExtractOp op) {
   LLVM_DEBUG(llvm::dbgs() << "Assigning scalar layout " << scalarLayout
                           << " to value " << op.getResult() << "\n");
   Value result = op.getResult();
-  auto kernelInfoAttr = cloneKernelInfoWithResultShape(op.getTensor(), {});
   assignedLayouts.insert({result, scalarLayout});
   debugAssignLayout(result, scalarLayout);
-  setResultLayoutAttr(op, kernelInfoAttr);
+  // The scalar layout is new, so the result is not gapped.
+  setResultLayoutAttr(op, makeUngappedKernelInfoAttr(op.getContext(), {}));
   return success();
 }
 
@@ -1978,8 +1988,8 @@ LogicalResult LayoutPropagation::visitOperation(tensor::InsertOp op) {
   // which will assign a default scalar layout if it is secret and has no
   // layout.
   LayoutAttr tensorLayout = getComposedLayoutAttr(op.getDest());
-  auto kernelInfoAttr = cloneKernelInfoWithResultShape(
-      op.getScalar(), op.getDest().getType().getShape());
+  auto kernelInfoAttr = layoutPreservingKernelInfo(
+      op.getDest(), op.getDest().getType().getShape());
   Value result = op.getResult();
   assignedLayouts.insert({result, tensorLayout});
   debugAssignLayout(result, tensorLayout);
@@ -1993,8 +2003,8 @@ LogicalResult LayoutPropagation::visitOperation(tensor::InsertSliceOp op) {
     return op->emitError() << "Destination tensor has no assigned layout";
   }
   LayoutAttr destLayout = getComposedLayoutAttr(op.getDest());
-  auto kernelInfoAttr = cloneKernelInfoWithResultShape(
-      op.getSource(), op.getDest().getType().getShape());
+  auto kernelInfoAttr = layoutPreservingKernelInfo(
+      op.getDest(), op.getDest().getType().getShape());
 
   Value result = op.getResult();
   assignedLayouts.insert({result, destLayout});
@@ -2037,7 +2047,7 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
   RankedTensorType paddedType = op.getResultType();
   LayoutAttr sourceLayout = getComposedLayoutAttr(op.getSource());
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(op.getSource(), paddedType.getShape());
+      layoutPreservingKernelInfo(op.getSource(), paddedType.getShape());
   std::optional<KernelInfo> info =
       kernelInfoAttr ? getKernelInfo(kernelInfoAttr) : std::nullopt;
   // A 1-D conv reads only row-major data, so it would convert gapped data after
@@ -2153,8 +2163,8 @@ LogicalResult LayoutPropagation::visitOperation(tensor::ExtractSliceOp op) {
   auto zeroIndexedSliceLayout =
       shiftVar(sliceExtractionLayout, ctVarOffset, -ctLowerBound.value());
 
-  Attribute kernelInfoAttr = cloneKernelInfoWithResultShape(
-      op.getSource(), op.getResultType().getShape());
+  Attribute kernelInfoAttr =
+      layoutPreservingKernelInfo(op.getSource(), op.getResultType().getShape());
   LayoutAttr outputLayout = LayoutAttr::getFromIntegerRelation(
       op.getContext(), zeroIndexedSliceLayout);
   assignedLayouts.insert({op.getResult(), outputLayout});
@@ -2582,7 +2592,7 @@ void LayoutPropagation::rectifyIncompatibleOperandLayouts(ReduceOp op) {
         return operand.getOwner() == op;
       });
       assignedLayouts.insert({toReplace, reducedInputLayout});
-      setResultLayoutAttr(convertOp);
+      setResultLayoutAttr(convertOp, findOperandKernelInfo(convertOp));
     }
   }
 }
@@ -2613,7 +2623,7 @@ void LayoutPropagation::rectifyIncompatibleOperandLayouts(
     return operand.getOwner() == op;
   });
   assignedLayouts.insert({toReplace, newLayoutAttr});
-  setResultLayoutAttr(convertLayoutOp);
+  setResultLayoutAttr(convertLayoutOp, findOperandKernelInfo(convertLayoutOp));
 }
 
 void LayoutPropagation::rectifyIncompatibleOperandLayouts(tensor::InsertOp op) {
@@ -2649,7 +2659,7 @@ void LayoutPropagation::rectifyIncompatibleOperandLayouts(tensor::InsertOp op) {
     return operand.getOwner() == op;
   });
   assignedLayouts.insert({toReplace, newScalarLayout});
-  setResultLayoutAttr(convertOp);
+  setResultLayoutAttr(convertOp, findOperandKernelInfo(convertOp));
 }
 
 void LayoutPropagation::passLayoutThroughOp(Operation* op) {
@@ -2659,7 +2669,7 @@ void LayoutPropagation::passLayoutThroughOp(Operation* op) {
     assignedLayouts.insert({result, layout});
     debugAssignLayout(result, layout);
   }
-  setResultLayoutAttr(op);
+  setResultLayoutAttr(op, findOperandKernelInfo(op));
 }
 
 FailureOr<LayoutAttr> LayoutPropagation::defaultLayoutForScalarType(
@@ -2711,21 +2721,15 @@ FailureOr<LayoutAttr> LayoutPropagation::defaultLayoutForType(Type type) {
 
 void LayoutPropagation::setResultLayoutAttr(Operation* op,
                                             Attribute kernelInfo) {
-  // If no kernelInfo attribute is present, check if any of the operands have
-  // one.
-  if (!kernelInfo && op->getNumOperands() > 0) {
-    for (Value operand : op->getOperands()) {
-      auto info = findAttributeAssociatedWith(operand, kKernelInfoAttrName);
-      if (succeeded(info)) {
-        kernelInfo = info.value();
-        break;
-      }
+  for (Value result : op->getResults()) {
+    Attribute resultKernelInfo = kernelInfo;
+    if (!resultKernelInfo) {
+      auto tensorType = dyn_cast<RankedTensorType>(result.getType());
+      if (!tensorType) continue;
+      resultKernelInfo =
+          makeUngappedKernelInfoAttr(op->getContext(), tensorType.getShape());
     }
-  }
-  if (kernelInfo) {
-    for (Value result : op->getResults()) {
-      setAttributeAssociatedWith(result, kKernelInfoAttrName, kernelInfo);
-    }
+    setAttributeAssociatedWith(result, kKernelInfoAttrName, resultKernelInfo);
   }
 
   OpBuilder builder(&getContext());
