@@ -14,7 +14,7 @@
 // conjugation, which only bootstrapping asks for.
 // CLIENT: constexpr std::array<KeyRequest, {{[0-9]+}}> kEvaluationKeys
 // CLIENT-SAME: {1, 0,
-// CLIENT: PrepareRotationKey(GetKeyRequest(
+// CLIENT: PrepareRotationKey({{v[0-9]+}} ? GetKeyRequest() :
 
 func.func @bootstrap(%input: tensor<1024xf32> {secret.secret})
     -> tensor<1024xf32> {
