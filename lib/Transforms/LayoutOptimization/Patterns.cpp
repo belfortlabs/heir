@@ -12,6 +12,7 @@
 #include "lib/Utils/Layout/Utils.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"          // from @llvm-project
+#include "llvm/include/llvm/Support/MathExtras.h"       // from @llvm-project
 #include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"     // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"          // from @llvm-project
@@ -123,6 +124,18 @@ LogicalResult FoldMatvecInputConversionIntoPlaintext::matchAndRewrite(
       !isRelationSquatDiagonal(matrixType, *ciphertextSize,
                                matrixLayout.getIntegerRelation()) ||
       !isOneToOneSingleCiphertextPacking(fromLayout.getIntegerRelation())) {
+    return failure();
+  }
+
+  // The squat-diagonal kernel rotates the vector with the row-major period, the
+  // vector size rounded up to a power of two, and relies on the row-major
+  // replicas of a smaller period. The folded matrix only has columns for the
+  // vector's own size. So the fold is sound only when that period is the whole
+  // ciphertext and the permuted vector stays below its size.
+  int64_t numElements = vectorType.getNumElements();
+  if (static_cast<int64_t>(llvm::PowerOf2Ceil(numElements)) !=
+          *ciphertextSize ||
+      !isPackedIntoSlotPrefix(fromLayout.getIntegerRelation(), numElements)) {
     return failure();
   }
 
