@@ -9,12 +9,13 @@ def ReductionCanonicalizations : Pass<"reduction-canonicalizations"> {
   let dependentDialects = [
     "arith::ArithDialect",
     "affine::AffineDialect",
+    "tensor::TensorDialect",
   ];
 
   let description = [{
     This pass canonicalizes the linalg.generic reduction operation into a linalg.reduce.
-    A sum or product over several dimensions becomes a chain of reductions over
-    one dimension each.
+    A sum or product over several trailing dimensions becomes a collapse of
+    those dimensions and one reduction.
 
     (* example filepath=tests/Transforms/reduction_canonicalizations/torch_dot.mlir *)
   }];
