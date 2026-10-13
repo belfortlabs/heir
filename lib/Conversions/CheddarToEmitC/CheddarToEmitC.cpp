@@ -1374,6 +1374,25 @@ struct ConvertLoadPointer : public OpConversionPattern<mlir::memref::LoadOp> {
   }
 };
 
+// memref.collapse_shape / memref.expand_shape of a primitive buffer. A
+// contiguous row-major buffer is a flat pointer in both shapes, so the reshape
+// is the pointer itself.
+template <typename ReshapeOp>
+struct ConvertReshapePointer : public OpConversionPattern<ReshapeOp> {
+  using OpConversionPattern<ReshapeOp>::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      ReshapeOp op, typename ReshapeOp::Adaptor adaptor,
+      ConversionPatternRewriter& rewriter) const override {
+    auto pointerType = dyn_cast<emitc::PointerType>(adaptor.getSrc().getType());
+    Type resultType =
+        this->getTypeConverter()->convertType(op.getResult().getType());
+    if (!pointerType || resultType != pointerType)
+      return rewriter.notifyMatchFailure(op, "not a flat primitive pointer");
+    rewriter.replaceOp(op, adaptor.getSrc());
+    return success();
+  }
+};
+
 // memref.dealloc of a payload -> `v = T();`, releasing the device buffer at
 // last use instead of at scope exit (peak memory would otherwise be the sum
 // of all intermediates). `v = {}` does not compile: the constructors are
@@ -1913,8 +1932,10 @@ struct CheddarToEmitCDialectInterface : public ConvertToEmitCPatternInterface {
         ConvertAllocLocal, EraseDealloc, ConvertLoadPointer, ConvertLoadArray,
         ConvertStoreArray, ConvertMemRefCopyPrimitive, ConvertSubViewSubscript,
         ConvertSubViewToPointer, ConvertPayloadCast, ConvertGlobalDropAlign,
-        ConvertGetGlobalPointer, ConvertLoadResource>(typeConverter, ctx,
-                                                      /*benefit=*/2);
+        ConvertGetGlobalPointer, ConvertLoadResource,
+        ConvertReshapePointer<mlir::memref::CollapseShapeOp>,
+        ConvertReshapePointer<mlir::memref::ExpandShapeOp>>(typeConverter, ctx,
+                                                            /*benefit=*/2);
     patterns.add<ConvertPayloadCopy>(typeConverter, ctx, /*benefit=*/3);
     patterns.add<MoveCopyFromDeadLocal>(typeConverter, ctx, /*benefit=*/4);
 
