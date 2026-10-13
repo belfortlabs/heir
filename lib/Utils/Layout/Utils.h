@@ -141,11 +141,19 @@ bool isRelationRowMajor(RankedTensorType vectorType, int64_t numSlots,
 bool isOneToOneSingleCiphertextPacking(
     const presburger::IntegerRelation& relation);
 
+// Returns true if every slot the relation maps to is below `prefixSize`. The
+// slot is the relation's last range variable.
+bool isPackedIntoSlotPrefix(const presburger::IntegerRelation& relation,
+                            int64_t prefixSize);
+
 // Folds a single-ciphertext vector permutation (as accepted by
 // isOneToOneSingleCiphertextPacking) into a matrix layout, returning the matrix
 // layout that lets a diagonal matvec consume the un-permuted vector directly.
 // `vectorPermutation` maps [col] -> [ct, slot]; `matrixLayout` maps
-// [row, col] -> [ct, slot].
+// [row, col] -> [ct, slot]. The composition feeds each slot in as a matrix
+// column, so the result is only sound when the permutation keeps every element
+// in a slot below the vector size, and the diagonal kernel's period is the
+// whole ciphertext, so it never reads a replica the permuted vector lacks.
 presburger::IntegerRelation foldVectorPermutationIntoMatrixLayout(
     const presburger::IntegerRelation& vectorPermutation,
     const presburger::IntegerRelation& matrixLayout);
@@ -248,6 +256,32 @@ struct PointPairCollector {
 // Get a list of points in the relation by enumerating all possible values.
 void enumeratePoints(const presburger::IntegerRelation& relation,
                      PointPairCollector& collector);
+
+// Call `onPair(domainPoint, rangePoint)` for every point of the relation, in
+// the order enumeratePoints lists them, without storing them.
+void forEachPointPair(
+    const presburger::IntegerRelation& relation,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPair);
+
+// Call `onPoint(domainPoint, rangePoint)` for every point of the relation,
+// without ISL: candidates come from the constraints over earlier variables and
+// each is checked exactly. Fails without calling `onPoint` when the relation
+// has symbols, a local variable has no division representation, or a variable
+// has no bounds from constraints over earlier variables. Also fails after a
+// budget of complete candidates, after calling `onPoint` for the points
+// visited so far.
+LogicalResult forEachRelationPoint(
+    const presburger::IntegerRelation& relation,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint);
+
+// Call `onPoint(domainPoint, rangePoint)` for every point of the composition
+// of `stages` (the first stage's domain to the last stage's range), following
+// each point through the stages one at a time. A composed relation has the
+// intermediate coordinates as locals, so forEachRelationPoint may have nothing
+// to narrow the range variables with; each stage on its own does.
+LogicalResult forEachComposedRelationPoint(
+    ArrayRef<presburger::IntegerRelation> stages,
+    llvm::function_ref<void(ArrayRef<int64_t>, ArrayRef<int64_t>)> onPoint);
 
 // Get a list of points in the range of the relation by enumerating all
 // possible values.

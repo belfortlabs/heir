@@ -3,7 +3,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def LayoutPropagation : Pass<"layout-propagation"> {
+def LayoutPropagation : Pass<"layout-propagation", "ModuleOp"> {
   let summary = "Propagate ciphertext layouts through the IR";
   let description = [{
   This pass performs a forward propagation of layout (packing) information
@@ -50,7 +50,8 @@ def LayoutPropagation : Pass<"layout-propagation"> {
       "min-slot-count",
       "int",
       /*default=*/"1024",
-      "Minimum number of slots to use for packing messages in ciphertexts."
+      "Minimum number of slots to use for packing messages in ciphertexts. "
+      "Raised to the smallest power of two that holds every kernel's packing."
     >
   ];
 
