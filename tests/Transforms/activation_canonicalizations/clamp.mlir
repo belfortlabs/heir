@@ -56,13 +56,31 @@ func.func @min_max_scalar(%arg0: f32) -> f32 {
 
 // -----
 
-// select(a < c, c, a) is not the min/max shape this pattern matches.
-// CHECK: func.func @swapped_select
+// torch-mlir's aten.clamp lowering: select(x < lo, lo, x) = max(x, lo) and
+// select(x > hi, hi, x) = min(x, hi).
+// CHECK: func.func @torch_clamp
+// CHECK-NOT: arith.select
+// CHECK: %[[MAX:.*]] = arith.maximumf %arg0, %{{.*}} : f32
+// CHECK: arith.minimumf %[[MAX]], %{{.*}} : f32
+func.func @torch_clamp(%arg0: f32) -> f32 {
+  %c0 = arith.constant 0.000000e+00 : f32
+  %c6 = arith.constant 6.000000e+00 : f32
+  %0 = arith.cmpf ult, %arg0, %c0 : f32
+  %1 = arith.select %0, %c0, %arg0 : f32
+  %2 = arith.cmpf ugt, %1, %c6 : f32
+  %3 = arith.select %2, %c6, %1 : f32
+  return %3 : f32
+}
+
+// -----
+
+// A max of two non-constant values has no lowering on ciphertexts, so it is
+// left to the compare-to-sign path.
+// CHECK: func.func @two_variables
 // CHECK: arith.cmpf
 // CHECK: arith.select
-func.func @swapped_select(%arg0: f32) -> f32 {
-  %c0 = arith.constant 0.000000e+00 : f32
-  %0 = arith.cmpf olt, %arg0, %c0 : f32
-  %1 = arith.select %0, %c0, %arg0 : f32
+func.func @two_variables(%arg0: f32, %arg1: f32) -> f32 {
+  %0 = arith.cmpf ogt, %arg0, %arg1 : f32
+  %1 = arith.select %0, %arg0, %arg1 : f32
   return %1 : f32
 }

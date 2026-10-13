@@ -10,6 +10,7 @@
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/MLIRContext.h"            // from @llvm-project
+#include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
 #include "mlir/include/mlir/Support/LLVM.h"              // from @llvm-project
 #include "mlir/include/mlir/Transforms/WalkPatternRewriteDriver.h"  // from @llvm-project
@@ -56,6 +57,17 @@ static bool IsOne(mlir::Attribute attr) {
 // Either way the domain lands on the `arith.maximumf`/`arith.minimumf` that
 // PolynomialApproximation / ReluViaCompositeSign read; without it they fall
 // back to [-1, 1].
+// A constant, or a block argument of a linalg.generic whose operand is a
+// constant (torch-mlir passes a clamp bound as a 0-d tensor input).
+static bool isConstantBound(Value value) {
+  if (matchPattern(value, m_Constant())) return true;
+  auto arg = dyn_cast<BlockArgument>(value);
+  if (!arg) return false;
+  auto generic = dyn_cast<linalg::GenericOp>(arg.getOwner()->getParentOp());
+  if (!generic || arg.getArgNumber() >= generic.getNumDpsInputs()) return false;
+  return matchPattern(generic.getDpsInputs()[arg.getArgNumber()], m_Constant());
+}
+
 struct SelectMinMaxFloatPattern : public OpRewritePattern<arith::SelectOp> {
   using OpRewritePattern<arith::SelectOp>::OpRewritePattern;
 
@@ -83,21 +95,31 @@ struct SelectMinMaxFloatPattern : public OpRewritePattern<arith::SelectOp> {
         return rewriter.notifyMatchFailure(op, "predicate is not >, >=, <, <=");
     }
 
-    // Must be the max/min shape: select(a ? c, a, c).
-    if (cmpOp.getLhs() != op.getTrueValue() ||
-        cmpOp.getRhs() != op.getFalseValue())
+    // Must be the max/min shape: select(a ? c, a, c), or select(a ? c, c, a)
+    // with the opposite sense, which torch-mlir emits for aten.clamp.
+    if (cmpOp.getLhs() == op.getFalseValue() &&
+        cmpOp.getRhs() == op.getTrueValue())
+      isMax = !isMax;
+    else if (cmpOp.getLhs() != op.getTrueValue() ||
+             cmpOp.getRhs() != op.getFalseValue())
       return rewriter.notifyMatchFailure(op,
                                          "operands are not select(a?c,a,c)");
 
+    // One side must be a constant bound: polynomial approximation only
+    // handles max/min against a constant, and a max/min of two non-constant
+    // values has no lowering on ciphertexts.
+    if (!isConstantBound(cmpOp.getLhs()) && !isConstantBound(cmpOp.getRhs()))
+      return rewriter.notifyMatchFailure(op, "neither operand is a constant");
+
     Operation* newOp;
     if (isMax)
-      newOp = arith::MaximumFOp::create(rewriter, op.getLoc(),
-                                        op.getTrueValue(), op.getFalseValue(),
-                                        cmpOp.getFastmathAttr());
+      newOp =
+          arith::MaximumFOp::create(rewriter, op.getLoc(), cmpOp.getLhs(),
+                                    cmpOp.getRhs(), cmpOp.getFastmathAttr());
     else
-      newOp = arith::MinimumFOp::create(rewriter, op.getLoc(),
-                                        op.getTrueValue(), op.getFalseValue(),
-                                        cmpOp.getFastmathAttr());
+      newOp =
+          arith::MinimumFOp::create(rewriter, op.getLoc(), cmpOp.getLhs(),
+                                    cmpOp.getRhs(), cmpOp.getFastmathAttr());
 
     // (a) Forward any discardable attrs annotated on the select op itself onto
     // the new op (the old DRR `SelectGreaterThanEqualFloat` behavior). Covers
