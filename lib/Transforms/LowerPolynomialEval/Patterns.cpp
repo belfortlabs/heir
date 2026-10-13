@@ -247,6 +247,42 @@ LogicalResult LowerToKernelEvalChebyshev::matchAndRewrite(
   ImplicitLocOpBuilder b(op.getLoc(), rewriter);
   Value xInput = op.getValue();
 
+  // A polynomial of degree at most one, e.g. a sigmoid fitted over a narrow
+  // calibrated range, is a multiply and an add. Some backends' polynomial
+  // evaluation needs degree two, and the affine form costs at most one level.
+  // Coefficients below 1e-9 count as zero, as in EvalChebyshevOp's depth.
+  ArrayAttr coefficients = attr.getValue().getCoefficients();
+  auto coefficient = [&](unsigned i) {
+    return i < coefficients.size()
+               ? cast<FloatAttr>(coefficients[i]).getValueAsDouble()
+               : 0.0;
+  };
+  unsigned degree = coefficients.empty() ? 0 : coefficients.size() - 1;
+  while (degree > 0 && std::abs(coefficient(degree)) < 1e-9) --degree;
+  if (degree <= 1) {
+    // p(t) = c0 + c1 t with t = (2x - upper - lower) / (upper - lower).
+    double scale = 2.0 / (upper - lower);
+    double shift = -(upper + lower) / (upper - lower);
+    double slope = coefficient(1) * scale;
+    double offset = coefficient(0) + coefficient(1) * shift;
+    Type type = xInput.getType();
+    Value result = xInput;
+    if (slope != 1.0) {
+      result = arith::MulFOp::create(
+          b, result,
+          arith::ConstantOp::create(
+              b, type, getScalarOrDenseAttr(type, APFloat(slope))));
+    }
+    if (offset != 0.0) {
+      result = arith::AddFOp::create(
+          b, result,
+          arith::ConstantOp::create(
+              b, type, getScalarOrDenseAttr(type, APFloat(offset))));
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
   if (std::abs(lower - -1.0) > 1e-9 || std::abs(upper - 1.0) > 1e-9) {
     APFloat rescale = APFloat(2.0 / (upper - lower));
     APFloat shift = APFloat(-(upper + lower) / (upper - lower));
