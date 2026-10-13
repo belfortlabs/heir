@@ -14,6 +14,7 @@
 #include "lib/Dialect/Polynomial/IR/PolynomialAttributes.h"
 #include "lib/Dialect/Polynomial/IR/PolynomialOps.h"
 #include "lib/Dialect/Polynomial/IR/PolynomialTypes.h"
+#include "lib/Transforms/LoweringHistory/LoweringHistory.h"
 #include "lib/Utils/Approximation/CaratheodoryFejer.h"
 #include "lib/Utils/Polynomial/Polynomial.h"
 #include "lib/Utils/Utils.h"
@@ -28,6 +29,7 @@
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
+#include "mlir/include/mlir/IR/Diagnostics.h"            // from @llvm-project
 #include "mlir/include/mlir/IR/MLIRContext.h"            // from @llvm-project
 #include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
@@ -293,7 +295,11 @@ struct ConvertUnaryOp : public OpRewritePattern<OpTy> {
     TypedChebyshevPolynomialAttr polyAttr =
         TypedChebyshevPolynomialAttr::get(polyType, poly);
     auto evalOp =
-        rewriter.replaceOpWithNewOp<EvalOp>(op, polyAttr, op.getOperand());
+        EvalOp::create(rewriter,
+                       getLoweringLocation(op, "polynomial-approximation",
+                                           EvalOp::getOperationName()),
+                       polyAttr, op.getOperand());
+    rewriter.replaceOp(op, evalOp.getResult());
     // These attributes need to be preserved when the polynomial is in the
     // Chebyshev basis, so that later passes can apply domain rescaling
     // properly.
@@ -426,7 +432,11 @@ struct ConvertBinaryConstOp : public OpRewritePattern<OpTy> {
     TypedChebyshevPolynomialAttr polyAttr =
         TypedChebyshevPolynomialAttr::get(polyType, poly);
     auto evalOp =
-        rewriter.replaceOpWithNewOp<EvalOp>(op, polyAttr, nonConstOperand);
+        EvalOp::create(rewriter,
+                       getLoweringLocation(op, "polynomial-approximation",
+                                           EvalOp::getOperationName()),
+                       polyAttr, nonConstOperand);
+    rewriter.replaceOp(op, evalOp.getResult());
     // These attributes need to be preserved when the polynomial is in the
     // Chebyshev basis, so that later passes can apply domain rescaling
     // properly.
@@ -885,7 +895,18 @@ struct PolynomialApproximation
 
     // TODO (#1221): Investigate whether folding (default: on) can be skipped
     // here.
-    (void)applyPatternsGreedily(getOperation(), std::move(patterns));
+    // A pattern can diagnose invalid input and return match failure. The
+    // greedy driver may still converge successfully, so propagate emitted
+    // errors as well as driver failures to the pass manager. Ordinary
+    // notifyMatchFailure calls do not emit errors and must remain benign.
+    bool emittedError = false;
+    ScopedDiagnosticHandler diagnostics(&getContext(), [&](Diagnostic& diag) {
+      emittedError |= diag.getSeverity() == DiagnosticSeverity::Error;
+      return failure();
+    });
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))) ||
+        emittedError)
+      signalPassFailure();
   }
 };
 
