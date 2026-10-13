@@ -25,6 +25,7 @@ cc_library(
         "@heir//lib/Kernel:ArithmeticDag",
         "@heir//lib/Kernel:IRMaterializingVisitor",
         "@heir//lib/Kernel:KernelImplementation",
+        "@heir//lib/Kernel:RotationReach",
         "@heir//lib/Kernel:Utils",
         "@heir//lib/Target/CompilationTarget",
         "@heir//lib/Transforms/DropUnitDims",

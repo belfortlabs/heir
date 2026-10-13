@@ -58,6 +58,11 @@ cc_library(
 )
 
 cc_library(
+    name = "RotationReach",
+    hdrs = ["RotationReach.h"],
+)
+
+cc_library(
     name = "AbstractValue",
     hdrs = ["AbstractValue.h"],
     deps = [

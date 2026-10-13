@@ -28,6 +28,7 @@
 #include "lib/Kernel/IRMaterializingVisitor.h"
 #include "lib/Kernel/KernelImplementation.h"
 #include "lib/Kernel/KernelName.h"
+#include "lib/Kernel/RotationReach.h"
 #include "lib/Kernel/Utils.h"
 #include "lib/Target/CompilationTarget/CompilationTarget.h"
 #include "lib/Transforms/ConvertToCiphertextSemantics/AssignLayout.h"
@@ -3163,11 +3164,10 @@ struct ConvertLinalgMatmul
     setMaterializedAttr(addBias);
 
     // Rebuild the full periodic output layout from the widest valid
-    // period-aligned window. The rotation reach of rotate-and-reduce with
-    // `steps` iterations of stride `period` is period * (steps - 1).
+    // period-aligned window.
     auto dataSemanticResultType =
         cast<RankedTensorType>(op->getResult(0).getType());
-    int64_t reach = period * (steps - 1);
+    int64_t reach = kernel::getRotateAndReduceReach(period, steps);
     auto ctSemanticResultType =
         cast<RankedTensorType>(addBias->getResult(0).getType());
     int64_t validPrefix = ctSemanticResultType.getDimSize(1) - reach;
@@ -3228,14 +3228,13 @@ struct ConvertLinalgMatmul
     setMaterializedAttr(addBias);
 
     // Rebuild the full periodic output layout from the widest valid
-    // period-aligned window. For (m x n) * (n x p), the BSGS rotation reach
-    // is n * p - 1 + m * (n - 1).
+    // period-aligned window.
     auto dataSemanticResultType =
         cast<RankedTensorType>(op->getResult(0).getType());
     int64_t m = lhsType.getDimSize(0);
     int64_t n = lhsType.getDimSize(1);
     int64_t p = rhsType.getDimSize(1);
-    int64_t reach = n * p - 1 + m * (n - 1);
+    int64_t reach = kernel::getBicyclicMatmulReach(m, n, p);
     auto ctSemanticResultType =
         cast<RankedTensorType>(addBias->getResult(0).getType());
     int64_t validPrefix = ctSemanticResultType.getDimSize(1) - reach;
@@ -3326,15 +3325,14 @@ struct ConvertLinalgBatchMatmul
     setMaterializedAttr(addBias);
 
     // Rebuild the full periodic output layout from the widest valid
-    // period-aligned window. For (h x m x n) * (h x n x p), the BSGS rotation
-    // reach is h * n * p - 1 + h * m * (n - 1).
+    // period-aligned window.
     auto dataSemanticResultType =
         cast<RankedTensorType>(op->getResult(0).getType());
     int64_t h = lhsType.getShape()[0];
     int64_t m = lhsType.getShape()[1];
     int64_t n = lhsType.getShape()[2];
     int64_t p = rhsType.getShape()[2];
-    int64_t reach = h * n * p - 1 + h * m * (n - 1);
+    int64_t reach = kernel::getTricyclicBatchMatmulReach(h, m, n, p);
     auto ctSemanticResultType =
         cast<RankedTensorType>(addBias->getResult(0).getType());
     int64_t validPrefix = ctSemanticResultType.getDimSize(1) - reach;
@@ -3428,7 +3426,7 @@ struct ConvertLinalgBatchMatmul
     // period-aligned window.
     auto dataSemanticResultType =
         cast<RankedTensorType>(op->getResult(0).getType());
-    int64_t reach = period * (steps - 1);
+    int64_t reach = kernel::getRotateAndReduceReach(period, steps);
     auto ctSemanticResultType =
         cast<RankedTensorType>(addBias->getResult(0).getType());
     int64_t validPrefix = ctSemanticResultType.getDimSize(1) - reach;

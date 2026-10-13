@@ -21,6 +21,7 @@
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
 #include "lib/Dialect/TensorExt/Transforms/Patterns.h"
 #include "lib/Kernel/KernelName.h"
+#include "lib/Kernel/RotationReach.h"
 #include "lib/Target/CompilationTarget/CompilationTarget.h"
 #include "lib/Transforms/LayoutPropagation/Utils.h"
 #include "lib/Utils/AttributeUtils.h"
@@ -357,6 +358,11 @@ struct LayoutPropagation : impl::LayoutPropagationBase<LayoutPropagation> {
   // Fails with an error when `op`'s kernel, whose packing spans `slots` values
   // per ciphertext, needs more slots than the backend's largest ring holds.
   LogicalResult checkMaxSlotCount(Operation* op, int64_t slots);
+
+  // Fails with an error when `op`'s cyclic kernel, which needs `slots` slots of
+  // one ciphertext (its rotation reach plus its result), does not fit in the
+  // minSlotCount slots its layouts hold, or in the backend's largest ring.
+  LogicalResult checkCyclicKernelSlotCount(Operation* op, int64_t slots);
 
   void runOnOperation() override;
 
@@ -962,7 +968,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DOp op) {
     return op->emitOpError()
            << "Flattened data must fit into a single ciphertext, but got "
            << dataType.getNumElements() << " elements and ciphertext size is "
-           << minSlotCount;
+           << static_cast<int64_t>(minSlotCount);
   }
 
   MLIRContext* ctx = &getContext();
@@ -1041,7 +1047,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DOp op) {
     return op->emitOpError()
            << "Flattened data must fit into a single ciphertext, but got "
            << dataType.getNumElements() << " elements and ciphertext size is "
-           << minSlotCount;
+           << static_cast<int64_t>(minSlotCount);
   }
 
   MLIRContext* ctx = &getContext();
@@ -1450,12 +1456,15 @@ LogicalResult LayoutPropagation::visitOperation(BatchMatmulOp op) {
 
   // Tricyclic ct-ct batch matmul.
   if (secretLhs && secretRhs && lhsCoprime && rhsCoprime) {
-    // The cyclic kernel holds each operand, and the result, in one ciphertext
-    // (a diagonal of a plaintext weight spans the whole weight).
-    if (failed(checkMaxSlotCount(
-            op, std::max({lhsType.getNumElements(), rhsType.getNumElements(),
-                          cast<RankedTensorType>(result.getType())
-                              .getNumElements()})))) {
+    // The result's valid prefix starts after the rotation reach, so the
+    // ciphertext holds the reach plus the whole result. This also covers each
+    // operand.
+    int64_t reach =
+        kernel::getTricyclicBatchMatmulReach(hDim, mDim, nDim, pDim);
+    if (failed(checkCyclicKernelSlotCount(
+            op,
+            reach +
+                cast<RankedTensorType>(result.getType()).getNumElements()))) {
       return failure();
     }
     LayoutAttr lhsLayout = getComposedLayoutAttr(lhs);
@@ -1528,15 +1537,10 @@ LogicalResult LayoutPropagation::visitOperation(BatchMatmulOp op) {
 
     if (secretCoprime) {
       RankedTensorType bmmOutputType = cast<RankedTensorType>(result.getType());
-      int64_t period = hDim * ctStride;
-      int64_t reach = period * (nDim - 1);
-      if (failed(
-              checkMaxSlotCount(op, reach + bmmOutputType.getNumElements()))) {
+      int64_t reach = kernel::getRotateAndReduceReach(hDim * ctStride, nDim);
+      if (failed(checkCyclicKernelSlotCount(
+              op, reach + bmmOutputType.getNumElements()))) {
         return failure();
-      }
-      if (reach + bmmOutputType.getNumElements() > minSlotCount) {
-        return builder.notifyMatchFailure(
-            op, "slot count budget exceeded for batch matmul diagonal reach");
       }
 
       LayoutAttr secretLayout = getComposedLayoutAttr(secretOperand);
@@ -1636,12 +1640,14 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
   // Bicyclic ct-ct matmul.
   if (inputSecret && filterSecret && lhsCoprime && rhsCoprime &&
       outputCoprime) {
-    // The cyclic kernel holds each operand, and the result, in one ciphertext
-    // (a diagonal of a plaintext weight spans the whole weight).
-    if (failed(checkMaxSlotCount(
-            op, std::max({lhsType.getNumElements(), rhsType.getNumElements(),
-                          cast<RankedTensorType>(result.getType())
-                              .getNumElements()})))) {
+    // The result's valid prefix starts after the rotation reach, so the
+    // ciphertext holds the reach plus the whole result. This also covers each
+    // operand.
+    int64_t reach = kernel::getBicyclicMatmulReach(mDim, nDim, pDim);
+    if (failed(checkCyclicKernelSlotCount(
+            op,
+            reach +
+                cast<RankedTensorType>(result.getType()).getNumElements()))) {
       return failure();
     }
     LayoutAttr lhsLayout = getComposedLayoutAttr(lhs);
@@ -1691,9 +1697,9 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
     // The result's valid prefix starts after the rotation reach, so the
     // ciphertext holds the reach plus the whole result. This also covers the
     // secret operand, which spans period * steps slots.
-    int64_t period = inputSecret ? mDim : pDim;
-    int64_t reach = period * (nDim - 1);
-    if (failed(checkMaxSlotCount(
+    int64_t reach =
+        kernel::getRotateAndReduceReach(inputSecret ? mDim : pDim, nDim);
+    if (failed(checkCyclicKernelSlotCount(
             op,
             reach +
                 cast<RankedTensorType>(result.getType()).getNumElements()))) {
@@ -2683,6 +2689,16 @@ LogicalResult LayoutPropagation::checkMaxSlotCount(Operation* op,
                            << maxRingDegree << " holds " << maxSlotCount;
 }
 
+LogicalResult LayoutPropagation::checkCyclicKernelSlotCount(Operation* op,
+                                                            int64_t slots) {
+  if (failed(checkMaxSlotCount(op, slots))) return failure();
+  if (slots <= minSlotCount) return success();
+  return op->emitOpError() << "needs " << slots
+                           << " slots, but min-slot-count is "
+                           << static_cast<int64_t>(minSlotCount)
+                           << "; raise min-slot-count to at least " << slots;
+}
+
 void LayoutPropagation::runOnOperation() {
   // The backend's largest ring bounds the slots a ciphertext holds: half the
   // ring degree, as parameter generation sizes the ring at twice the slot
@@ -2701,7 +2717,8 @@ void LayoutPropagation::runOnOperation() {
   }
   maxSlotCount = maxRingDegree / 2;
   if (maxSlotCount > 0 && minSlotCount > maxSlotCount) {
-    root->emitOpError() << "min-slot-count " << minSlotCount << " exceeds the "
+    root->emitOpError() << "min-slot-count "
+                        << static_cast<int64_t>(minSlotCount) << " exceeds the "
                         << maxSlotCount
                         << " slots of the backend's largest ring degree "
                         << maxRingDegree;
