@@ -2776,7 +2776,8 @@ void LayoutPropagation::runOnOperation() {
   minSlotCount = getLayoutSlotCount(root, minSlotCount);
 
   if (maxSlotCount > 0 && minSlotCount > maxSlotCount) {
-    root->emitOpError() << "min-slot-count " << minSlotCount << " exceeds the "
+    root->emitOpError() << "min-slot-count "
+                        << static_cast<int64_t>(minSlotCount) << " exceeds the "
                         << maxSlotCount
                         << " slots of the backend's largest ring degree "
                         << maxRingDegree;
