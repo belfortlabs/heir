@@ -762,6 +762,18 @@ FailureOr<Value> implementUnpackOp(
     Value currentInput = op.getValue();
     Type finalTargetType = op.getResult().getType();
 
+    // Unpack through the composed layout. Step by step, ISL generates a loop
+    // nest for each intermediate layout. The composed layout maps the
+    // data indices to slots directly.
+    if (arrayAttr.size() > 1 && llvm::all_of(arrayAttr, [](Attribute attr) {
+          return isa<LayoutAttr>(attr);
+        })) {
+      return implementUnpackOpStep(
+          currentInput,
+          LayoutAttr::composeLayouts(arrayAttr, builder.getContext()),
+          finalTargetType, builder, createdOpCallback);
+    }
+
     for (int i = arrayAttr.size() - 1; i >= 0; --i) {
       auto layoutAttr = cast<LayoutAttr>(arrayAttr[i]);
       Type stepTargetType;
