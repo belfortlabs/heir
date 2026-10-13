@@ -16,6 +16,12 @@ namespace tensor_ext {
 LogicalResult convertRotateAndReduceOp(RotateAndReduceOp op,
                                        bool unroll = true);
 
+// The rows `indices` of the constant `diagonals` (dense or resource-backed) as
+// a constant attribute of `compactType`, or nullptr if `diagonals` is not a
+// readable constant.
+TypedAttr gatherRowsIfConstant(Value diagonals, RankedTensorType compactType,
+                               ArrayRef<int64_t> indices);
+
 }  // namespace tensor_ext
 }  // namespace heir
 }  // namespace mlir
