@@ -1376,7 +1376,9 @@ struct ConvertLoadPointer : public OpConversionPattern<mlir::memref::LoadOp> {
 
 // memref.collapse_shape / memref.expand_shape of a primitive buffer. A
 // contiguous row-major buffer is a flat pointer in both shapes, so the reshape
-// is the pointer itself.
+// is the pointer itself. This relies on every pattern that produces such a
+// pointer from an offset layout (e.g. ConvertSubViewToPointer) having applied
+// the offset already.
 template <typename ReshapeOp>
 struct ConvertReshapePointer : public OpConversionPattern<ReshapeOp> {
   using OpConversionPattern<ReshapeOp>::OpConversionPattern;

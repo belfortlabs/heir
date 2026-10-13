@@ -1,4 +1,5 @@
 // RUN: heir-opt --cheddar-to-emitc %s | FileCheck --implicit-check-not=memref.collapse_shape --implicit-check-not=memref.expand_shape %s
+// RUN: heir-opt --cheddar-to-emitc %s | heir-translate --mlir-to-cpp | FileCheck --check-prefix=CPP %s
 
 // A flat constant loaded as tensor<N> and expanded to the packed 1xN shape,
 // multiplied with a packed plaintext. Folding the unit dim leaves reshapes
@@ -6,6 +7,7 @@
 
 // CHECK: func.func @expand_then_mul
 // CHECK: return
+// CPP: expand_then_mul
 func.func private @pack(%arg0: tensor<1x4xf32>) -> tensor<1x16xf32> {
   %zero = arith.constant 0.0 : f32
   %0 = tensor.pad %arg0 low[0, 0] high[0, 12] {
