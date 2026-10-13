@@ -250,7 +250,8 @@ LogicalResult LowerToKernelEvalChebyshev::matchAndRewrite(
   // A polynomial of degree at most one, e.g. a sigmoid fitted over a narrow
   // calibrated range, is a multiply and an add. Some backends' polynomial
   // evaluation needs degree two, and the affine form costs at most one level.
-  // Coefficients below 1e-9 count as zero, as in EvalChebyshevOp's depth.
+  // Coefficients below 1e-9 count as zero, the threshold EvalChebyshevOp's
+  // depth uses for Cheddar.
   ArrayAttr coefficients = attr.getValue().getCoefficients();
   auto coefficient = [&](unsigned i) {
     return i < coefficients.size()
