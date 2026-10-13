@@ -10,7 +10,7 @@ include "lib/Dialect/MathExt/IR/MathExtOps.td"
 def IsOne : Constraint<CPred<"IsOne($0)">>;
 
 // select(a >= c, a, c) = max(a, c) for floats is handled by the C++
-// `SelectGreaterThanEqualFloatPattern` in ActivationCanonicalizations.cpp.
+// `SelectMinMaxFloatPattern` in ActivationCanonicalizations.cpp.
 
 // select(a >= c, a, c) = max(a, c)
 def SelectGreaterThanEqualUnsigned : Pat<

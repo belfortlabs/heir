@@ -684,23 +684,27 @@ struct RewriteAvgPoolAsConv1D
     Attribute zeroAttr = rewriter.getZeroAttr(eltTy);
     Attribute oneAttr = rewriter.getOneAttr(eltTy);
 
-    // If there is a constant division following the sum pool, update the
-    // kernel of ones to be 1 / divValue. This is a common enough pattern since
-    // it represents an average pool.
+    // If there is a constant division (or multiplication by the reciprocal)
+    // following the sum pool, update the kernel of ones to be 1 / divValue.
+    // This is a common enough pattern since it represents an average pool.
     Attribute avgAttr = oneAttr;
     Value avgPoolOutput;
     if (poolOp->hasOneUse()) {
-      auto divOp = dyn_cast<arith::DivFOp>(*poolOp->getUsers().begin());
-      if (divOp) {
-        OpOperand& use = *poolOp->getUses().begin();
+      Operation* scaleOp = *poolOp->getUsers().begin();
+      OpOperand& use = *poolOp->getUses().begin();
+      // `c / pool` is not an average; only `pool / c` and `pool * c` are.
+      bool poolIsDividend =
+          !isa<arith::DivFOp>(scaleOp) || use.getOperandNumber() == 0;
+      if (isa<arith::DivFOp, arith::MulFOp>(scaleOp) && poolIsDividend) {
         if (auto constantAttr = dyn_cast<Attribute>(getAsOpFoldResult(
-                divOp->getOperand(1 - use.getOperandNumber())))) {
+                scaleOp->getOperand(1 - use.getOperandNumber())))) {
           if (auto splatAttr = dyn_cast<SplatElementsAttr>(
                   cast<DenseElementsAttr>(constantAttr))) {
-            auto divValue = splatAttr.getSplatValue<APFloat>();
-            APFloat one = APFloat::getOne(divValue.getSemantics());
-            avgAttr = rewriter.getFloatAttr(eltTy, one / divValue);
-            avgPoolOutput = divOp.getResult();
+            auto scale = splatAttr.getSplatValue<APFloat>();
+            if (isa<arith::DivFOp>(scaleOp))
+              scale = APFloat::getOne(scale.getSemantics()) / scale;
+            avgAttr = rewriter.getFloatAttr(eltTy, scale);
+            avgPoolOutput = scaleOp->getResult(0);
           }
         }
       }
@@ -807,23 +811,27 @@ struct RewriteAvgPoolAsConv2D
     Attribute zeroAttr = rewriter.getZeroAttr(eltTy);
     Attribute oneAttr = rewriter.getOneAttr(eltTy);
 
-    // If there is a constant division following the sum pool, update the
-    // kernel of ones to be 1 / divValue. This is a common enough pattern since
-    // it represents an average pool.
+    // If there is a constant division (or multiplication by the reciprocal)
+    // following the sum pool, update the kernel of ones to be 1 / divValue.
+    // This is a common enough pattern since it represents an average pool.
     Attribute avgAttr = oneAttr;
     Value avgPoolOutput;
     if (poolOp->hasOneUse()) {
-      auto divOp = dyn_cast<arith::DivFOp>(*poolOp->getUsers().begin());
-      if (divOp) {
-        OpOperand& use = *poolOp->getUses().begin();
+      Operation* scaleOp = *poolOp->getUsers().begin();
+      OpOperand& use = *poolOp->getUses().begin();
+      // `c / pool` is not an average; only `pool / c` and `pool * c` are.
+      bool poolIsDividend =
+          !isa<arith::DivFOp>(scaleOp) || use.getOperandNumber() == 0;
+      if (isa<arith::DivFOp, arith::MulFOp>(scaleOp) && poolIsDividend) {
         if (auto constantAttr = dyn_cast<Attribute>(getAsOpFoldResult(
-                divOp->getOperand(1 - use.getOperandNumber())))) {
+                scaleOp->getOperand(1 - use.getOperandNumber())))) {
           if (auto splatAttr = dyn_cast<SplatElementsAttr>(
                   cast<DenseElementsAttr>(constantAttr))) {
-            auto divValue = splatAttr.getSplatValue<APFloat>();
-            APFloat one = APFloat::getOne(divValue.getSemantics());
-            avgAttr = rewriter.getFloatAttr(eltTy, one / divValue);
-            avgPoolOutput = divOp.getResult();
+            auto scale = splatAttr.getSplatValue<APFloat>();
+            if (isa<arith::DivFOp>(scaleOp))
+              scale = APFloat::getOne(scale.getSemantics()) / scale;
+            avgAttr = rewriter.getFloatAttr(eltTy, scale);
+            avgPoolOutput = scaleOp->getResult(0);
           }
         }
       }
@@ -1550,6 +1558,50 @@ struct FoldConstantTruncF : public OpRewritePattern<arith::TruncFOp> {
   }
 };
 
+// x / c = x * (1 / c) for a constant c (a scalar, splat or dense constant),
+// including in a linalg.generic body with c defined outside. CKKS has no
+// ciphertext division. The reciprocal is exact when c is a power of two.
+struct DivFByConstantToMulF : public OpRewritePattern<arith::DivFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::DivFOp op,
+                                PatternRewriter& rewriter) const override {
+    Attribute divisor;
+    if (!matchPattern(op.getRhs(), m_Constant(&divisor)))
+      return rewriter.notifyMatchFailure(op, "divisor is not a constant");
+
+    bool invertible = true;
+    auto reciprocal = [&](const APFloat& value) {
+      APFloat result = APFloat::getOne(value.getSemantics());
+      if (result.divide(value, APFloat::rmNearestTiesToEven) &
+          (APFloat::opDivByZero | APFloat::opOverflow | APFloat::opInvalidOp))
+        invertible = false;
+      return result;
+    };
+
+    TypedAttr inverse;
+    if (auto floatAttr = dyn_cast<FloatAttr>(divisor)) {
+      inverse =
+          FloatAttr::get(floatAttr.getType(), reciprocal(floatAttr.getValue()));
+    } else if (auto dense = dyn_cast<DenseFPElementsAttr>(divisor)) {
+      inverse = cast<TypedAttr>(
+          dense.mapValues(dense.getElementType(), [&](const APFloat& value) {
+            return reciprocal(value).bitcastToAPInt();
+          }));
+    } else {
+      return rewriter.notifyMatchFailure(op, "unsupported constant divisor");
+    }
+    if (!invertible)
+      return rewriter.notifyMatchFailure(op, "divisor has no reciprocal");
+
+    auto inverseOp = arith::ConstantOp::create(rewriter, op.getLoc(), inverse);
+    auto mulOp = rewriter.replaceOpWithNewOp<arith::MulFOp>(
+        op, op.getLhs(), inverseOp, op.getFastmathAttr());
+    mulOp->setDiscardableAttrs(op->getDiscardableAttrDictionary());
+    return success();
+  }
+};
+
 struct LinalgCanonicalizations
     : public impl::LinalgCanonicalizationsBase<LinalgCanonicalizations> {
   void runOnOperation() override {
@@ -1567,6 +1619,7 @@ struct LinalgCanonicalizations
         MaterializeBroadcasts, RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D,
         RewriteVecmatAsMatvec, UndilateConv1DNcwFcw, UndilateConv2DNchwFchw>(
         context);
+    patterns.add<DivFByConstantToMulF>(context);
 
     mlir::linalg::populateDecomposeProjectedPermutationPatterns(patterns);
 
