@@ -48,6 +48,10 @@ namespace heir {
 struct GenerateParamBFV : impl::GenerateParamBFVBase<GenerateParamBFV> {
   using GenerateParamBFVBase::GenerateParamBFVBase;
 
+  // The slot count the layouts are packed for: the min-slot-count option, or
+  // the count layout-propagation recorded on the module.
+  int64_t slotCount = 0;
+
   void annotateSchemeParam(const bgv::SchemeParam& schemeParam) {
     if (auto module = dyn_cast<ModuleOp>(getOperation());
         module && failed(verifyRingDegree(module, schemeParam.getRingDim())))
@@ -55,7 +59,7 @@ struct GenerateParamBFV : impl::GenerateParamBFVBase<GenerateParamBFV> {
     auto* context = &getContext();
     OpBuilder builder(context);
     getOperation()->setAttr(kRequestedSlotCountAttrName,
-                            builder.getI64IntegerAttr(minSlotCount));
+                            builder.getI64IntegerAttr(slotCount));
     getOperation()->setAttr(
         kActualSlotCountAttrName,
         builder.getI64IntegerAttr(schemeParam.getRingDim()));
@@ -135,8 +139,8 @@ struct GenerateParamBFV : impl::GenerateParamBFVBase<GenerateParamBFV> {
 
     auto concreteSchemeParam =
         NoiseAnalysis::SchemeParamType::getConcreteSchemeParam(
-            qiSize, schemeParam.getPlaintextModulus(), minSlotCount,
-            usePublicKey, encryptionTechniqueExtended);
+            qiSize, schemeParam.getPlaintextModulus(), slotCount, usePublicKey,
+            encryptionTechniqueExtended);
 
     return concreteSchemeParam;
   }
@@ -147,7 +151,7 @@ struct GenerateParamBFV : impl::GenerateParamBFVBase<GenerateParamBFV> {
 
     // plaintext modulus from command line option
     auto schemeParam = NoiseModel::SchemeParamType::getConservativeSchemeParam(
-        maxLevel.value_or(0), plaintextModulus, minSlotCount, usePublicKey,
+        maxLevel.value_or(0), plaintextModulus, slotCount, usePublicKey,
         encryptionTechniqueExtended);
 
     LLVM_DEBUG(llvm::dbgs() << "Conservative Scheme Param:\n"
@@ -181,13 +185,14 @@ struct GenerateParamBFV : impl::GenerateParamBFVBase<GenerateParamBFV> {
                                   modBits);  // all primes of modBits bits
 
     auto schemeParam = bgv::SchemeParam::getConcreteSchemeParam(
-        logPrimes, plaintextModulus, minSlotCount, usePublicKey,
+        logPrimes, plaintextModulus, slotCount, usePublicKey,
         encryptionTechniqueExtended);
 
     annotateSchemeParam(schemeParam);
   }
 
   void runOnOperation() override {
+    slotCount = getLayoutSlotCount(getOperation(), minSlotCount);
     if (auto schemeParamAttr =
             getOperation()->getAttrOfType<bgv::SchemeParamAttr>(
                 bgv::BGVDialect::kSchemeParamAttrName)) {

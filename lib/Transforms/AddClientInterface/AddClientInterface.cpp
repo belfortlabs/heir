@@ -361,8 +361,9 @@ struct AddClientInterface : impl::AddClientInterfaceBase<AddClientInterface> {
 
   void runOnOperation() override {
     Operation* root = getOperation();
+    int64_t slotCount = getLayoutSlotCount(root, minSlotCount);
     auto result = root->walk<WalkOrder::PreOrder>([&](func::FuncOp op) {
-      if (failed(convertFunc(op, minSlotCount, enableLayoutAssignment))) {
+      if (failed(convertFunc(op, slotCount, enableLayoutAssignment))) {
         op->emitError("Failed to add client interface for func");
         return WalkResult::interrupt();
       }

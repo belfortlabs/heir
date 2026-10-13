@@ -141,11 +141,19 @@ bool isRelationRowMajor(RankedTensorType vectorType, int64_t numSlots,
 bool isOneToOneSingleCiphertextPacking(
     const presburger::IntegerRelation& relation);
 
+// Returns true if every slot the relation maps to is below `prefixSize`. The
+// slot is the relation's last range variable.
+bool isPackedIntoSlotPrefix(const presburger::IntegerRelation& relation,
+                            int64_t prefixSize);
+
 // Folds a single-ciphertext vector permutation (as accepted by
 // isOneToOneSingleCiphertextPacking) into a matrix layout, returning the matrix
 // layout that lets a diagonal matvec consume the un-permuted vector directly.
 // `vectorPermutation` maps [col] -> [ct, slot]; `matrixLayout` maps
-// [row, col] -> [ct, slot].
+// [row, col] -> [ct, slot]. The composition feeds each slot in as a matrix
+// column, so the result is only sound when the permutation keeps every element
+// in a slot below the vector size, and the diagonal kernel's period is the
+// whole ciphertext, so it never reads a replica the permuted vector lacks.
 presburger::IntegerRelation foldVectorPermutationIntoMatrixLayout(
     const presburger::IntegerRelation& vectorPermutation,
     const presburger::IntegerRelation& matrixLayout);

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "lib/Analysis/LayoutFoldingAnalysis/LayoutFoldingAnalysis.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretDialect.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtAttributes.h"
@@ -103,11 +104,15 @@ struct LayoutOptimization : impl::LayoutOptimizationBase<LayoutOptimization> {
                            KernelAttr oldKernel, KernelName newKernel);
 
   void runOnOperation() override;
+
+  // The slot count the layouts are packed for.
+  int64_t slotCount;
 };
 
 void LayoutOptimization::runOnOperation() {
   auto* ctx = &getContext();
   IRRewriter builder(ctx);
+  slotCount = getLayoutSlotCount(getOperation(), minSlotCount);
 
   RewritePatternSet preprocessingPatterns(ctx);
   preprocessingPatterns.add<FoldMatvecInputConversionIntoPlaintext>(ctx);
@@ -330,7 +335,7 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
 
 Cost LayoutOptimization::costOfLayoutConversion(Attribute fromLayout,
                                                 Attribute toLayout) {
-  return computeCostOfLayoutConversion(minSlotCount, fromLayout, toLayout,
+  return computeCostOfLayoutConversion(slotCount, fromLayout, toLayout,
                                        vveRandomSeed, vveRandomTries);
 }
 
