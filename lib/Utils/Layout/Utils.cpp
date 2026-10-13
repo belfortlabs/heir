@@ -568,6 +568,29 @@ bool isOneToOneSingleCiphertextPacking(
   return singleCiphertext && oneToOne == isl_bool_true;
 }
 
+bool isPackedIntoSlotPrefix(const presburger::IntegerRelation& relation,
+                            int64_t prefixSize) {
+  isl_ctx* ctx = isl_ctx_alloc();
+  isl_basic_map* map = convertRelationToBasicMap(relation, ctx);
+  if (!map) {
+    isl_ctx_free(ctx);
+    return false;
+  }
+
+  // Keep only the slot, the last range variable, then look for a slot at or
+  // past the prefix.
+  isl_basic_set* range = isl_basic_set_project_out(
+      isl_basic_map_range(map), isl_dim_set, /*first=*/0,
+      /*n=*/relation.getNumRangeVars() - 1);
+  isl_set* outside =
+      isl_set_lower_bound_val(isl_set_from_basic_set(range), isl_dim_set,
+                              /*pos=*/0, isl_val_int_from_si(ctx, prefixSize));
+  isl_bool empty = isl_set_is_empty(outside);
+  isl_set_free(outside);
+  isl_ctx_free(ctx);
+  return empty == isl_bool_true;
+}
+
 void prependPassthroughDim(IntegerRelation& relation, std::optional<int64_t> lb,
                            std::optional<int64_t> ub) {
   relation.insertVar(VarKind::Domain, 0, 1);

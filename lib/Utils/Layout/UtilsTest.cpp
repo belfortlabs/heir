@@ -1051,6 +1051,24 @@ TEST(UtilsTest, TestIsOneToOneSingleCiphertextPacking) {
   EXPECT_FALSE(isOneToOneSingleCiphertextPacking(multipleCiphertexts));
 }
 
+TEST(UtilsTest, TestIsPackedIntoSlotPrefix) {
+  auto permutation = getIntegerRelationFromIslStr(
+                         "{ [i] -> [ct, slot] : ct = 0 and (slot - 3i) mod 8 "
+                         "= 0 and 0 <= i <= 7 and 0 <= slot <= 7 }")
+                         .value();
+  EXPECT_TRUE(isPackedIntoSlotPrefix(permutation, 8));
+  EXPECT_FALSE(isPackedIntoSlotPrefix(permutation, 7));
+
+  // A strided convolution leaves a gap between elements, so four elements
+  // reach slot 6.
+  auto gapped = getIntegerRelationFromIslStr(
+                    "{ [i] -> [ct, slot] : ct = 0 and slot = 2i and 0 <= i "
+                    "<= 3 and 0 <= slot <= 7 }")
+                    .value();
+  EXPECT_FALSE(isPackedIntoSlotPrefix(gapped, 4));
+  EXPECT_TRUE(isPackedIntoSlotPrefix(gapped, 7));
+}
+
 TEST(UtilsTest, TestFoldVectorPermutationIntoMatrixLayout) {
   // The vector's slot = 3i permutation is folded into the matrix's column
   // indexing (col -> 3col), so a diagonal matvec can consume the un-permuted
