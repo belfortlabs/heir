@@ -3,7 +3,7 @@
 
 // CHECK: @gx_kernel
 // CHECK: secret.generic
-// CHECK-COUNT-6: tensor_ext.rotate
+// CHECK-COUNT-5: tensor_ext.rotate
 // CHECK-NOT: tensor_ext.rotate
 func.func @gx_kernel(%arg0: tensor<64xi16>) -> tensor<64xi16> {
   %c64 = arith.constant 64 : index

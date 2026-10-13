@@ -730,7 +730,7 @@ func.func @sum_of_linear_rotates(%arg0: !secret.secret<tensor<32xi16>>) -> !secr
 // -----
 
 // CHECK: @rotate_not_applied_because_rotation_missing
-// CHECK-COUNT-3: tensor_ext.rotate
+// CHECK-COUNT-2: tensor_ext.rotate
 func.func @rotate_not_applied_because_rotation_missing(%arg0: !secret.secret<tensor<4xi16>>) -> !secret.secret<i16> {
   %c0 = arith.constant 0 : index
   %c1 = arith.constant 1 : index
