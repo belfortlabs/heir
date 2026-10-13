@@ -7,21 +7,6 @@ include "mlir/Dialect/Arith/IR/ArithOps.td"
 include "mlir/Dialect/Tensor/IR/TensorOps.td"
 include "mlir/IR/PatternBase.td"
 
-def OutOfBoundsOfTensorDim :
-  Constraint<
-    CPred<
-      "llvm::cast<mlir::IntegerAttr>($0).getValue().getSExtValue() < 0 "
-      "|| llvm::cast<mlir::IntegerAttr>($0).getValue().getSExtValue() > "
-      "llvm::cast<mlir::ShapedType>($1.getType()).getShape()[0]"
-    >
-  >;
-
-def IsOneDimTensor : Constraint<
-  CPred<
-    "llvm::cast<mlir::ShapedType>($0.getType()).getRank() == 1"
-  >
->;
-
 def DenseElementsAttrIsSplatPred
     : CPred<"llvm::isa<mlir::DenseElementsAttr>($_self) && llvm::cast<mlir::DenseElementsAttr>($_self).isSplat()">;
 
@@ -41,25 +26,6 @@ def DropZeroRotation : Pat<
   (TensorExt_RotateOp $denseConstant, (ConstantLikeMatcher APIntAttr:$c0)),
   (replaceWithValue $denseConstant),
   [(IsZeroIntAttr $c0)]
->;
-
-// Currently commented out because it doesn't work for multi-dimensional tensors.
-// Will be uncommented and fixed by Asra's PR. Commenting this out causes various
-// other tests to fail.
-// rotate %t, x -> rotate %t, x mod size
-def NormalizeRotationIndex : Pat<
-  (TensorExt_RotateOp $tensor, (Arith_ConstantOp:$shiftOp APIntAttr:$shiftAmount)),
-  (TensorExt_RotateOp $tensor,
-      (Arith_RemUIOp
-        $shiftOp,
-        // Only works for 1D tensors: index is taken modulo the tensor length,
-        // i.e., dim 0
-        (CreateIndexCastOp
-          (Tensor_DimOp $tensor, (Arith_ConstantOp ConstantAttr<IndexAttr, "0">)),
-          $shiftOp))
-      ),
-  [(OutOfBoundsOfTensorDim $shiftAmount, $tensor),
-   (IsOneDimTensor $tensor)]
 >;
 
 // %0 = rotate %t, x
