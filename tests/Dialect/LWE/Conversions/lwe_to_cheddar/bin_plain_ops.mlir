@@ -62,6 +62,25 @@ module attributes {scheme.ckks, ckks.schemeParam = #ckks.scheme_param<logN = 16,
     return %0 : !ct_L10
   }
 
+  // CHECK: func @negative_constant_dynamic_rotation
+  // CHECK: cheddar.hrot
+  // CHECK-SAME: static_distance = 32684
+  func.func @negative_constant_dynamic_rotation(%ct: !ct_L10) -> !ct_L10 {
+    %shift = arith.constant -84 : index
+    %0 = ckks.rotate %ct, %shift : index : !ct_L10
+    return %0 : !ct_L10
+  }
+
+  // A constant dynamic shift by the slot count is the identity.
+  // CHECK: func @identity_constant_dynamic_rotation
+  // CHECK-NOT: cheddar.hrot
+  // CHECK: return
+  func.func @identity_constant_dynamic_rotation(%ct: !ct_L10) -> !ct_L10 {
+    %shift = arith.constant 32768 : index
+    %0 = ckks.rotate %ct, %shift : index : !ct_L10
+    return %0 : !ct_L10
+  }
+
   // ct - pt: direct sub_plain, no negation.
   // CHECK: func @ct_minus_pt
   func.func @ct_minus_pt(%ct: !ct_L10, %pt: !pt) -> !ct_L10 {
