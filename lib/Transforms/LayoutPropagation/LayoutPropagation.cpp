@@ -1336,7 +1336,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   // producer's strides, and without a pad that folded into the conv.
   RankedTensorType expandedFilterType = get2dConvChwFchwFilterExpandedType(
       filterType, matrixOperand.dataType, matrixOperand.padding, strides,
-      interchangeRows);
+      interchangeRows, inputGap);
   if (failed(
           checkMaxSlotCount(op, std::max(expandedFilterType.getDimSize(0),
                                          expandedFilterType.getDimSize(1))))) {
