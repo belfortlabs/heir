@@ -4,6 +4,7 @@
 #include <mlir/IR/AffineMap.h>
 
 #include <cassert>
+#include <functional>
 #include <utility>
 
 #include "llvm/include/llvm/ADT/STLExtras.h"        // from @llvm-project
@@ -159,6 +160,74 @@ struct GenericToReduce : public OpRewritePattern<mlir::linalg::GenericOp> {
   }
 };
 
+// Splits a sum or product over several dimensions into a chain of
+// single-dimension reductions, innermost dimension first, which is what the
+// ciphertext-semantics kernel for linalg.reduce supports. Every reduction but
+// the last starts from the operation's identity; the last one takes the
+// original init.
+struct SplitMultiDimReduce : public OpRewritePattern<linalg::ReduceOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::ReduceOp reduceOp,
+                                PatternRewriter& rewriter) const override {
+    ArrayRef<int64_t> dimensions = reduceOp.getDimensions();
+    if (dimensions.size() < 2 || !reduceOp.isSingleInputOutput())
+      return rewriter.notifyMatchFailure(reduceOp,
+                                         "not a multi-dimension reduction");
+
+    Block* body = reduceOp.getBlock();
+    if (body->getOperations().size() != 2)
+      return rewriter.notifyMatchFailure(reduceOp, "body is not a single op");
+    Operation* combiner = &body->front();
+    auto inputType =
+        dyn_cast<RankedTensorType>(reduceOp.getInputs()[0].getType());
+    if (!inputType)
+      return rewriter.notifyMatchFailure(reduceOp, "input is not a tensor");
+    Type elementType = inputType.getElementType();
+
+    TypedAttr identity;
+    if (isa<arith::AddFOp>(combiner))
+      identity = rewriter.getFloatAttr(elementType, 0.0);
+    else if (isa<arith::MulFOp>(combiner))
+      identity = rewriter.getFloatAttr(elementType, 1.0);
+    else if (isa<arith::AddIOp>(combiner))
+      identity = rewriter.getIntegerAttr(elementType, 0);
+    else if (isa<arith::MulIOp>(combiner))
+      identity = rewriter.getIntegerAttr(elementType, 1);
+    else
+      return rewriter.notifyMatchFailure(reduceOp,
+                                         "combiner has no known identity");
+
+    // Reducing the highest dimension first leaves the indices of the
+    // remaining ones unchanged.
+    SmallVector<int64_t> order(dimensions);
+    llvm::sort(order, std::greater<int64_t>());
+
+    Value current = reduceOp.getInputs()[0];
+    SmallVector<int64_t> shape(inputType.getShape());
+    for (auto [i, dim] : llvm::enumerate(order)) {
+      shape.erase(shape.begin() + dim);
+      Value init;
+      if (i + 1 == order.size()) {
+        init = reduceOp.getInits()[0];
+      } else {
+        auto type = RankedTensorType::get(shape, elementType);
+        init =
+            arith::ConstantOp::create(rewriter, reduceOp.getLoc(), type,
+                                      DenseElementsAttr::get(type, identity));
+      }
+      auto step = linalg::ReduceOp::create(
+          rewriter, reduceOp.getLoc(), TypeRange{init.getType()},
+          ValueRange{current}, ValueRange{init}, ArrayRef<int64_t>{dim});
+      rewriter.cloneRegionBefore(reduceOp.getRegion(), step.getRegion(),
+                                 step.getRegion().end());
+      current = step.getResult(0);
+    }
+    rewriter.replaceOp(reduceOp, current);
+    return success();
+  }
+};
+
 struct ReductionCanonicalizations
     : public impl::ReductionCanonicalizationsBase<ReductionCanonicalizations> {
   void runOnOperation() override {
@@ -169,6 +238,10 @@ struct ReductionCanonicalizations
     patterns.add<GenericToReduce>(context);
 
     walkAndApplyPatterns(module, std::move(patterns));
+
+    RewritePatternSet splitPatterns(context);
+    splitPatterns.add<SplitMultiDimReduce>(context);
+    walkAndApplyPatterns(module, std::move(splitPatterns));
   }
 };
 

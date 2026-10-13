@@ -13,6 +13,8 @@ def ReductionCanonicalizations : Pass<"reduction-canonicalizations"> {
 
   let description = [{
     This pass canonicalizes the linalg.generic reduction operation into a linalg.reduce.
+    A sum or product over several dimensions becomes a chain of reductions over
+    one dimension each.
 
     (* example filepath=tests/Transforms/reduction_canonicalizations/torch_dot.mlir *)
   }];
