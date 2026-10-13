@@ -1378,30 +1378,17 @@ void getCtComplementPoints(const presburger::IntegerRelation& relation,
 
   int64_t numCts = outputType.getDimSize(0);
 
-  // Mark which ct indices (range var 0) actually appear in the range.
-  std::vector<bool> seen(numCts, false);
-  if (succeeded(forEachRelationPoint(
-          relation, [&](ArrayRef<int64_t>, ArrayRef<int64_t> rangePoint) {
-            int64_t ct = rangePoint[0];
-            if (ct >= 0 && ct < numCts) seen[ct] = true;
-          }))) {
-    for (int64_t ct = 0; ct < numCts; ++ct) {
-      if (!seen[ct]) collector.points.push_back({ct});
-    }
-    return;
-  }
-
   SmallVector<int64_t> lb, ub;
   getDomainBox(relation, lb, ub);
 
   isl_basic_map* bmap = convertRelationToBasicMap(relation, collector.ctx);
 
-  // See forEachDomainImagePoint for why we enumerate the domain rather than
-  // probe each ct with isl_basic_map_is_empty. Once every ct is accounted for
-  // we can stop early instead of scanning the rest of a large domain. The
-  // native enumeration may have marked some cts before running out of its
-  // budget.
-  int64_t seenCount = std::count(seen.begin(), seen.end(), true);
+  // Mark which ct indices (range var 0) actually appear in the range. See
+  // forEachDomainImagePoint for why we enumerate the domain rather than probe
+  // each ct with isl_basic_map_is_empty. Once every ct is accounted for we can
+  // stop early instead of scanning the rest of a large domain.
+  std::vector<bool> seen(numCts, false);
+  int64_t seenCount = 0;
   forEachDomainImagePoint(
       bmap, lb, ub,
       [&](ArrayRef<int64_t> /*domainPoint*/, __isl_keep isl_point* imagePoint) {

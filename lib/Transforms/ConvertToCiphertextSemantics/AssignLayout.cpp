@@ -502,8 +502,7 @@ static FailureOr<Value> implementAssignLayoutStep(
       // `stages` are the layouts `layout` was composed from. Following the
       // points through them one at a time avoids the locals the composition
       // introduces for the intermediate coordinates.
-      if (failed(forEachComposedRelationPoint(stages, packPoint)) &&
-          failed(forEachRelationPoint(rel, packPoint)))
+      if (failed(forEachComposedRelationPoint(stages, packPoint)))
         forEachPointPair(rel, packPoint);
       if (conflictingSlot >= 0) {
         return builder.emitError()
