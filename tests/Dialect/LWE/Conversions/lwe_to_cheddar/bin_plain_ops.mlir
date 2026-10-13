@@ -51,6 +51,17 @@ module attributes {scheme.ckks, ckks.schemeParam = #ckks.scheme_param<logN = 16,
     return %0 : !ct_L10
   }
 
+  // A constant dynamic shift is normalized to the slot range like a static
+  // one, so -84 given as 65452 (mod the ring degree) becomes 32684.
+  // CHECK: func @constant_dynamic_rotation
+  // CHECK: cheddar.hrot
+  // CHECK-SAME: static_distance = 32684
+  func.func @constant_dynamic_rotation(%ct: !ct_L10) -> !ct_L10 {
+    %shift = arith.constant 65452 : index
+    %0 = ckks.rotate %ct, %shift : index : !ct_L10
+    return %0 : !ct_L10
+  }
+
   // ct - pt: direct sub_plain, no negation.
   // CHECK: func @ct_minus_pt
   func.func @ct_minus_pt(%ct: !ct_L10, %pt: !pt) -> !ct_L10 {
