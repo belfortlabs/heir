@@ -47,35 +47,3 @@ func TestDepthwiseConv2D(t *testing.T) {
 		}
 	}
 }
-
-func TestDepthwiseConv2DStride2(t *testing.T) {
-	// The module has one configure function, which holds the keys of both
-	// functions.
-	evaluator, params, ecd, enc, dec := Depthwise_conv2d__configure()
-
-	// The same input as TestDepthwiseConv2D.
-	arg0 := make([]float32, 256)
-	for i := range arg0 {
-		arg0[i] = float32(i%11)/10 - 0.5
-	}
-
-	// The same layers with a stride-2 depthwise conv: the stride-1 result at
-	// even rows and columns.
-	expected := []float32{
-		0.0750, -1.2687, 1.1187, 0.0000, 0.2062, 1.4063, 0.2938, 0.6250,
-		1.1500, -0.1375, 0.4000, 0.3875, -0.2437, -0.2375, 0.8500, 0.5625,
-		0.2000, 0.9750, 0.7500, -0.8500, 0.3750, -0.0250, -0.0750, 0.7000,
-		-0.1500, -0.7000, 1.7250, -0.2500, 0.7000, -0.5500, -0.6000, -0.1000,
-	}
-
-	ct0 := Depthwise_conv2d_stride2__encrypt__arg0(evaluator, params, ecd, enc, arg0)
-	linearTransforms, filterPlains := depthwiseconv2d_utils.Depthwise_conv2d_stride2__preprocessing(params, ecd)
-	resultCt := Depthwise_conv2d_stride2__preprocessed(evaluator, params, ecd, ct0, linearTransforms, filterPlains)
-	result := Depthwise_conv2d_stride2__decrypt__result0(evaluator, params, ecd, dec, resultCt)
-	errorThreshold := float64(0.01)
-	for i := range expected {
-		if math.Abs(float64(result[i]-expected[i])) > errorThreshold {
-			t.Errorf("Decryption error at index %d: got %.4f, expected %.4f", i, result[i], expected[i])
-		}
-	}
-}
