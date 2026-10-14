@@ -161,6 +161,7 @@ cc_binary(
         "@heir//lib/Transforms/LinalgFuseLinearOps",
         "@heir//lib/Transforms/LowerPolynomialEval",
         "@heir//lib/Transforms/LowerUnpack",
+        "@heir//lib/Transforms/LoweringHistory",
         "@heir//lib/Transforms/MemrefToArith:MemrefToArithRegistration",
         "@heir//lib/Transforms/OperationBalancer",
         "@heir//lib/Transforms/OptimizeRelinearization",
