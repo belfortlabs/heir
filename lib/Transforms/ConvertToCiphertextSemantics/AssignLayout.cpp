@@ -759,52 +759,14 @@ FailureOr<Value> implementUnpackOp(
   }
 
   if (auto arrayAttr = dyn_cast<ArrayAttr>(op.getLayout())) {
-    Value currentInput = op.getValue();
-    Type finalTargetType = op.getResult().getType();
-
-    // Unpack through the composed layout. Step by step, ISL generates a loop
-    // nest for each intermediate layout. The composed layout maps the
-    // data indices to slots directly.
-    if (arrayAttr.size() > 1 && llvm::all_of(arrayAttr, [](Attribute attr) {
-          return isa<LayoutAttr>(attr);
-        })) {
-      return implementUnpackOpStep(
-          currentInput,
-          LayoutAttr::composeLayouts(arrayAttr, builder.getContext()),
-          finalTargetType, builder, createdOpCallback);
-    }
-
-    for (int i = arrayAttr.size() - 1; i >= 0; --i) {
-      auto layoutAttr = cast<LayoutAttr>(arrayAttr[i]);
-      Type stepTargetType;
-      if (i == 0) {
-        stepTargetType = finalTargetType;
-      } else {
-        presburger::IntegerRelation rel = layoutAttr.getIntegerRelation();
-        unsigned numDomainVars = rel.getNumDomainVars();
-        SmallVector<int64_t> domainShape;
-        for (unsigned d = 0; d < numDomainVars; ++d) {
-          auto ub = rel.getConstantBound64(
-              presburger::BoundType::UB,
-              rel.getVarKindOffset(presburger::VarKind::Domain) + d);
-          if (!ub.has_value()) {
-            return builder.emitError()
-                   << "Unbounded domain variable in relation";
-          }
-          domainShape.push_back(ub.value() + 1);
-        }
-        Type elementType = getElementTypeOrSelf(finalTargetType);
-        stepTargetType = RankedTensorType::get(domainShape, elementType);
-      }
-
-      auto res = implementUnpackOpStep(currentInput, layoutAttr, stepTargetType,
-                                       builder, createdOpCallback);
-      if (failed(res)) {
-        return failure();
-      }
-      currentInput = res.value();
-    }
-    return currentInput;
+    // Unpack through the composed layout, not step by step. ISL codegen on an
+    // intermediate layout can be very slow, e.g. on the pixel shuffle of a
+    // strided conv result. The composed layout maps the data indices to slots
+    // directly.
+    return implementUnpackOpStep(
+        op.getValue(),
+        LayoutAttr::composeLayouts(arrayAttr, builder.getContext()),
+        op.getResult().getType(), builder, createdOpCallback);
   }
 
   return builder.emitError()

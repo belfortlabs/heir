@@ -13,6 +13,7 @@
 
 // CHECK: func.func @strided_conv__decrypt__result0
 // CHECK: secret.reveal
+// CHECK-NOT: tensor.insert {{.*}} : tensor<1x2048xf32>
 // CHECK: scf.for
 // CHECK: tensor.extract {{.*}} : tensor<1x2048xf32>
 // CHECK: tensor.insert {{.*}} : tensor<1x8x8x8xf32>
