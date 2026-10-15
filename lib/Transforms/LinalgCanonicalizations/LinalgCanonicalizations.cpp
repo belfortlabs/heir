@@ -1103,14 +1103,20 @@ struct MaterializeBroadcasts : public OpRewritePattern<linalg::GenericOp> {
 
     int64_t numDims = genericOp.getNumLoops();
 
-    // linalg.broadcast cannot transpose, so once the constant results are
-    // collapsed away, the remaining results must be dims in increasing order.
-    // Check this before rewriting any operand.
+    // Only constant results on unit dims can be collapsed away, and
+    // linalg.broadcast cannot transpose, so the remaining results must be dims
+    // in increasing order. Check this before rewriting any operand: a pattern
+    // that fails must leave the IR unchanged.
     for (int64_t i = 0; i < genericOp.getNumDpsInputs(); ++i) {
       if (getBroadcastDimensions(indexingMaps[i], numDims).empty()) continue;
+      auto inputType = cast<RankedTensorType>(
+          genericOp.getDpsInputOperand(i)->get().getType());
       int64_t prevDim = -1;
-      for (AffineExpr expr : indexingMaps[i].getResults()) {
-        if (isa<AffineConstantExpr>(expr)) continue;
+      for (auto [j, expr] : llvm::enumerate(indexingMaps[i].getResults())) {
+        if (isa<AffineConstantExpr>(expr)) {
+          if (inputType.getDimSize(j) != 1) return failure();
+          continue;
+        }
         auto dimExpr = dyn_cast<AffineDimExpr>(expr);
         if (!dimExpr || dimExpr.getPosition() <= prevDim) return failure();
         prevDim = dimExpr.getPosition();

@@ -176,3 +176,25 @@ func.func @transposed_channel_broadcast(%arg0: tensor<4x1x1x1xf32>, %arg1: tenso
   } -> tensor<1x4x4x4xf32>
   return %0 : tensor<1x4x4x4xf32>
 }
+
+// -----
+
+// The second operand reads column 0 of a 4x3 tensor. Its constant result is
+// not a unit dim, so it cannot be collapsed into a broadcast, and the generic
+// is left alone, including the first operand's broadcast.
+
+// CHECK: @constant_index_into_non_unit_dim
+func.func @constant_index_into_non_unit_dim(%arg0: tensor<3xf32>, %arg1: tensor<4x3xf32>) -> tensor<4x3xf32> {
+  %cst = tensor.empty() : tensor<4x3xf32>
+  // CHECK-NOT: linalg.broadcast
+  // CHECK: linalg.generic
+  %0 = linalg.generic {
+    indexing_maps = [affine_map<(d0, d1) -> (d1)>, affine_map<(d0, d1) -> (d0, 0)>, affine_map<(d0, d1) -> (d0, d1)>],
+    iterator_types = ["parallel", "parallel"]
+  } ins(%arg0, %arg1 : tensor<3xf32>, tensor<4x3xf32>) outs(%cst : tensor<4x3xf32>) {
+  ^bb0(%in: f32, %in_0: f32, %out: f32):
+    %1 = arith.mulf %in, %in_0 : f32
+    linalg.yield %1 : f32
+  } -> tensor<4x3xf32>
+  return %0 : tensor<4x3xf32>
+}
