@@ -1595,9 +1595,11 @@ struct DivFByConstantToMulF : public OpRewritePattern<arith::DivFOp> {
       return rewriter.notifyMatchFailure(op, "divisor has no reciprocal");
 
     auto inverseOp = arith::ConstantOp::create(rewriter, op.getLoc(), inverse);
-    auto mulOp = rewriter.replaceOpWithNewOp<arith::MulFOp>(
-        op, op.getLhs(), inverseOp, op.getFastmathAttr());
+    auto mulOp = arith::MulFOp::create(rewriter, op.getLoc(), op.getLhs(),
+                                       inverseOp, op.getFastmathAttr());
+    // Copy the attributes before the replacement erases op.
     mulOp->setDiscardableAttrs(op->getDiscardableAttrDictionary());
+    rewriter.replaceOp(op, mulOp);
     return success();
   }
 };
