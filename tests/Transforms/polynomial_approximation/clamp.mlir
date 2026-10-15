@@ -102,3 +102,39 @@ func.func @empty_interval(%x: f32 {secret.secret}) -> f32 {
   %1 = arith.minimumf %0, %c0 : f32
   return %1 : f32
 }
+
+// -----
+
+// A plaintext clamp stays exact: without a domain, the split would assume x in
+// [-1, 1] and drop the upper bound.
+// CHECK: @plaintext_clamp
+// CHECK-SAME: (%[[X:.*]]: f32)
+// CHECK: %[[MAX:.*]] = arith.maximumf %[[X]]
+// CHECK: %[[MIN:.*]] = arith.minimumf %[[MAX]]
+// CHECK-NOT: polynomial.eval
+// CHECK: return %[[MIN]]
+// COMPOSITE: @plaintext_clamp
+// COMPOSITE: arith.maximumf
+// COMPOSITE: arith.minimumf
+func.func @plaintext_clamp(%x: f32) -> f32 {
+  %c0 = arith.constant 0.0 : f32
+  %c6 = arith.constant 6.0 : f32
+  %0 = arith.maximumf %x, %c0 : f32
+  %1 = arith.minimumf %0, %c6 : f32
+  return %1 : f32
+}
+
+// -----
+
+// The inner max has another user, so it is approximated anyway: the clamp is
+// not split, because the split would add two ReLUs instead of one minimum.
+// CHECK: @inner_has_other_user
+// CHECK-NOT: arith.subf
+// CHECK: return
+func.func @inner_has_other_user(%x: f32 {secret.secret}) -> (f32, f32) {
+  %c0 = arith.constant 0.0 : f32
+  %c6 = arith.constant 6.0 : f32
+  %0 = arith.maximumf %x, %c0 {domain_lower = -4.0 : f64, domain_upper = 8.0 : f64} : f32
+  %1 = arith.minimumf %0, %c6 {domain_lower = 0.0 : f64, domain_upper = 8.0 : f64} : f32
+  return %0, %1 : f32, f32
+}

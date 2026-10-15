@@ -661,10 +661,12 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
 // by its bound. Without a domain the default [-1, 1] is shifted the same way.
 // A ReLU whose shifted domain is entirely on one side of zero is zero or the
 // identity there, so it is not approximated; without calibrated domains this
-// drops the upper bound of ReLU6, which lies outside [-1, 1].
+// drops the upper bound of ReLU6, which lies outside [-1, 1]. Only a clamp of
+// a secret x is split: a plaintext clamp stays exact.
 template <typename OuterOp, typename InnerOp>
 struct ClampViaTwoRelus : public OpRewritePattern<OuterOp> {
-  using OpRewritePattern<OuterOp>::OpRewritePattern;
+  ClampViaTwoRelus(MLIRContext* context, DataFlowSolver* solver)
+      : OpRewritePattern<OuterOp>(context), solver(solver) {}
 
   LogicalResult matchAndRewrite(OuterOp op,
                                 PatternRewriter& rewriter) const override {
@@ -682,8 +684,14 @@ struct ClampViaTwoRelus : public OpRewritePattern<OuterOp> {
     if (!outer) return rewriter.notifyMatchFailure(op, "no constant bound");
     auto innerOp = outer->first.template getDefiningOp<InnerOp>();
     if (!innerOp) return rewriter.notifyMatchFailure(op, "not a clamp");
+    // If the inner op has other users, it stays and is approximated anyway, so
+    // the split would add two ReLUs to it instead of one min/max.
+    if (!innerOp->hasOneUse())
+      return rewriter.notifyMatchFailure(op, "inner op has other users");
     auto inner = splitConstant(innerOp);
     if (!inner) return rewriter.notifyMatchFailure(op, "no constant bound");
+    if (!mlir::heir::isSecret(inner->first, solver))
+      return rewriter.notifyMatchFailure(op, "operand is not secret");
 
     constexpr bool kMaxInside = std::is_same_v<InnerOp, arith::MaximumFOp>;
     Value x = inner->first;
@@ -738,6 +746,9 @@ struct ClampViaTwoRelus : public OpRewritePattern<OuterOp> {
     rewriter.replaceOp(op, result);
     return success();
   }
+
+ private:
+  DataFlowSolver* solver;
 };
 
 // Use a square and multiply algorithm for x^n where n is a constant.
@@ -788,14 +799,23 @@ struct PolynomialApproximation
   void runOnOperation() override {
     MLIRContext* context = &getContext();
 
-    // Split clamps into ReLUs before anything approximates their min/max
-    // halves. This runs ahead of the secretness analysis so the analysis
-    // covers the values it creates.
-    RewritePatternSet clampPatterns(context);
-    clampPatterns.add<ClampViaTwoRelus<arith::MinimumFOp, arith::MaximumFOp>,
-                      ClampViaTwoRelus<arith::MaximumFOp, arith::MinimumFOp>>(
-        context);
-    (void)applyPatternsGreedily(getOperation(), std::move(clampPatterns));
+    // Split secret clamps into ReLUs before anything approximates their
+    // min/max halves. The split has its own secretness analysis, so the main
+    // analysis below covers the values that the split creates.
+    {
+      DataFlowSolver clampSolver;
+      dataflow::loadBaselineAnalyses(clampSolver);
+      clampSolver.load<SecretnessAnalysis>();
+      if (failed(clampSolver.initializeAndRun(getOperation()))) {
+        getOperation()->emitOpError() << "Failed to run SecretnessAnalysis.\n";
+        return signalPassFailure();
+      }
+      RewritePatternSet clampPatterns(context);
+      clampPatterns.add<ClampViaTwoRelus<arith::MinimumFOp, arith::MaximumFOp>,
+                        ClampViaTwoRelus<arith::MaximumFOp, arith::MinimumFOp>>(
+          context, &clampSolver);
+      (void)applyPatternsGreedily(getOperation(), std::move(clampPatterns));
+    }
 
     DataFlowSolver solver;
     dataflow::loadBaselineAnalyses(solver);
