@@ -39,6 +39,7 @@
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinOps.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
+#include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/TypeUtilities.h"          // from @llvm-project
 #include "mlir/include/mlir/IR/Value.h"                  // from @llvm-project
@@ -388,6 +389,14 @@ struct ConvertCKKSRotateOp : public OpConversionPattern<ckks::RotateOp> {
           op, "cannot determine the ciphertext level for rotation");
     IntegerAttr level =
         rewriter.getI64IntegerAttr(inputType.getModulusChain().getCurrent());
+    // A constant dynamic shift is normalized like a static one; the runtime
+    // rejects rotation indices outside the slot range.
+    APInt constantShift;
+    if (!staticShift &&
+        matchPattern(dynamicShift, m_ConstantInt(&constantShift))) {
+      staticShift = rewriter.getI64IntegerAttr(constantShift.getSExtValue());
+      dynamicShift = Value();
+    }
     if (staticShift) {
       int64_t ringDegree = inputType.getPlaintextSpace()
                                .getRing()
