@@ -113,8 +113,8 @@ int cyclops_add_mod1_required_keys(cyclops_evk_request* request,
                                    int log_message_ratio, int key_mode,
                                    char** error);
 int cyclops_expand_parameter_set(const char* parameter_set,
-                                 const char* bootstrap_profile,
-                                 char** expanded, char** error);
+                                 const char* bootstrap_profile, char** expanded,
+                                 char** error);
 
 #ifdef __cplusplus
 }
