@@ -2,7 +2,7 @@
 #define BAZEL_CYCLOPS_CYCLOPS_PLANNER_H_
 
 // The functions of Cyclops' planner/include/cyclops_planner.h (at commit
-// c4b4d20487ff855811f3d8de0592ab6871d70ff3), and the constants HEIR uses, for
+// 838a4570419e8d8c18020e252033d4b234e8f9bd), and the constants HEIR uses, for
 // loading the planner at run time.
 // The constants keep Cyclops' values; the structs keep its layout.
 // header_check.py checks this copy against a Cyclops checkout or release.
@@ -112,6 +112,9 @@ int cyclops_add_mod1_required_keys(cyclops_evk_request* request,
                                    const cyclops_mod1* mod1, int level,
                                    int log_message_ratio, int key_mode,
                                    char** error);
+int cyclops_expand_parameter_set(const char* parameter_set,
+                                 const char* bootstrap_profile, char** expanded,
+                                 char** error);
 
 #ifdef __cplusplus
 }
