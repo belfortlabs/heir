@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "lib/Dialect/MathExt/IR/MathExtOps.h"
+#include "lib/Transforms/LoweringHistory/LoweringHistory.h"
 #include "llvm/include/llvm/ADT/APFloat.h"               // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"    // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
@@ -113,13 +114,17 @@ struct SelectMinMaxFloatPattern : public OpRewritePattern<arith::SelectOp> {
 
     Operation* newOp;
     if (isMax)
-      newOp =
-          arith::MaximumFOp::create(rewriter, op.getLoc(), cmpOp.getLhs(),
-                                    cmpOp.getRhs(), cmpOp.getFastmathAttr());
+      newOp = arith::MaximumFOp::create(
+          rewriter,
+          getLoweringLocation(op, "activation-canonicalizations",
+                              arith::MaximumFOp::getOperationName()),
+          cmpOp.getLhs(), cmpOp.getRhs(), cmpOp.getFastmathAttr());
     else
-      newOp =
-          arith::MinimumFOp::create(rewriter, op.getLoc(), cmpOp.getLhs(),
-                                    cmpOp.getRhs(), cmpOp.getFastmathAttr());
+      newOp = arith::MinimumFOp::create(
+          rewriter,
+          getLoweringLocation(op, "activation-canonicalizations",
+                              arith::MinimumFOp::getOperationName()),
+          cmpOp.getLhs(), cmpOp.getRhs(), cmpOp.getFastmathAttr());
 
     // (a) Forward any discardable attrs annotated on the select op itself onto
     // the new op (the old DRR `SelectGreaterThanEqualFloat` behavior). Covers

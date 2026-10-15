@@ -802,22 +802,45 @@ LogicalResult LayoutPropagation::visitOperation(BroadcastOp op) {
 
   // If the input is in cyclic layout and the result can be packed in a
   // cyclic layout, the result is assigned the cyclic layout (which
-  // lowers to zero-cost). Otherwise, assign the row-major default layout.
+  // lowers to zero-cost). Otherwise, if a user combines the result with a
+  // secret value of the same type that already has a layout (e.g., a
+  // squeeze-excite scale multiplied into a feature map), use that layout so
+  // the user needs no conversion. Layouts are assigned in program order, so
+  // this applies only when the sibling is defined before the broadcast;
+  // otherwise, assign the row-major default layout. A new layout is not
+  // gapped. A borrowed one takes the sibling's kernel info too, because the
+  // elementwise user inherits kernel info from its first operand, which in
+  // torch's operand order is the broadcast.
   LayoutAttr resultLayoutAttr;
+  Attribute kernelInfoAttr =
+      makeUngappedKernelInfoAttr(ctx, resultType.getShape());
   IntegerRelation cyclicResultRel =
       getCyclicLayoutRelation(resultType, minSlotCount);
+  Value sibling;
+  for (Operation* user : result.getUsers()) {
+    for (Value operand : user->getOperands()) {
+      if (operand != result && operand.getType() == resultType &&
+          assignedLayouts.contains(operand) && isSecret(operand, solver)) {
+        sibling = operand;
+        break;
+      }
+    }
+    if (sibling) break;
+  }
   if (isRelationCyclic(inputType, minSlotCount,
                        inputLayout.getIntegerRelation()) &&
       isRelationCyclic(resultType, minSlotCount, cyclicResultRel)) {
     resultLayoutAttr = LayoutAttr::getFromIntegerRelation(ctx, cyclicResultRel);
+  } else if (sibling) {
+    resultLayoutAttr = getComposedLayoutAttr(sibling);
+    auto siblingKernelInfo =
+        findAttributeAssociatedWith(sibling, kKernelInfoAttrName);
+    if (succeeded(siblingKernelInfo)) kernelInfoAttr = *siblingKernelInfo;
   } else {
     resultLayoutAttr = LayoutAttr::getFromIntegerRelation(
         ctx, getRowMajorLayoutRelation(resultType, minSlotCount));
   }
 
-  // The result layout is new, so the result is not gapped.
-  Attribute kernelInfoAttr =
-      makeUngappedKernelInfoAttr(ctx, resultType.getShape());
   assignedLayouts.insert({result, resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
   debugAssignLayout(result, resultLayoutAttr);
