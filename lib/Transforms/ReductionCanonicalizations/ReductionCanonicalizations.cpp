@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "llvm/include/llvm/ADT/STLExtras.h"        // from @llvm-project
+#include "llvm/include/llvm/ADT/Sequence.h"         // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"      // from @llvm-project
 #include "llvm/include/llvm/Support/Casting.h"      // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"        // from @llvm-project
@@ -15,6 +16,7 @@
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"    // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/IR/LinalgInterfaces.h"  // from @llvm-project
+#include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Utils/StructuredOpsUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/AffineMap.h"          // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"  // from @llvm-project
@@ -159,6 +161,65 @@ struct GenericToReduce : public OpRewritePattern<mlir::linalg::GenericOp> {
   }
 };
 
+// A sum or product over trailing contiguous dimensions, e.g. a global
+// average pool over H and W, becomes a collapse of those dimensions and one
+// reduction over the collapsed dimension. The collapse is free on a row-major
+// layout, and the ciphertext-semantics kernel for linalg.reduce supports one
+// reduction dimension, which must be the innermost. Other dimension sets are
+// left alone.
+struct CollapseTrailingReductionDims
+    : public OpRewritePattern<linalg::ReduceOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::ReduceOp reduceOp,
+                                PatternRewriter& rewriter) const override {
+    if (!reduceOp.isSingleInputOutput())
+      return rewriter.notifyMatchFailure(reduceOp, "not single input/output");
+    auto inputType =
+        dyn_cast<RankedTensorType>(reduceOp.getInputs()[0].getType());
+    if (!inputType || !inputType.hasStaticShape())
+      return rewriter.notifyMatchFailure(reduceOp, "input is not static");
+
+    SmallVector<int64_t> dimensions(reduceOp.getDimensions());
+    llvm::sort(dimensions);
+    int64_t rank = inputType.getRank();
+    int64_t first = dimensions.empty() ? rank : dimensions.front();
+    if (dimensions.size() < 2 ||
+        !llvm::equal(dimensions, llvm::seq<int64_t>(first, rank)))
+      return rewriter.notifyMatchFailure(
+          reduceOp, "not a reduction over several trailing dimensions");
+
+    // The body must combine exactly the two block arguments with one add or
+    // mul and yield the result.
+    Block* body = reduceOp.getBlock();
+    if (body->getOperations().size() != 2)
+      return rewriter.notifyMatchFailure(reduceOp, "body is not a single op");
+    Operation* combiner = &body->front();
+    if (!isa<arith::AddFOp, arith::MulFOp, arith::AddIOp, arith::MulIOp>(
+            combiner))
+      return rewriter.notifyMatchFailure(reduceOp, "combiner is not add/mul");
+    Value lhs = combiner->getOperand(0), rhs = combiner->getOperand(1);
+    BlockArgument in = body->getArgument(0), acc = body->getArgument(1);
+    if (!((lhs == in && rhs == acc) || (lhs == acc && rhs == in)) ||
+        body->getTerminator()->getOperand(0) != combiner->getResult(0))
+      return rewriter.notifyMatchFailure(
+          reduceOp, "combiner does not combine the two block arguments");
+
+    SmallVector<ReassociationIndices> reassociation;
+    for (int64_t i = 0; i < first; ++i) reassociation.push_back({i});
+    reassociation.push_back(llvm::to_vector(llvm::seq<int64_t>(first, rank)));
+    Value collapsed = tensor::CollapseShapeOp::create(
+        rewriter, reduceOp.getLoc(), reduceOp.getInputs()[0], reassociation);
+    auto reduced = linalg::ReduceOp::create(
+        rewriter, reduceOp.getLoc(), reduceOp.getResultTypes(),
+        ValueRange{collapsed}, reduceOp.getInits(), ArrayRef<int64_t>{first});
+    rewriter.cloneRegionBefore(reduceOp.getRegion(), reduced.getRegion(),
+                               reduced.getRegion().end());
+    rewriter.replaceOp(reduceOp, reduced.getResults());
+    return success();
+  }
+};
+
 struct ReductionCanonicalizations
     : public impl::ReductionCanonicalizationsBase<ReductionCanonicalizations> {
   void runOnOperation() override {
@@ -169,6 +230,10 @@ struct ReductionCanonicalizations
     patterns.add<GenericToReduce>(context);
 
     walkAndApplyPatterns(module, std::move(patterns));
+
+    RewritePatternSet collapsePatterns(context);
+    collapsePatterns.add<CollapseTrailingReductionDims>(context);
+    walkAndApplyPatterns(module, std::move(collapsePatterns));
   }
 };
 
