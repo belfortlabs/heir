@@ -64,6 +64,9 @@ LayoutAttr LayoutAttr::getFromIntegerRelation(::mlir::MLIRContext* context,
 
 LayoutAttr LayoutAttr::composeLayouts(::mlir::ArrayAttr arrayAttr,
                                       ::mlir::MLIRContext* context) {
+  // Nothing to compose.
+  if (arrayAttr.size() == 1) return cast<LayoutAttr>(arrayAttr[0]);
+
   auto layoutAttrs = arrayAttr.getAsRange<LayoutAttr>();
   auto it = layoutAttrs.begin();
   IntegerRelation composedRel = (*it).getIntegerRelation();

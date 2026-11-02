@@ -687,10 +687,7 @@ FailureOr<Value> implementAssignLayout(
     // Folding step by step would enumerate every point of each intermediate
     // layout, e.g. a conv filter's whole expanded Toeplitz matrix. Folding
     // through the composed layout only visits the points the input maps to.
-    bool allLayouts = llvm::all_of(
-        arrayAttr, [](Attribute attr) { return isa<LayoutAttr>(attr); });
-    if (allLayouts && arrayAttr.size() > 1 &&
-        foldsRegardlessOfSize(input, strategy)) {
+    if (arrayAttr.size() > 1 && foldsRegardlessOfSize(input, strategy)) {
       auto lastLayout = cast<LayoutAttr>(arrayAttr[arrayAttr.size() - 1]);
       Type targetType = materializeLayout(getElementTypeOrSelf(input.getType()),
                                           lastLayout, minSlotCount);
@@ -705,11 +702,7 @@ FailureOr<Value> implementAssignLayout(
 
     Value currentInput = input;
     for (size_t i = 0; i < arrayAttr.size(); ++i) {
-      auto layoutAttr = dyn_cast<LayoutAttr>(arrayAttr[i]);
-      if (!layoutAttr) {
-        return builder.emitError()
-               << "All layouts in the array must be LayoutAttr";
-      }
+      auto layoutAttr = cast<LayoutAttr>(arrayAttr[i]);
       bool isLast = (i == arrayAttr.size() - 1);
       Type targetType;
       auto elementType = getElementTypeOrSelf(currentInput.getType());
