@@ -13,7 +13,7 @@ This pass rewrites activation patterns, such as ReLU implemented as a select and
 Example Command: heir-opt --activation-canonicalizations --canonicalize tests/Transforms/activation_canonicalizations/doctest.mlir
 Input:
 func.func @relu(%arg0: f32) -> f32 { %cst_0 = arith.constant 0.000000e+00 : f32 %0 = arith.cmpf ugt, %arg0, %cst_0 : f32 %1 = arith.select %0, %arg0, %cst_0 : f32 return %1 : f32 } Output:
-module { func."><meta itemprop=dateModified content="2025-10-17T09:48:09-07:00"><meta itemprop=wordCount content="30302"><meta itemprop=keywords content><meta name=twitter:card content="summary"><meta name=twitter:title content="Passes"><meta name=twitter:description content="-activation-canonicalizations Rewrites specific activation patterns to simpler ops
+module { func."><meta itemprop=dateModified content="2025-10-17T09:48:09-07:00"><meta itemprop=wordCount content="30391"><meta itemprop=keywords content><meta name=twitter:card content="summary"><meta name=twitter:title content="Passes"><meta name=twitter:description content="-activation-canonicalizations Rewrites specific activation patterns to simpler ops
 This pass rewrites activation patterns, such as ReLU implemented as a select and compare, to simpler operations like min/max.
 Example Command: heir-opt --activation-canonicalizations --canonicalize tests/Transforms/activation_canonicalizations/doctest.mlir
 Input:
@@ -572,9 +572,10 @@ and the extracted values all come from consistently aligned indices of the same
 source tensor. In this case, the chain can be collapsed into a single <code>rotate</code>.</p><p>Each index used for insertion or extraction must be constant; this may
 require running <code>--canonicalize</code> or <code>--sccp</code> before this pass to apply
 folding rules (use <code>--sccp</code> if you need to fold constant through control flow).</p><h3 id=-compare-to-sign-rewrite><code>-compare-to-sign-rewrite</code></h3><p><em>Rewrites arith.cmpi/arith.cmpf to a math_ext.sign based expression</em></p><p>This pass rewrites arith.cmpi/cmpf <pred>%a, %b to some combination of
-add/mul and sign operations.
-TODO(#1929): provide detailed description of the expression for each
-predicate.</p><h4 id=example-10>Example</h4><p>Command: <code>heir-opt --compare-to-sign-rewrite tests/Transforms/compare_to_sign_rewrite/doctest.mlir</code></p><p>Input:</p><div class=highlight><pre tabindex=0 style=background-color:#f8f8f8;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-mlir data-lang=mlir><span style=display:flex><span><span style=color:#204a87;font-weight:700>func</span><span style=color:#000;font-weight:700>.</span><span style=color:#204a87;font-weight:700>func</span> <span style=color:#000>@cmpi_sgt</span><span style=color:#000;font-weight:700>(</span><span style=color:#000>%arg0</span><span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i32</span><span style=color:#000;font-weight:700>,</span> <span style=color:#000>%arg1</span><span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i32</span><span style=color:#000;font-weight:700>)</span> <span style=color:#000;font-weight:700>-&gt;</span> <span style=color:#204a87;font-weight:700>i1</span> <span style=color:#000;font-weight:700>{</span>
+add/mul and sign operations. Since <code>math_ext.sign</code> returns -1, 0, or 1 for
+negative, zero, or positive inputs respectively, the strict comparisons
+are rewritten as</p><p>a &lt; b -> 0.5 * (sign(b - a) + 1)
+a > b -> 0.5 * (sign(a - b) + 1)</p><p>TODO(#1929): support the remaining predicates (equality, &lt;=, >=).</p><h4 id=example-10>Example</h4><p>Command: <code>heir-opt --compare-to-sign-rewrite tests/Transforms/compare_to_sign_rewrite/doctest.mlir</code></p><p>Input:</p><div class=highlight><pre tabindex=0 style=background-color:#f8f8f8;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-mlir data-lang=mlir><span style=display:flex><span><span style=color:#204a87;font-weight:700>func</span><span style=color:#000;font-weight:700>.</span><span style=color:#204a87;font-weight:700>func</span> <span style=color:#000>@cmpi_sgt</span><span style=color:#000;font-weight:700>(</span><span style=color:#000>%arg0</span><span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i32</span><span style=color:#000;font-weight:700>,</span> <span style=color:#000>%arg1</span><span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i32</span><span style=color:#000;font-weight:700>)</span> <span style=color:#000;font-weight:700>-&gt;</span> <span style=color:#204a87;font-weight:700>i1</span> <span style=color:#000;font-weight:700>{</span>
 </span></span><span style=display:flex><span>  <span style=color:#000>%0</span> <span style=color:#000;font-weight:700>=</span> arith<span style=color:#000;font-weight:700>.</span>cmpi sgt<span style=color:#000;font-weight:700>,</span> <span style=color:#000>%arg0</span><span style=color:#000;font-weight:700>,</span> <span style=color:#000>%arg1</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i32</span>
 </span></span><span style=display:flex><span>  <span style=color:#204a87;font-weight:700>return</span> <span style=color:#000>%0</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i1</span>
 </span></span><span style=display:flex><span><span style=color:#000;font-weight:700>}</span>
@@ -582,7 +583,7 @@ predicate.</p><h4 id=example-10>Example</h4><p>Command: <code>heir-opt --compare
 </span></span><span style=display:flex><span>  <span style=color:#204a87;font-weight:700>func</span><span style=color:#000;font-weight:700>.</span><span style=color:#204a87;font-weight:700>func</span> <span style=color:#000>@cmpi_sgt</span><span style=color:#000;font-weight:700>(</span><span style=color:#000>%arg0</span><span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i32</span><span style=color:#000;font-weight:700>,</span> <span style=color:#000>%arg1</span><span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i32</span><span style=color:#000;font-weight:700>)</span> <span style=color:#000;font-weight:700>-&gt;</span> <span style=color:#204a87;font-weight:700>i1</span> <span style=color:#000;font-weight:700>{</span>
 </span></span><span style=display:flex><span>    <span style=color:#000>%0</span> <span style=color:#000;font-weight:700>=</span> arith<span style=color:#000;font-weight:700>.</span>sitofp <span style=color:#000>%arg0</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i32</span> to <span style=color:#204a87;font-weight:700>f32</span>
 </span></span><span style=display:flex><span>    <span style=color:#000>%1</span> <span style=color:#000;font-weight:700>=</span> arith<span style=color:#000;font-weight:700>.</span>sitofp <span style=color:#000>%arg1</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i32</span> to <span style=color:#204a87;font-weight:700>f32</span>
-</span></span><span style=display:flex><span>    <span style=color:#000>%2</span> <span style=color:#000;font-weight:700>=</span> arith<span style=color:#000;font-weight:700>.</span>subf <span style=color:#000>%1</span><span style=color:#000;font-weight:700>,</span> <span style=color:#000>%0</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>f32</span>
+</span></span><span style=display:flex><span>    <span style=color:#000>%2</span> <span style=color:#000;font-weight:700>=</span> arith<span style=color:#000;font-weight:700>.</span>subf <span style=color:#000>%0</span><span style=color:#000;font-weight:700>,</span> <span style=color:#000>%1</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>f32</span>
 </span></span><span style=display:flex><span>    <span style=color:#000>%3</span> <span style=color:#000;font-weight:700>=</span> math_ext<span style=color:#000;font-weight:700>.</span>sign <span style=color:#000>%2</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>f32</span>
 </span></span><span style=display:flex><span>    <span style=color:#000>%cst</span> <span style=color:#000;font-weight:700>=</span> arith<span style=color:#000;font-weight:700>.</span><span style=color:#204a87;font-weight:700>constant</span> <span style=color:#0000cf;font-weight:700>1.000000e+00</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>f32</span>
 </span></span><span style=display:flex><span>    <span style=color:#000>%cst_0</span> <span style=color:#000;font-weight:700>=</span> arith<span style=color:#000;font-weight:700>.</span><span style=color:#204a87;font-weight:700>constant</span> <span style=color:#0000cf;font-weight:700>5.000000e-01</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>f32</span>
@@ -1849,18 +1850,22 @@ plaintext is used at, found by walking forward from the encode op through
 plaintext-typed values.</p><p>Backends allocate a plaintext at the top of the modulus chain unless told
 otherwise, but encoding cost is dominated by per-RNS-limb work, so a
 plaintext only ever combined with a level 3 ciphertext is cheaper to encode
-with 4 limbs than with all of them. For a ct-pt op the result is unchanged
-either way: combining a ciphertext and a plaintext yields the lower of the
-two levels, so annotating with the <em>highest</em> level among such uses is the
-smallest choice that serves them all.</p><p><code>lwe.rlwe_encrypt</code> is not a ct-pt op and does not follow that rule. It has
-no ciphertext operand to be clamped against, so the backend builds the
-ciphertext at the plaintext&rsquo;s own level and the annotation is exact rather
-than a lower bound. Annotating an encryption therefore changes what the
-client emits, not just how many limbs it encodes: where the entry level sits
-below the top of the chain, the ciphertext now enters at the level its type
-declares instead of at <code>MaxLevel</code>. A plaintext that both feeds an encryption
-and is combined with a higher-level ciphertext has no correct level, and is
-left to the fallback.</p><p>Run this after CSE. Identical encode ops that CSE has merged are cheaper as
+with 4 limbs than with all of them.</p><p>For backends that combine a ciphertext and plaintext at the lower operand
+level, the result is unchanged either way: combining a ciphertext and a
+plaintext yields the lower of the two levels, so annotating with the
+<em>highest</em> level among such uses is the smallest choice that serves them
+all. For backends that require the ciphertext and plaintext operands of a
+ct-pt op to be at the exact same level (e.g. Cheddar), a plaintext shared
+across operations at different levels cannot be annotated with a single
+level that satisfies every use, and the pass signals failure.</p><p><code>lwe.rlwe_encrypt</code> is not a ct-pt op and has no ciphertext operand to be
+clamped against, so the backend builds the ciphertext at the plaintext&rsquo;s
+own level and the annotation is exact rather than a lower bound. Annotating
+an encryption therefore changes what the client emits, not just how many
+limbs it encodes: where the entry level sits below the top of the chain,
+the ciphertext now enters at the level its type declares instead of at
+<code>MaxLevel</code>. A plaintext that both feeds an encryption and is combined with
+a higher-level ciphertext has no correct level, and is left to the
+fallback.</p><p>Run this after CSE. Identical encode ops that CSE has merged are cheaper as
 one plaintext at the highest level than as several at their own levels,
 since each encode pays a fixed cost on top of the per-limb work.</p><h4 id=example-31>Example</h4><p>Command: <code>heir-opt --lwe-annotate-plaintext-level --split-input-file tests/Dialect/LWE/Transforms/annotate_plaintext_level.mlir</code></p><p>Input:</p><div class=highlight><pre tabindex=0 style=background-color:#f8f8f8;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-mlir data-lang=mlir><span style=display:flex><span><span style=color:#000;font-weight:700>!</span><span style=color:#f57900>Z1005037682689_i64_ =</span> <span style=color:#000;font-weight:700>!</span>mod_arith<span style=color:#000;font-weight:700>.</span>int<span style=color:#000;font-weight:700>&lt;</span><span style=color:#0000cf;font-weight:700>1005037682689</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i64</span><span style=color:#000;font-weight:700>&gt;</span>
 </span></span><span style=display:flex><span><span style=color:#000;font-weight:700>!</span><span style=color:#f57900>Z1032955396097_i64_ =</span> <span style=color:#000;font-weight:700>!</span>mod_arith<span style=color:#000;font-weight:700>.</span>int<span style=color:#000;font-weight:700>&lt;</span><span style=color:#0000cf;font-weight:700>1032955396097</span> <span style=color:#000;font-weight:700>:</span> <span style=color:#204a87;font-weight:700>i64</span><span style=color:#000;font-weight:700>&gt;</span>
