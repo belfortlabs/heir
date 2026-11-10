@@ -14,6 +14,7 @@
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
 #include "lib/Transforms/ConvertToCiphertextSemantics/TypeConversion.h"
 #include "lib/Utils/Layout/Codegen.h"
+#include "lib/Utils/Layout/InsertIntoZeros.h"
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/Layout/Utils.h"
 #include "llvm/include/llvm/ADT/BitVector.h"          // from @llvm-project
@@ -361,7 +362,7 @@ static FailureOr<Value> implementAssignLayoutStep(
 
   // If the input is a constant zero, then the output will be a constant zero
   // since we zero-fill slots.
-  if (matchPattern(input, m_AnyZeroFloat()) || matchPattern(input, m_Zero())) {
+  if (isZeroScalarOrSplat(input)) {
     auto zeroOp = arith::ConstantOp::create(builder, targetType,
                                             builder.getZeroAttr(targetType));
     createdOpCallback(zeroOp);
