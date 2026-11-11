@@ -18,7 +18,10 @@ concurrency:
 jobs:
   docs:
     runs-on:
-      labels: ubuntu-latest
+      # Pinned rather than ubuntu-latest: apt.llvm.org lags behind new Ubuntu
+      # releases, and install_clang_version.sh needs an LLVM apt suite that
+      # exists for the runner's codename.
+      labels: ubuntu-24.04
     permissions:
       contents: write
     env:
