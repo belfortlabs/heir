@@ -58,12 +58,19 @@ static SmallVector<Value> makeCanonicalAffineApplies(OpBuilder& b, Location loc,
 }
 
 static SmallVector<Value> inlineRegionAndEmitStore(
-    OpBuilder& b, Location loc, LinalgOp op, ArrayRef<Value> indexedValues,
-    ArrayRef<SmallVector<Value>> indexing, ValueRange outputBuffers) {
+    OpBuilder& b, Location loc, LinalgOp op, ArrayRef<Value> allIvs,
+    ArrayRef<Value> indexedValues, ArrayRef<SmallVector<Value>> indexing,
+    ValueRange outputBuffers) {
   auto& block = op->getRegion(0).front();
   IRMapping map;
   map.map(block.getArguments(), indexedValues);
   for (auto& op : block.without_terminator()) {
+    // A linalg.index reads the iteration index of its loop, which is that
+    // loop's induction variable once the op becomes a loop nest.
+    if (auto indexOp = dyn_cast<linalg::IndexOp>(op)) {
+      map.map(indexOp.getResult(), allIvs[indexOp.getDim()]);
+      continue;
+    }
     auto* newOp = b.clone(op, map);
     map.map(op.getResults(), newOp->getResults());
   }
@@ -125,8 +132,8 @@ static SmallVector<Value> emitScalarImplementation(OpBuilder& b, Location loc,
         b, loc, linalgOp.getMatchingIndexingMap(&outputOperand),
         allIvsPlusDims));
   }
-  return inlineRegionAndEmitStore(b, loc, linalgOp, indexedValues, indexing,
-                                  iterArgs);
+  return inlineRegionAndEmitStore(b, loc, linalgOp, allIvs, indexedValues,
+                                  indexing, iterArgs);
 }
 
 static AffineForOp buildAffineLoopFromConstants(

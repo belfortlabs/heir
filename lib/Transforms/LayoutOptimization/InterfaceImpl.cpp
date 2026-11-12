@@ -15,6 +15,7 @@
 #include "lib/Utils/AttributeUtils.h"
 #include "lib/Utils/Layout/Convolution.h"
 #include "lib/Utils/Layout/Hoisting.h"
+#include "lib/Utils/Layout/InsertIntoZeros.h"
 #include "lib/Utils/Layout/Utils.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"          // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"          // from @llvm-project
@@ -98,8 +99,26 @@ struct PadHoistingImpl
       }
     }
 
-    hoisters.push_back(createPadHoister(padOp));
+    // getPaddingRelation maps the result index to the source index.
+    IntegerRelation sourceToResult =
+        getPaddingRelation(padOp.getResultType(), padOp.getSourceType(),
+                           llvm::to_vector(padOp.getStaticLow()));
+    sourceToResult.inverse();
+    hoisters.push_back(createIntoZerosHoister(padOp, sourceToResult));
     return hoisters;
+  }
+};
+
+struct InsertSliceHoistingImpl
+    : public LayoutConversionHoistableOpInterface::ExternalModel<
+          InsertSliceHoistingImpl, tensor::InsertSliceOp> {
+  std::vector<Hoister> getHoisters(
+      Operation* op, tensor_ext::ConvertLayoutOp convertLayoutOp) const {
+    auto insertOp = cast<tensor::InsertSliceOp>(op);
+    if (!isPartialInsertIntoZeros(insertOp)) return {};
+    FailureOr<IntegerRelation> sourceToResult = getInsertionRelation(insertOp);
+    if (failed(sourceToResult)) return {};
+    return {createIntoZerosHoister(op, sourceToResult.value())};
   }
 };
 
@@ -285,32 +304,29 @@ Hoister createCollapseShapeHoister(tensor::CollapseShapeOp op) {
   };
 }
 
-static LayoutAttr hoistLayoutThroughPad(LayoutAttr attr, tensor::PadOp op) {
-  SmallVector<int64_t> lowPadding = llvm::to_vector(op.getStaticLow());
-  RankedTensorType paddedType = op.getResultType();
-  RankedTensorType unpaddedType = op.getSourceType();
-  IntegerRelation paddingRel =
-      getPaddingRelation(paddedType, unpaddedType, lowPadding);
-  paddingRel.inverse();
-  IntegerRelation toRel = attr.getIntegerRelation();
-  paddingRel.compose(toRel);
-  return LayoutAttr::getFromIntegerRelation(op.getContext(), paddingRel);
-}
-
-Hoister createPadHoister(tensor::PadOp op) {
-  return [op](ConvertLayoutOp convertLayoutOp) -> llvm::FailureOr<HoistResult> {
-    auto fromLayout = dyn_cast<LayoutAttr>(convertLayoutOp.getFromLayout());
+Hoister createIntoZerosHoister(Operation* op, IntegerRelation sourceToResult) {
+  return [op, sourceToResult](
+             ConvertLayoutOp convertLayoutOp) -> llvm::FailureOr<HoistResult> {
+    // Only toLayout matters: the result layout follows from it and the static
+    // insertion, and hoistOp converts the source from the source's own layout.
+    // The from_layout of the hoisted convert_layout is not used.
     auto toLayout = dyn_cast<LayoutAttr>(convertLayoutOp.getToLayout());
-    if (!fromLayout || !toLayout) return failure();
+    if (!toLayout) return failure();
+
+    // The source must sit where the new result layout puts each source
+    // element: source index -> result index -> (ct, slot).
+    IntegerRelation sourceLayout = sourceToResult;
+    sourceLayout.compose(toLayout.getIntegerRelation());
 
     HoistResult result;
     result.convertLayoutOp = convertLayoutOp;
     result.newOutputLayout = toLayout;
     result.newKernel = KernelName::Trivial;
-
-    auto hoistedLayout = hoistLayoutThroughPad(toLayout, op);
-    result.newInputLayouts = SmallVector<Attribute>{hoistedLayout};
-
+    // Only the source (operand 0) needs a layout. A null layout marks the
+    // other operands, such as the zeros of a partial insert into zeros.
+    result.newInputLayouts.assign(op->getNumOperands(), Attribute());
+    result.newInputLayouts[0] =
+        LayoutAttr::getFromIntegerRelation(op->getContext(), sourceLayout);
     return result;
   };
 }
@@ -411,6 +427,7 @@ void registerLayoutConversionHoistableInterface(DialectRegistry& registry) {
   registry.addExtension(+[](MLIRContext* ctx, tensor::TensorDialect* dialect) {
     tensor::CollapseShapeOp::attachInterface<CollapseShapeHoistingImpl>(*ctx);
     tensor::PadOp::attachInterface<PadHoistingImpl>(*ctx);
+    tensor::InsertSliceOp::attachInterface<InsertSliceHoistingImpl>(*ctx);
   });
   registry.addExtension(+[](MLIRContext* ctx, linalg::LinalgDialect* dialect) {
     linalg::MatvecOp::attachInterface<MatvecHoistingImpl>(*ctx);

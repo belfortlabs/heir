@@ -3,6 +3,7 @@
 #include "lib/Dialect/HEIRInterfaces.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
+#include "lib/Utils/Layout/InsertIntoZeros.h"
 #include "mlir/include/mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
@@ -68,6 +69,12 @@ struct InsertSliceLayoutRequirement
           InsertSliceLayoutRequirement, tensor::InsertSliceOp> {
   bool operandRequiresLayout(Operation* op, unsigned operandIndex,
                              bool isSecret) const {
+    // A partial insert into zeros takes its result layout from the source
+    // alone, so the zeros need no packing.
+    if (operandIndex == tensor::InsertSliceOp::odsIndex_dest &&
+        isPartialInsertIntoZeros(cast<tensor::InsertSliceOp>(op))) {
+      return false;
+    }
     if (!isSecret) {
       return operandIndex == tensor::InsertSliceOp::odsIndex_dest;
     }

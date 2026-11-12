@@ -2,6 +2,7 @@
 #define LIB_TRANSFORMS_LAYOUTOPTIMIZATION_INTERFACEIMPL_H_
 
 #include "lib/Transforms/LayoutOptimization/Hoisting.h"
+#include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Operation.h"              // from @llvm-project
 
@@ -21,7 +22,13 @@ Hoister createPrecomposingConv1dHoister(linalg::Conv1DOp op);
 /// Construct a hoister that hoists a layout conversion through a trivial
 /// rank-reducing collapse_shape operation.
 Hoister createCollapseShapeHoister(tensor::CollapseShapeOp op);
-Hoister createPadHoister(tensor::PadOp op);
+/// Construct a hoister that hoists a layout conversion through an op that
+/// places its source (operand 0) into zeros and moves no data: a zero
+/// tensor.pad, or a partial insert into zeros (see isPartialInsertIntoZeros).
+/// `sourceToResult` maps each source index to its result index. The other
+/// operands need no layout.
+Hoister createIntoZerosHoister(Operation* op,
+                               presburger::IntegerRelation sourceToResult);
 
 void registerLayoutConversionHoistableInterface(DialectRegistry& registry);
 

@@ -43,6 +43,7 @@
 #include "lib/Utils/ContextAwareTypeConversion.h"
 #include "lib/Utils/Layout/Codegen.h"
 #include "lib/Utils/Layout/Convolution.h"
+#include "lib/Utils/Layout/InsertIntoZeros.h"
 #include "lib/Utils/Layout/Utils.h"
 #include "lib/Utils/MathUtils.h"
 #include "lib/Utils/Utils.h"
@@ -2503,6 +2504,55 @@ class ConvertTensorExtractLayout
   }
 };
 
+// Lowers an op that places its secret source into zeros: a zero tensor.pad,
+// or a partial insert into zeros (see isPartialInsertIntoZeros). Such an op
+// moves no data, so a remap from the source layout to the result layout through
+// `sourceToResult` (source index -> result index) lowers it. The zero positions
+// are unmapped in the result layout, and the remap fills them with zeros. The
+// remap is the identity unless a later pass changed the result layout.
+static LogicalResult remapIntoZeros(
+    Operation* op, Value source, const IntegerRelation& sourceToResult,
+    const ContextAwareTypeConverter* typeConverter,
+    ContextAwareConversionPatternRewriter& rewriter) {
+  Value result = op->getResult(0);
+  FailureOr<Attribute> resultLayoutResult =
+      typeConverter->getContextualAttr(result);
+  if (failed(resultLayoutResult)) {
+    return op->emitError() << "result tensor should have been assigned a "
+                              "layout by layout-propagation";
+  }
+  auto sourceLayout =
+      cast<LayoutAttr>(typeConverter->getContextualAttr(source).value());
+  auto resultLayout = cast<LayoutAttr>(resultLayoutResult.value());
+
+  Type resultCiphertextType =
+      typeConverter->convertType(result.getType(), resultLayout);
+  if (!resultCiphertextType) {
+    return op->emitError() << "failed to convert the result type";
+  }
+  if (source.getType() != resultCiphertextType) {
+    return op->emitError() << "unsupported " << op->getName()
+                           << " that changes the number of ciphertexts";
+  }
+
+  // (ct, slot) of the source -> source index -> result index -> (ct, slot)
+  // of the result.
+  IntegerRelation remapRel = sourceLayout.getIntegerRelation();
+  remapRel.inverse();
+  remapRel.compose(sourceToResult);
+  remapRel.compose(resultLayout.getIntegerRelation());
+
+  ImplicitLocOpBuilder b(op->getLoc(), rewriter);
+  Operation* remapAndExtract = remapAndExtractResult(
+      b, source, LayoutAttr::getFromIntegerRelation(op->getContext(), remapRel),
+      cast<RankedTensorType>(resultCiphertextType));
+  setMaterializedAttr(remapAndExtract);
+  setAttributeAssociatedWith(remapAndExtract->getResult(0), kLayoutAttrName,
+                             resultLayout);
+  rewriter.replaceOp(op, remapAndExtract->getResult(0));
+  return success();
+}
+
 class ConvertTensorPad : public ContextAwareOpConversionPattern<tensor::PadOp> {
  public:
   using ContextAwareOpConversionPattern<
@@ -2512,52 +2562,13 @@ class ConvertTensorPad : public ContextAwareOpConversionPattern<tensor::PadOp> {
       tensor::PadOp op, OpAdaptor adaptor,
       ContextAwareConversionPatternRewriter& rewriter) const {
     if (failed(checkEncryptedPad(op))) return failure();
-
-    FailureOr<Attribute> sourceLayoutResult =
-        getTypeConverter()->getContextualAttr(adaptor.getSource());
-    FailureOr<Attribute> resultLayoutResult =
-        getTypeConverter()->getContextualAttr(op.getResult());
-
-    LayoutAttr sourceLayout = cast<LayoutAttr>(sourceLayoutResult.value());
-    LayoutAttr resultLayout = cast<LayoutAttr>(resultLayoutResult.value());
-
-    // Check if sourceCTType == targetCTType
-    auto sourceCTType = cast<RankedTensorType>(adaptor.getSource().getType());
-    auto targetCTType =
-        getTypeConverter()->convertType(op.getResultType(), resultLayout);
-    if (!targetCTType) {
-      return op.emitError("failed to convert target type");
-    }
-    if (sourceCTType != targetCTType) {
-      return op.emitError("Unsupported pad that changes number of ciphertexts");
-    }
-
-    SmallVector<int64_t> lowPadding = llvm::to_vector(op.getStaticLow());
-
-    IntegerRelation paddingRel =
-        getPaddingRelation(op.getResultType(), op.getSourceType(), lowPadding);
-
-    IntegerRelation sourceRel = sourceLayout.getIntegerRelation();
-    IntegerRelation resultRel = resultLayout.getIntegerRelation();
-
-    paddingRel.inverse();
-    sourceRel.inverse();
-    sourceRel.compose(paddingRel);
-    sourceRel.compose(resultRel);
-
-    LayoutAttr remapLayoutAttr =
-        LayoutAttr::getFromIntegerRelation(op.getContext(), sourceRel);
-
-    auto resultCiphertextSemanticType = cast<RankedTensorType>(targetCTType);
-    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
-    auto remapAndExtract = remapAndExtractResult(
-        b, adaptor.getSource(), remapLayoutAttr, resultCiphertextSemanticType);
-
-    setMaterializedAttr(remapAndExtract);
-    setAttributeAssociatedWith(remapAndExtract->getResult(0), kLayoutAttrName,
-                               resultLayout);
-    rewriter.replaceOp(op, remapAndExtract->getResult(0));
-    return success();
+    // getPaddingRelation maps the result index to the source index.
+    IntegerRelation sourceToResult =
+        getPaddingRelation(op.getResultType(), op.getSourceType(),
+                           llvm::to_vector(op.getStaticLow()));
+    sourceToResult.inverse();
+    return remapIntoZeros(op, adaptor.getSource(), sourceToResult,
+                          getTypeConverter(), rewriter);
   }
 
   LogicalResult matchAndRewrite(
@@ -2692,18 +2703,13 @@ class ConvertTensorInsertSlice
              << scalarLayout << " and tensor layout " << destLayout << "\n";
     }
 
-    SmallVector<int64_t> staticStrides =
-        SmallVector<int64_t>(op.getStaticStrides());
-    if (!llvm::all_of(staticStrides, [](int64_t s) { return s == 1; })) {
+    if (!op.hasUnitStride()) {
       return op.emitError()
              << "only unit strides of a tensor.insert_slice are supported";
     }
 
     // Convert the scalar layout to the destination layout subspace.
-    auto maybeSliceLayout = getSliceInsertionRelation(
-        op.getSourceType(), op.getResultType(),
-        SmallVector<int64_t>(op.getStaticOffsets()),
-        SmallVector<int64_t>(op.getStaticSizes()), staticStrides);
+    auto maybeSliceLayout = getInsertionRelation(op);
     if (failed(maybeSliceLayout)) {
       return op.emitError() << "failed to get layout for insert slice";
     }
@@ -2820,6 +2826,14 @@ class ConvertTensorInsertSlice
     }
 
     if (isSecretScalar && !isSecretDest) {
+      if (isPartialInsertIntoZeros(op)) {
+        FailureOr<IntegerRelation> insertion = getInsertionRelation(op);
+        if (failed(insertion)) {
+          return op.emitError() << "failed to get layout for insert slice";
+        }
+        return remapIntoZeros(op, adaptor.getSource(), insertion.value(),
+                              getTypeConverter(), rewriter);
+      }
       return op.emitError() << "dest tensor should have been assigned a layout "
                                "by layout-propagation";
     }

@@ -290,7 +290,10 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
 
   builder.setInsertionPoint(op);
   for (auto i = 0; i < op->getNumOperands(); ++i) {
-    // Convert each operand layout given the result.
+    // Convert each operand layout given the result. A null layout marks an
+    // operand that needs none, like the zeros of a partial insert into zeros.
+    Attribute newInputLayout = minHoistResult.newInputLayouts[i];
+    if (!newInputLayout) continue;
     auto operand = op->getOperand(i);
     auto originalLayout = findAttributeAssociatedWith(operand, kLayoutAttrName);
     if (failed(originalLayout)) {
@@ -302,7 +305,6 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
     LLVM_DEBUG(llvm::dbgs() << "Converting operand " << i << " with layout "
                             << originalLayout.value() << " to layout "
                             << minHoistResult.newInputLayouts[i] << "\n");
-    Attribute newInputLayout = minHoistResult.newInputLayouts[i];
     auto newInput = ConvertLayoutOp::create(
         builder, op->getLoc(), operand, originalLayout.value(), newInputLayout);
     setAttributeAssociatedWith(newInput.getResult(), kLayoutAttrName,
@@ -577,6 +579,8 @@ std::vector<HoistOption> LayoutOptimization::computeHoistingOptions(
     DenseMap<std::tuple<Value, Attribute, Attribute>, Cost> operandChangeMap;
     SmallVector<Cost> operandChangeCosts;
     for (auto& operand : op->getOpOperands()) {
+      // An operand with a null layout needs none, and costs nothing.
+      if (!result.newInputLayouts[operand.getOperandNumber()]) continue;
       // The hoister's layout for this operand, which differs from the result
       // layout for ops that change shape (collapse_shape, pad, matvec, ...).
       auto computedCost = costOfChangedOperand(

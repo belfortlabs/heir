@@ -27,6 +27,7 @@
 #include "lib/Utils/AttributeUtils.h"
 #include "lib/Utils/Layout/Convolution.h"
 #include "lib/Utils/Layout/Hoisting.h"
+#include "lib/Utils/Layout/InsertIntoZeros.h"
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/Layout/Utils.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"               // from @llvm-project
@@ -59,7 +60,6 @@
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/Diagnostics.h"            // from @llvm-project
-#include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/Operation.h"              // from @llvm-project
 #include "mlir/include/mlir/IR/OwningOpRef.h"            // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
@@ -207,9 +207,7 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
   if (!padOp) return std::nullopt;
 
   Value padValue = padOp.getConstantPaddingValue();
-  bool zeroPad = padValue && (matchPattern(padValue, m_AnyZeroFloat()) ||
-                              matchPattern(padValue, m_Zero()));
-  if (!zeroPad) return std::nullopt;
+  if (!padValue || !isZeroScalarOrSplat(padValue)) return std::nullopt;
 
   // A conv's `padding` parameter is a single symmetric value shared by every
   // spatial dim, so only a pad that is symmetric, equal across the spatial
@@ -327,6 +325,7 @@ struct LayoutPropagation : impl::LayoutPropagationBase<LayoutPropagation> {
   LogicalResult visitOperation(tensor::ExtractOp op);
   LogicalResult visitOperation(tensor::InsertOp op);
   LogicalResult visitOperation(tensor::InsertSliceOp op);
+  LogicalResult visitPartialInsertIntoZeros(tensor::InsertSliceOp op);
   LogicalResult visitOperation(tensor::ExtractSliceOp op);
   LogicalResult visitOperation(tensor::PadOp op);
 
@@ -1998,6 +1997,8 @@ LogicalResult LayoutPropagation::visitOperation(tensor::InsertOp op) {
 }
 
 LogicalResult LayoutPropagation::visitOperation(tensor::InsertSliceOp op) {
+  if (isPartialInsertIntoZeros(op)) return visitPartialInsertIntoZeros(op);
+
   // Set the result layout to be the same as the dest tensor.
   if (!assignedLayouts.contains(op.getDest())) {
     return op->emitError() << "Destination tensor has no assigned layout";
@@ -2010,6 +2011,37 @@ LogicalResult LayoutPropagation::visitOperation(tensor::InsertSliceOp op) {
   assignedLayouts.insert({result, destLayout});
   debugAssignLayout(result, destLayout);
   setResultLayoutAttr(op, kernelInfoAttr);
+  return success();
+}
+
+LogicalResult LayoutPropagation::visitPartialInsertIntoZeros(
+    tensor::InsertSliceOp op) {
+  if (!assignedLayouts.contains(op.getSource())) {
+    return op->emitError() << "Source tensor has no assigned layout";
+  }
+
+  // The insert moves no data: result[offset + i * stride] = source[i], so the
+  // result layout maps each result index back to its source index, then
+  // through the source layout. The other result positions stay unmapped, and
+  // unmapped points are zero-filled when a layout is materialized, which
+  // matches the zeros of the destination.
+  FailureOr<IntegerRelation> insertion = getInsertionRelation(op);
+  if (failed(insertion)) {
+    return op->emitError() << "failed to get the layout of the inserted slice";
+  }
+  insertion->inverse();
+  insertion->compose(
+      getComposedLayoutAttr(op.getSource()).getIntegerRelation());
+
+  LayoutAttr resultLayout =
+      LayoutAttr::getFromIntegerRelation(op.getContext(), insertion.value());
+  Value result = op.getResult();
+  assignedLayouts.insert({result, resultLayout});
+  debugAssignLayout(result, resultLayout);
+  // A gap factor describes a multiplexed layout of the result shape, which a
+  // partial insert does not keep in general.
+  setResultLayoutAttr(op, makeUngappedKernelInfoAttr(
+                              op.getContext(), op.getResultType().getShape()));
   return success();
 }
 
@@ -2037,9 +2069,7 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
   }
 
   Value padValue = op.getConstantPaddingValue();
-  bool isZeroPad = padValue && (matchPattern(padValue, m_AnyZeroFloat()) ||
-                                matchPattern(padValue, m_Zero()));
-  if (!isZeroPad) {
+  if (!padValue || !isZeroScalarOrSplat(padValue)) {
     return op->emitError()
            << "layout propagation only supports zero-padding tensor.pad";
   }
@@ -2404,6 +2434,14 @@ CompatibilityResult LayoutPropagation::hasCompatibleArgumentLayouts(
 
   if (!assignedLayouts.contains(insert)) {
     return {false, op->emitError("input tensor has no assigned layout")};
+  }
+  // The result layout of a partial insert into zeros follows from the source
+  // layout alone.
+  if (isPartialInsertIntoZeros(op)) return {true, std::nullopt};
+  if (!isSlabInsert(op)) {
+    return {false, op->emitError("unsupported tensor.insert_slice: the slice "
+                                 "does not fill whole slabs of the result, "
+                                 "and the destination is not all zeros")};
   }
   if (!assignedLayouts.contains(dest)) {
     return {false, op->emitError("destination tensor has no assigned layout")};
