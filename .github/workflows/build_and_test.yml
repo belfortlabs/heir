@@ -11,7 +11,10 @@ concurrency:
 jobs:
   build-and-test:
     runs-on:
-      labels: ubuntu-latest
+      # Pinned rather than ubuntu-latest: apt.llvm.org lags behind new Ubuntu
+      # releases, and install_clang_version.sh needs an LLVM apt suite that
+      # exists for the runner's codename.
+      labels: ubuntu-24.04
     env:
       BUILDBUDDY_API_KEY: ${{ (github.repository == 'google/heir' || github.repository == 'belfortlabs/heir') && secrets.BUILDBUDDY_API_KEY || 'SEVzwPt2S7PHhY1OxD3u' }}
       BAZEL_CONFIG_FLAG: ${{ (github.repository == 'google/heir' || github.repository == 'belfortlabs/heir') && '--config=ci --config=remote' || '--config=ci' }}
