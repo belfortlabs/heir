@@ -141,3 +141,30 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1.13
         with:
           verbose: true
+
+  # Starts medusa-deployment's cross-repo CI on the new wheel once both the
+  # PyPI upload and the release tag (which that CI resolves) exist. It gates
+  # nothing here, so a failed dispatch doesn't fail the release.
+  cross-repo-dispatch:
+    name: Dispatch medusa-deployment cross-repo CI
+    needs: [build-wheels, perform_release, pypi_upload]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions: {}
+    steps:
+      - name: Get a token for medusa-deployment
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.CROSS_REPO_APP_ID }}
+          private-key: ${{ secrets.CROSS_REPO_APP_KEY }}
+          owner: belfortlabs
+          repositories: medusa-deployment
+          permission-actions: write
+      - name: Dispatch cross-repo.yml
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          RELEASE_VERSION: ${{ needs.build-wheels.outputs.version }}
+        run: |
+          gh workflow run cross-repo.yml --repo belfortlabs/medusa-deployment --ref dev \
+            -f component=heir -f heir-version="$RELEASE_VERSION"
