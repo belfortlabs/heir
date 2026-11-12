@@ -307,6 +307,9 @@ Hoister createCollapseShapeHoister(tensor::CollapseShapeOp op) {
 Hoister createIntoZerosHoister(Operation* op, IntegerRelation sourceToResult) {
   return [op, sourceToResult](
              ConvertLayoutOp convertLayoutOp) -> llvm::FailureOr<HoistResult> {
+    // Only toLayout matters: the result layout follows from it and the static
+    // insertion, and hoistOp converts the source from the source's own layout.
+    // The from_layout of the hoisted convert_layout is not used.
     auto toLayout = dyn_cast<LayoutAttr>(convertLayoutOp.getToLayout());
     if (!toLayout) return failure();
 
