@@ -12,13 +12,41 @@ on:
         default: ''
   schedule:
     - cron: '0 0 1 * *'
+    # Daily .devN release; must match DAILY_CRON in scripts/get_version.py.
+    - cron: '0 2 * * *'
 
 permissions:
   contents: read
 
 jobs:
+  check-new:
+    name: Check for unreleased commits
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          fetch-tags: true
+          persist-credentials: false
+      # The daily build skips a HEAD some release already tagged.
+      - name: Check
+        id: check
+        env:
+          SCHEDULE: ${{ github.event.schedule || '' }}
+        run: |
+          skip=false
+          if [[ "$SCHEDULE" == '0 2 * * *' ]] && [[ -n "$(git tag --points-at HEAD 'v*')" ]]; then
+            skip=true
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   build-wheels:
     name: Build wheels
+    needs: [check-new]
+    if: needs.check-new.outputs.skip != 'true'
     uses: ./.github/workflows/_build_wheels.yml
     with:
       tag_name: ${{ inputs.tag_name }}
