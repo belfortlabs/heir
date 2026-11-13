@@ -57,6 +57,18 @@ cc_library(
 )
 
 cc_library(
+    name = "MaxPoolUtils",
+    srcs = ["MaxPoolUtils.cpp"],
+    hdrs = ["MaxPoolUtils.h"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LinalgDialect",
+        "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
     name = "APIntUtils",
     srcs = ["APIntUtils.cpp"],
     hdrs = ["APIntUtils.h"],

@@ -44,6 +44,7 @@ cc_library(
         "@heir//lib/Utils:ContextAwareDialectConversion",
         "@heir//lib/Utils:ContextAwareTypeConversion",
         "@heir//lib/Utils:MathUtils",
+        "@heir//lib/Utils:MaxPoolUtils",
         "@heir//lib/Utils/Layout:Codegen",
         "@heir//lib/Utils/Layout:Convolution",
         "@heir//lib/Utils/Layout:InsertIntoZeros",

@@ -144,6 +144,20 @@ func.func @prepare_bootstrap(%ctx: tensor<!boot_context>,
   return %new_ctx, %new_ui : tensor<!boot_context>, tensor<!user_interface>
 }
 
+// One Cyclops MaxPool call on the boot context, over a one-ciphertext tensor.
+func.func @max_pool(%ctx: !boot_context, %ct: tensor<1x!ciphertext>,
+                    %evk: !evk_map) -> tensor<1x!ciphertext> {
+  %d0 = tensor.empty() : tensor<1x!ciphertext>
+  %0 = cheddar.max_pool %ctx, %ct, %evk, %d0
+      {num_slots = 8192 : i64, input_length = 4736 : i64, window_size = 2 : i64,
+       stride = 2 : i64, dilation = 1 : i64, ceil_mode = false,
+       value_bound = 0.5 : f64,
+       level = 9 : i64, levelConsumption = 4 : i64}
+      : (!boot_context, tensor<1x!ciphertext>, !evk_map, tensor<1x!ciphertext>)
+      -> tensor<1x!ciphertext>
+  return %0 : tensor<1x!ciphertext>
+}
+
 func.func @boot(%ctx: !boot_context, %ct: tensor<!ciphertext>, %evk: !evk_map)
     -> tensor<!ciphertext> {
   %d0 = tensor.empty() : tensor<!ciphertext>

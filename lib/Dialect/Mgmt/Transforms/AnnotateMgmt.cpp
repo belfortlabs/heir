@@ -1,11 +1,13 @@
 #include "lib/Dialect/Mgmt/Transforms/AnnotateMgmt.h"
 
+#include <algorithm>
 #include <cstdint>
 
 #include "lib/Analysis/DimensionAnalysis/DimensionAnalysis.h"
 #include "lib/Analysis/LevelAnalysis/LevelAnalysis.h"
 #include "lib/Analysis/ScaleAnalysis/ScaleAnalysis.h"
 #include "lib/Analysis/SecretnessAnalysis/SecretnessAnalysis.h"
+#include "lib/Dialect/HEIRInterfaces.h"
 #include "lib/Dialect/Mgmt/IR/MgmtAttributes.h"
 #include "lib/Dialect/Mgmt/IR/MgmtDialect.h"
 #include "lib/Dialect/Mgmt/Transforms/Utils.h"
@@ -152,7 +154,29 @@ struct AnnotateMgmt : impl::AnnotateMgmtBase<AnnotateMgmt> {
 
     copyScalesToScaleAttr(getOperation());
     clearAttrs(getOperation(), MgmtDialect::kArgMgmtAttrName);
-    annotateLevel(getOperation(), &solver, base);
+    // A kernel that bootstraps internally needs a minimum bootstrap end
+    // level. A value right after a bootstrap has consumed
+    // bootstrapLevelsConsumed levels, so its level is maxLevel -
+    // bootstrapLevelsConsumed + base. Raising the base level shifts every
+    // level by the same amount.
+    int effectiveBaseLevel = base;
+    int maxLevel = getMaxLevel(getOperation(), &solver);
+    getOperation()->walk([&](BootstrapsInternallyOpInterface op) {
+      effectiveBaseLevel = std::max<int>(
+          effectiveBaseLevel, op.getMinimumBootstrapEndLevel() - maxLevel +
+                                  bootstrapLevelsConsumed);
+    });
+    // A pinned top cannot move up to make room for such a kernel.
+    if (module && effectiveBaseLevel > base &&
+        module->hasAttr(MgmtDialect::kTopLevelAttrName)) {
+      module.emitError() << "a kernel that bootstraps internally needs the top "
+                            "level raised by "
+                         << effectiveBaseLevel - base << ", but "
+                         << MgmtDialect::kTopLevelAttrName << " pins it";
+      signalPassFailure();
+      return;
+    }
+    annotateLevel(getOperation(), &solver, effectiveBaseLevel);
     annotateDimension(getOperation(), &solver);
     // Combine level and dimension (and optional scale) into MgmtAttr
     // also removes the level/dimension/(optional scale) annotations.

@@ -30,6 +30,7 @@
 #include "lib/Utils/Layout/InsertIntoZeros.h"
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/Layout/Utils.h"
+#include "lib/Utils/MaxPoolUtils.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"               // from @llvm-project
 #include "llvm/include/llvm/ADT/STLFunctionalExtras.h"     // from @llvm-project
 #include "llvm/include/llvm/ADT/ScopeExit.h"               // from @llvm-project
@@ -84,6 +85,7 @@ using linalg::Conv2DOp;
 using linalg::DotOp;
 using linalg::MatmulOp;
 using linalg::MatvecOp;
+using linalg::PoolingNcwMaxOp;
 using linalg::ReduceOp;
 using linalg::TransposeOp;
 using linalg::VecmatOp;
@@ -316,6 +318,7 @@ struct LayoutPropagation : impl::LayoutPropagationBase<LayoutPropagation> {
   LogicalResult visitOperation(VecmatOp op);
   LogicalResult visitOperation(MatvecOp op);
   LogicalResult visitOperation(MatmulOp op);
+  LogicalResult visitOperation(PoolingNcwMaxOp op);
   LogicalResult visitOperation(BatchMatmulOp op);
   LogicalResult visitOperation(DotOp op);
   LogicalResult visitOperation(YieldOp op);
@@ -526,7 +529,8 @@ LogicalResult LayoutPropagation::visitOperation(Operation* op) {
       // linalg ops
       .Case<DotOp, MatvecOp, VecmatOp, ReduceOp, BroadcastOp, TransposeOp,
             MatmulOp, BatchMatmulOp, Conv1DOp, Conv1DNcwFcwOp, Conv2DOp,
-            Conv2DNchwFchwOp>([&](auto op) { return visitOperation(op); })
+            Conv2DNchwFchwOp, PoolingNcwMaxOp>(
+          [&](auto op) { return visitOperation(op); })
       // affine ops
       .Case<affine::AffineForOp>([&](auto op) { return visitOperation(op); })
       // tensor ops
@@ -1263,6 +1267,57 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
 
   return alignInitWithResultLayout(op, op.getOutputs().front(),
                                    resultLayoutAttr);
+}
+
+// A max pool lowers to one Cyclops MaxPool call over the channels laid end to
+// end in one ciphertext. The windows tile each channel exactly, so no window
+// crosses into the next channel. The input may repeat after the data (the
+// row-major layout) or hold zeros there (the compact layout): no window reads
+// those slots. The output is compact.
+LogicalResult LayoutPropagation::visitOperation(PoolingNcwMaxOp op) {
+  std::string reason;
+  FailureOr<SupportedMaxPool> pool = getSupportedMaxPool(op, reason);
+  if (failed(pool)) {
+    return op->emitOpError() << "cannot lower to an FHE max pool: " << reason;
+  }
+  FailureOr<CompilationTarget> target =
+      getTargetConfig(op->getParentOfType<ModuleOp>());
+  if (failed(target) || !target->has_kernel_max_pool) {
+    return op->emitOpError(
+        "requires a backend with a max pool kernel (has_kernel_max_pool)");
+  }
+  // One Cyclops call pools one ciphertext.
+  if (failed(requireSlots(op, pool->channels * pool->length))) {
+    return failure();
+  }
+
+  MLIRContext* ctx = &getContext();
+  mlir::IRRewriter builder(ctx);
+  Value data = op.getInputs().front();
+  auto dataType = cast<RankedTensorType>(data.getType());
+  LayoutAttr dataLayout = getComposedLayoutAttr(data);
+  IntegerRelation rowMajor = getRowMajorLayoutRelation(dataType, minSlotCount);
+  if (!isRelationEqual(dataLayout.getIntegerRelation(), rowMajor) &&
+      !isRelationEqual(
+          dataLayout.getIntegerRelation(),
+          getCompactRowMajorLayoutRelation(dataType, minSlotCount))) {
+    LLVM_DEBUG(llvm::dbgs() << "max pool input is not row major, "
+                               "inserting layout conversion.\n");
+    auto [toReplace, newDataLayoutAttr] =
+        convertToLayout(ctx, builder, op, data, dataLayout, rowMajor);
+    debugAssignLayout(toReplace, newDataLayoutAttr);
+    assignedLayouts.insert({toReplace, newDataLayoutAttr});
+  }
+
+  auto outputType = cast<RankedTensorType>(op.getResult(0).getType());
+  LayoutAttr resultLayout = LayoutAttr::getFromIntegerRelation(
+      ctx, getCompactRowMajorLayoutRelation(outputType, minSlotCount));
+  assignedLayouts.insert({op.getResult(0), resultLayout});
+  debugAssignLayout(op.getResult(0), resultLayout);
+  // The compact output is not gapped.
+  setResultLayoutAttr(op,
+                      makeUngappedKernelInfoAttr(ctx, outputType.getShape()));
+  return success();
 }
 
 // The layout of a 2-D conv result pixel-shuffled by `gap`, as the list of

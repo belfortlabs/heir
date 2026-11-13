@@ -17,6 +17,10 @@ def Cheddar : CompilationTarget<"cheddar"> {
   // operation for a same-level scalar scale correction.
   let can_emit_adjust_scale = 0;
 
+  // Cyclops' MaxPool<word>::EvaluateMax, in
+  // cyclops/include/extension/max/MaxPool.h.
+  let has_kernel_max_pool = 1;
+
   // Cheddar's NTT supports ring degrees up to 2^16 (NTTHandler's
   // max_log_degree_), and its parameter sets end at logN = 16.
   let max_ring_degree = 65536;
