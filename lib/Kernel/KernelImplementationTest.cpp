@@ -390,8 +390,9 @@ TEST_P(KernelImplementationTest, TestIssue3003) {
   std::vector<std::vector<int>> packedMatrix =
       evaluateLayout<int>(matrixLayout, getDataValueFn4D(filter));
 
-  RankedTensorType expandedMatrixType =
-      get2dConvChwFchwFilterExpandedType(filterType, dataType, /*padding=*/0);
+  RankedTensorType expandedMatrixType = get2dConvChwFchwFilterExpandedType(
+      filterType, dataType, /*padding=*/0, /*strides=*/{1, 1},
+      /*interchangeRows=*/true, /*inputGap=*/1);
 
   // Expected output: 1x1x3x3
   tensor4d expected = {
@@ -755,8 +756,9 @@ TEST_P(KernelImplementationTest, TestConv2dNchwFchwStride2) {
   };
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
-  auto expandedFilterShape =
-      get2dConvChwFchwFilterExpandedType(filterType, dataType, 0, strides);
+  auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
+      filterType, dataType, 0, strides, /*interchangeRows=*/true,
+      /*inputGap=*/1);
 
   // The expected result is a 1x4x2x2:
   tensor4d expected = {{{{40, 72}, {168, 200}},
@@ -1077,7 +1079,8 @@ void checkPaddedConv2dChwFchw(int64_t stride, int64_t filterSize,
   // i.e. against the unpadded data type with padding = p: implementHaleviShoup
   // sizes the squat-diagonal collapse from nextPowerOfTwo of these dims.
   auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
-      filterType, dataType, padding, strides);
+      filterType, dataType, padding, strides, /*interchangeRows=*/true,
+      /*inputGap=*/1);
 
   auto dag = implementHaleviShoup(
       LiteralValue(packedData[0]), LiteralValue(packedFilter),
@@ -1167,7 +1170,8 @@ void checkGapPaddedConv2dChwFchw(int64_t outputChannels, int64_t inputChannels,
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
   auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
-      filterType, dataType, /*padding=*/0, strides, /*interchangeRows=*/true);
+      filterType, dataType, /*padding=*/0, strides, /*interchangeRows=*/true,
+      /*inputGap=*/1);
 
   auto dag = implementHaleviShoup(
       LiteralValue(packedData[0]), LiteralValue(packedFilter),
@@ -1241,8 +1245,9 @@ TEST_P(KernelImplementationTest,
   };
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
-  auto expandedFilterShape =
-      get2dConvChwFchwFilterExpandedType(filterType, dataType, 0, strides);
+  auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
+      filterType, dataType, 0, strides, /*interchangeRows=*/true,
+      /*inputGap=*/1);
 
   // The expected result is a 1x4x2x2:
   tensor4d expected = {{{{40, 72}, {168, 200}},
@@ -1334,7 +1339,8 @@ TEST_P(KernelImplementationTest, TestConv2dNchwFchwOrionFigure4) {
       evaluateLayout(filterLayout.value(), getFilterValueFn);
 
   auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
-      filterType, dataType, padding, strides);
+      filterType, dataType, padding, strides, /*interchangeRows=*/true,
+      /*inputGap=*/1);
 
   // Compute expected 1x2x3x3 2d conv with padding 1
   tensor4d expected(
@@ -1444,8 +1450,9 @@ TEST_P(KernelImplementationTest, TestConv2dNchwFchwStride2MultiInput) {
   };
   std::vector<std::vector<int>> packedFilter =
       evaluateLayout(filterLayout.value(), getFilterValueFn);
-  auto expandedFilterShape =
-      get2dConvChwFchwFilterExpandedType(filterType, dataType, 0, strides);
+  auto expandedFilterShape = get2dConvChwFchwFilterExpandedType(
+      filterType, dataType, 0, strides, /*interchangeRows=*/true,
+      /*inputGap=*/1);
 
   // Compute expected 1x4x3x3 sum pooling
   tensor4d expected(

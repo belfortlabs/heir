@@ -4,9 +4,9 @@
 module {
   // CHECK: func.func @main
   // CHECK-SAME: (%[[arg0:.*]]: tensor<1x6x14x14xf32>)
-  // CHECK: %[[cst:.*]] = arith.constant dense<4.000000e+00> : tensor<1x6x14x14xf32>
+  // CHECK: %[[cst:.*]] = arith.constant dense<2.500000e-01> : tensor<1x6x14x14xf32>
   // CHECK-NOT: linalg.generic
-  // CHECK: arith.divf %[[arg0]], %[[cst]] : tensor<1x6x14x14xf32>
+  // CHECK: arith.mulf %[[arg0]], %[[cst]] : tensor<1x6x14x14xf32>
   // CHECK: return
   func.func @main(%arg0: tensor<1x6x14x14xf32>) -> tensor<1x6x14x14xf32> {
     %cst_1 = arith.constant 4.000000e+00 : f32
@@ -27,9 +27,9 @@ module {
 module {
   // CHECK: func.func @attrs
   // CHECK-SAME: (%[[arg0:.*]]: tensor<1x6x14x14xf32>)
-  // CHECK: %[[cst:.*]] = arith.constant dense<4.000000e+00> : tensor<1x6x14x14xf32>
+  // CHECK: %[[cst:.*]] = arith.constant dense<2.500000e-01> : tensor<1x6x14x14xf32>
   // CHECK-NOT: linalg.generic
-  // CHECK: arith.divf %[[arg0]], %[[cst]] {some_attr = "foo"} : tensor<1x6x14x14xf32>
+  // CHECK: arith.mulf %[[arg0]], %[[cst]] {some_attr = "foo"} : tensor<1x6x14x14xf32>
   // CHECK: return
   func.func @attrs(%arg0: tensor<1x6x14x14xf32>) -> tensor<1x6x14x14xf32> {
     %cst_1 = arith.constant 4.000000e+00 : f32

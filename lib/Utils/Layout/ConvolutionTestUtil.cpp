@@ -169,7 +169,8 @@ get2dConvChwFchwFilterDiagonalizedRelation(RankedTensorType filterType,
     // interchange relation's own bounds can be tighter: the layout reserves
     // rows for padding channels that no filter entry reaches.
     auto expandedType = get2dConvChwFchwFilterExpandedType(
-        filterType, dataType, padding, strides, /*interchangeRows=*/true);
+        filterType, dataType, padding, strides, /*interchangeRows=*/true,
+        /*inputGap=*/1);
     auto diagonalizedInterchange =
         diagonalize2dMatrix(rowInterchangeRelation, filterType, minSlotCount,
                             expandedType.getShape());

@@ -93,6 +93,7 @@ bool emitCompilationTargetRegistration(const llvm::RecordKeeper& records,
     auto hasPreparedLinearTransform =
         target->getValueAsInt("has_prepared_linear_transform");
     auto hasKernelMaxPool = target->getValueAsInt("has_kernel_max_pool");
+    auto maxRingDegree = target->getValueAsInt("max_ring_degree");
 
     os << "void registerTarget" << name << "() {\n"
        << "  "
@@ -102,7 +103,8 @@ bool emitCompilationTargetRegistration(const llvm::RecordKeeper& records,
        << ", " << hasKernelLinearTransform << ", " << hasPreparedLinearTransform
        << ", " << supportsSingleDiagonalPreparedLinearTransform << ", "
        << requiresMatchingCiphertextPlaintextLevels << ", "
-       << canEmitAdjustScale << ", " << hasKernelMaxPool << "});\n"
+       << canEmitAdjustScale << ", " << hasKernelMaxPool << ", "
+       << maxRingDegree << "});\n"
        << "}\n\n";
   }
   return false;

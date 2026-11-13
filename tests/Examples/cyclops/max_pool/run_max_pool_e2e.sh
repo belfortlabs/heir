@@ -20,13 +20,21 @@ cxx=${CXX:-clang++}
 # 120, to build for one architecture.
 cuda_architectures=${CUDA_ARCHITECTURES:-native}
 
+# heir-opt loads Cyclops' CPU planner library to plan the levels and the keys.
+cmake -S "$cyclops/planner" -B "$build/planner" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" \
+  -DBUILD_PLANNER_TEST=OFF
+cmake --build "$build/planner" --target cyclops_planner
+
 configure_and_build() {
   local side=$1
   shift
   cmake -S "$source_dir" -B "$build/$side" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" \
-    -DCYCLOPS_SOURCE_DIR="$cyclops" -DHEIR_BIN_DIR="$heir_bin" "$@"
+    -DCYCLOPS_SOURCE_DIR="$cyclops" -DHEIR_BIN_DIR="$heir_bin" \
+    -DCYCLOPS_PLANNER_DIR="$build/planner" "$@"
   cmake --build "$build/$side" --target "max_pool_$side"
 }
 

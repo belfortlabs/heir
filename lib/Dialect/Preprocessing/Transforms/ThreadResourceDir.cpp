@@ -61,8 +61,9 @@ struct ThreadResourceDir : impl::ThreadResourceDirBase<ThreadResourceDir> {
         return WalkResult::advance();
       auto caller = call->getParentOfType<func::FuncOp>();
       if (!caller) {
-        call.emitOpError("calls a resource-loading function from outside a "
-                         "function, so no resource directory reaches it");
+        call.emitOpError(
+            "calls a resource-loading function from outside a "
+            "function, so no resource directory reaches it");
         return WalkResult::interrupt();
       }
       call->insertOperands(call.getNumOperands(), caller.getArguments().back());

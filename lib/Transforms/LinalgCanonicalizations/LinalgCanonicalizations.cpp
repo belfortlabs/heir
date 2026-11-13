@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <utility>
 
@@ -14,6 +15,7 @@
 #include "llvm/include/llvm/ADT/SmallBitVector.h"      // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"         // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVectorExtras.h"   // from @llvm-project
+#include "llvm/include/llvm/Support/MathExtras.h"      // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
@@ -24,6 +26,7 @@
 #include "mlir/include/mlir/Dialect/Utils/StaticValueUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Utils/StructuredOpsUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/AffineExpr.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/AsmState.h"    // from @llvm-project
 #include "mlir/include/mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
@@ -621,50 +624,41 @@ struct BroadcastToExpandShape
   }
 };
 
-struct RewriteTransposedVecmat
-    : public OpRewritePattern<mlir::linalg::VecmatOp> {
+// convert-to-ciphertext-semantics lowers linalg.matvec but not linalg.vecmat,
+// so rewrite every vecmat x * W as the matvec W^T * x. When W is itself a
+// transpose W = A^T, use A directly instead of transposing twice.
+struct RewriteVecmatAsMatvec : public OpRewritePattern<mlir::linalg::VecmatOp> {
  public:
-  RewriteTransposedVecmat(MLIRContext* context)
+  RewriteVecmatAsMatvec(MLIRContext* context)
       : OpRewritePattern<mlir::linalg::VecmatOp>(context) {}
 
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(mlir::linalg::VecmatOp vecmatOp,
                                 PatternRewriter& rewriter) const override {
-    auto transposeOp =
-        vecmatOp.getInputs()[1].getDefiningOp<linalg::TransposeOp>();
-    if (!transposeOp)
-      return rewriter.notifyMatchFailure(
-          vecmatOp, "second input to vecmat must be a transpose op");
+    Value vector = vecmatOp.getInputs()[0];
+    Value matrix = vecmatOp.getInputs()[1];
+
+    Value transposedMatrix;
+    auto transposeOp = matrix.getDefiningOp<linalg::TransposeOp>();
+    if (transposeOp &&
+        transposeOp.getPermutation() == ArrayRef<int64_t>{1, 0}) {
+      transposedMatrix = transposeOp.getInput();
+    } else {
+      auto matrixType = cast<RankedTensorType>(matrix.getType());
+      auto emptyOp = tensor::EmptyOp::create(
+          rewriter, vecmatOp.getLoc(),
+          {matrixType.getDimSize(1), matrixType.getDimSize(0)},
+          matrixType.getElementType());
+      transposedMatrix = linalg::TransposeOp::create(
+                             rewriter, vecmatOp.getLoc(), matrix,
+                             emptyOp.getResult(), ArrayRef<int64_t>{1, 0})
+                             .getResult()[0];
+    }
 
     rewriter.replaceOpWithNewOp<linalg::MatvecOp>(
         vecmatOp, vecmatOp.getResultTypes()[0],
-        ValueRange{transposeOp.getInput(), vecmatOp.getInputs()[0]},
-        vecmatOp.getDpsInits()[0]);
-    return success();
-  }
-};
-
-struct RewriteTransposedMatvec
-    : public OpRewritePattern<mlir::linalg::MatvecOp> {
- public:
-  RewriteTransposedMatvec(MLIRContext* context)
-      : OpRewritePattern<mlir::linalg::MatvecOp>(context) {}
-
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(mlir::linalg::MatvecOp matvecOp,
-                                PatternRewriter& rewriter) const override {
-    auto transposeOp =
-        matvecOp.getInputs()[0].getDefiningOp<linalg::TransposeOp>();
-    if (!transposeOp)
-      return rewriter.notifyMatchFailure(
-          matvecOp, "first input to matvec must be a transpose op");
-
-    rewriter.replaceOpWithNewOp<linalg::VecmatOp>(
-        matvecOp, matvecOp.getResultTypes()[0],
-        ValueRange{matvecOp.getInputs()[1], transposeOp.getInput()},
-        matvecOp.getDpsInits()[0]);
+        ValueRange{transposedMatrix, vector}, vecmatOp.getDpsInits()[0]);
     return success();
   }
 };
@@ -692,23 +686,27 @@ struct RewriteAvgPoolAsConv1D
     Attribute zeroAttr = rewriter.getZeroAttr(eltTy);
     Attribute oneAttr = rewriter.getOneAttr(eltTy);
 
-    // If there is a constant division following the sum pool, update the
-    // kernel of ones to be 1 / divValue. This is a common enough pattern since
-    // it represents an average pool.
+    // If there is a constant division (or multiplication by the reciprocal)
+    // following the sum pool, update the kernel of ones to be 1 / divValue.
+    // This is a common enough pattern since it represents an average pool.
     Attribute avgAttr = oneAttr;
     Value avgPoolOutput;
     if (poolOp->hasOneUse()) {
-      auto divOp = dyn_cast<arith::DivFOp>(*poolOp->getUsers().begin());
-      if (divOp) {
-        OpOperand& use = *poolOp->getUses().begin();
+      Operation* scaleOp = *poolOp->getUsers().begin();
+      OpOperand& use = *poolOp->getUses().begin();
+      // `c / pool` is not an average; only `pool / c` and `pool * c` are.
+      bool poolIsDividend =
+          !isa<arith::DivFOp>(scaleOp) || use.getOperandNumber() == 0;
+      if (isa<arith::DivFOp, arith::MulFOp>(scaleOp) && poolIsDividend) {
         if (auto constantAttr = dyn_cast<Attribute>(getAsOpFoldResult(
-                divOp->getOperand(1 - use.getOperandNumber())))) {
+                scaleOp->getOperand(1 - use.getOperandNumber())))) {
           if (auto splatAttr = dyn_cast<SplatElementsAttr>(
                   cast<DenseElementsAttr>(constantAttr))) {
-            auto divValue = splatAttr.getSplatValue<APFloat>();
-            APFloat one = APFloat::getOne(divValue.getSemantics());
-            avgAttr = rewriter.getFloatAttr(eltTy, one / divValue);
-            avgPoolOutput = divOp.getResult();
+            auto scale = splatAttr.getSplatValue<APFloat>();
+            if (isa<arith::DivFOp>(scaleOp))
+              scale = APFloat::getOne(scale.getSemantics()) / scale;
+            avgAttr = rewriter.getFloatAttr(eltTy, scale);
+            avgPoolOutput = scaleOp->getResult(0);
           }
         }
       }
@@ -754,6 +752,43 @@ struct RewriteAvgPoolAsConv1D
   }
 };
 
+// A global pool has one window that covers the whole image, so the output is
+// 1x1 per channel.
+static bool isGlobalPool(RankedTensorType inputTy, RankedTensorType filterTy,
+                         RankedTensorType outputTy) {
+  return inputTy.hasStaticShape() && filterTy.hasStaticShape() &&
+         inputTy.getDimSize(0) == 1 && outputTy.getDimSize(2) == 1 &&
+         outputTy.getDimSize(3) == 1 &&
+         filterTy.getDimSize(0) == inputTy.getDimSize(2) &&
+         filterTy.getDimSize(1) == inputTy.getDimSize(3);
+}
+
+// The pooling kernel of a global pool, flattened to c x (c*h*w), is the matrix
+// of a matvec on the flattened input.
+static Value rewriteGlobalPoolAsMatvec(linalg::PoolingNchwSumOp poolOp,
+                                       DenseElementsAttr kernel,
+                                       PatternRewriter& rewriter) {
+  Location loc = poolOp.getLoc();
+  auto outputTy = cast<RankedTensorType>(poolOp.getResultTypes()[0]);
+  int64_t c = kernel.getType().getDimSize(0);
+  auto matrixTy = RankedTensorType::get({c, kernel.getNumElements() / c},
+                                        kernel.getType().getElementType());
+  Value matrix =
+      arith::ConstantOp::create(rewriter, loc, kernel.reshape(matrixTy));
+
+  SmallVector<ReassociationIndices> flatten = {{0, 1, 2, 3}};
+  Value vec = tensor::CollapseShapeOp::create(rewriter, loc,
+                                              poolOp.getInputs()[0], flatten);
+  Value init = tensor::CollapseShapeOp::create(rewriter, loc,
+                                               poolOp.getOutputs()[0], flatten);
+  Value matvec =
+      linalg::MatvecOp::create(rewriter, loc, init.getType(),
+                               ValueRange{matrix, vec}, ValueRange{init})
+          .getResult(0);
+  return tensor::ExpandShapeOp::create(rewriter, loc, outputTy, matvec,
+                                       flatten);
+}
+
 struct RewriteAvgPoolAsConv2D
     : public OpRewritePattern<mlir::linalg::PoolingNchwSumOp> {
  public:
@@ -778,23 +813,27 @@ struct RewriteAvgPoolAsConv2D
     Attribute zeroAttr = rewriter.getZeroAttr(eltTy);
     Attribute oneAttr = rewriter.getOneAttr(eltTy);
 
-    // If there is a constant division following the sum pool, update the
-    // kernel of ones to be 1 / divValue. This is a common enough pattern since
-    // it represents an average pool.
+    // If there is a constant division (or multiplication by the reciprocal)
+    // following the sum pool, update the kernel of ones to be 1 / divValue.
+    // This is a common enough pattern since it represents an average pool.
     Attribute avgAttr = oneAttr;
     Value avgPoolOutput;
     if (poolOp->hasOneUse()) {
-      auto divOp = dyn_cast<arith::DivFOp>(*poolOp->getUsers().begin());
-      if (divOp) {
-        OpOperand& use = *poolOp->getUses().begin();
+      Operation* scaleOp = *poolOp->getUsers().begin();
+      OpOperand& use = *poolOp->getUses().begin();
+      // `c / pool` is not an average; only `pool / c` and `pool * c` are.
+      bool poolIsDividend =
+          !isa<arith::DivFOp>(scaleOp) || use.getOperandNumber() == 0;
+      if (isa<arith::DivFOp, arith::MulFOp>(scaleOp) && poolIsDividend) {
         if (auto constantAttr = dyn_cast<Attribute>(getAsOpFoldResult(
-                divOp->getOperand(1 - use.getOperandNumber())))) {
+                scaleOp->getOperand(1 - use.getOperandNumber())))) {
           if (auto splatAttr = dyn_cast<SplatElementsAttr>(
                   cast<DenseElementsAttr>(constantAttr))) {
-            auto divValue = splatAttr.getSplatValue<APFloat>();
-            APFloat one = APFloat::getOne(divValue.getSemantics());
-            avgAttr = rewriter.getFloatAttr(eltTy, one / divValue);
-            avgPoolOutput = divOp.getResult();
+            auto scale = splatAttr.getSplatValue<APFloat>();
+            if (isa<arith::DivFOp>(scaleOp))
+              scale = APFloat::getOne(scale.getSemantics()) / scale;
+            avgAttr = rewriter.getFloatAttr(eltTy, scale);
+            avgPoolOutput = scaleOp->getResult(0);
           }
         }
       }
@@ -825,15 +864,20 @@ struct RewriteAvgPoolAsConv2D
       }
     }
 
-    TypedAttr kernelVals = DenseElementsAttr::get(kernelTy, values);
-    auto kernel =
-        arith::ConstantOp::create(rewriter, poolOp.getLoc(), kernelVals);
-    Value conv = linalg::Conv2DNchwFchwOp::create(
-                     rewriter, poolOp.getLoc(), outputTy,
-                     ValueRange{poolOp.getInputs()[0], kernel},
-                     ValueRange{poolOp.getOutputs()[0]}, poolOp.getStrides(),
-                     poolOp.getDilations())
-                     .getResult(0);
+    auto kernelVals = DenseElementsAttr::get(kernelTy, values);
+    Value conv;
+    if (isGlobalPool(inputTy, filterTy, outputTy)) {
+      conv = rewriteGlobalPoolAsMatvec(poolOp, kernelVals, rewriter);
+    } else {
+      auto kernel =
+          arith::ConstantOp::create(rewriter, poolOp.getLoc(), kernelVals);
+      conv = linalg::Conv2DNchwFchwOp::create(
+                 rewriter, poolOp.getLoc(), outputTy,
+                 ValueRange{poolOp.getInputs()[0], kernel},
+                 ValueRange{poolOp.getOutputs()[0]}, poolOp.getStrides(),
+                 poolOp.getDilations())
+                 .getResult(0);
+    }
 
     if (avgPoolOutput) {
       rewriter.replaceAllUsesWith(avgPoolOutput, conv);
@@ -1061,6 +1105,26 @@ struct MaterializeBroadcasts : public OpRewritePattern<linalg::GenericOp> {
 
     int64_t numDims = genericOp.getNumLoops();
 
+    // Only constant results on unit dims can be collapsed away, and
+    // linalg.broadcast cannot transpose, so the remaining results must be dims
+    // in increasing order. Check this before rewriting any operand: a pattern
+    // that fails must leave the IR unchanged.
+    for (int64_t i = 0; i < genericOp.getNumDpsInputs(); ++i) {
+      if (getBroadcastDimensions(indexingMaps[i], numDims).empty()) continue;
+      auto inputType = cast<RankedTensorType>(
+          genericOp.getDpsInputOperand(i)->get().getType());
+      int64_t prevDim = -1;
+      for (auto [j, expr] : llvm::enumerate(indexingMaps[i].getResults())) {
+        if (isa<AffineConstantExpr>(expr)) {
+          if (inputType.getDimSize(j) != 1) return failure();
+          continue;
+        }
+        auto dimExpr = dyn_cast<AffineDimExpr>(expr);
+        if (!dimExpr || dimExpr.getPosition() <= prevDim) return failure();
+        prevDim = dimExpr.getPosition();
+      }
+    }
+
     for (int64_t i = 0; i < genericOp.getNumDpsInputs(); ++i) {
       OpOperand* operand = genericOp.getDpsInputOperand(i);
       AffineMap map = indexingMaps[i];
@@ -1072,7 +1136,10 @@ struct MaterializeBroadcasts : public OpRewritePattern<linalg::GenericOp> {
         continue;
       }
 
-      if (map.getNumResults() < numDims) {
+      // Besides dropped dimensions, torch exports broadcasts of unit
+      // dimensions as constant-zero results, e.g. (d0, d1, d2, d3) -> (d0,
+      // d1, 0, 0).
+      if (!getBroadcastDimensions(map, numDims).empty()) {
         madeChanges = true;
         auto materializedValue = materializeBroadcastForOperand(
             rewriter, genericOp, value, map, numDims);
@@ -1491,21 +1558,208 @@ struct TrimMaxPoolTail : public OpRewritePattern<linalg::PoolingNcwMaxOp> {
   }
 };
 
+// Rewrites a linalg.depthwise_conv_2d_nchw_chw with a constant (C, KH, KW)
+// filter K into a linalg.conv_2d_nchw_fchw with the block-diagonal (C, C, KH,
+// KW) filter F[f, c] = (f == c) ? K[c] : 0. The conv sums over c, and only
+// c == f contributes, so this computes the same result. The new filter is a
+// dense resource so that assign_layout folds it regardless of its size. A
+// dilation (dh, dw) is applied here by spreading the taps of each block to
+// (i * dh, j * dw), and the new conv has dilation 1.
+struct DepthwiseConvToConv2DNchwFchw
+    : public OpRewritePattern<linalg::DepthwiseConv2DNchwChwOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(linalg::DepthwiseConv2DNchwChwOp convOp,
+                                PatternRewriter& rewriter) const override {
+    Value filter = convOp.getInputs()[1];
+    auto filterTy = cast<RankedTensorType>(filter.getType());
+    if (!filterTy.hasStaticShape())
+      return rewriter.notifyMatchFailure(convOp, "dynamic filter shape");
+    Type eltTy = filterTy.getElementType();
+    if (!eltTy.isIntOrFloat() || eltTy.getIntOrFloatBitWidth() < 8 ||
+        !llvm::isPowerOf2_64(eltTy.getIntOrFloatBitWidth()))
+      return rewriter.notifyMatchFailure(convOp, "unsupported element type");
+
+    // torch-mlir collapses its (C, 1, KH, KW) filter to (C, KH, KW). A
+    // collapse_shape keeps the row-major element order, so read its source.
+    if (auto collapseOp = filter.getDefiningOp<tensor::CollapseShapeOp>())
+      filter = collapseOp.getSrc();
+
+    TypedAttr constAttr;
+    if (!matchPattern(filter, m_Constant(&constAttr)))
+      return rewriter.notifyMatchFailure(convOp, "filter must be a constant");
+
+    ArrayRef<char> raw;
+    bool isSplat = false;
+    if (auto denseAttr = dyn_cast<DenseElementsAttr>(constAttr)) {
+      raw = denseAttr.getRawData();
+      isSplat = denseAttr.isSplat();
+    } else if (auto resourceAttr =
+                   dyn_cast<DenseResourceElementsAttr>(constAttr)) {
+      raw = resourceAttr.getData();
+    } else {
+      return rewriter.notifyMatchFailure(convOp, "unsupported filter constant");
+    }
+
+    ArrayRef<int64_t> shape = filterTy.getShape();
+    int64_t c = shape[0], kh = shape[1], kw = shape[2];
+    int64_t eltBytes = eltTy.getIntOrFloatBitWidth() / 8;
+    int64_t blockBytes = kh * kw * eltBytes;
+    int64_t expectedBytes = isSplat ? eltBytes : c * blockBytes;
+    if (static_cast<int64_t>(raw.size()) != expectedBytes)
+      return rewriter.notifyMatchFailure(convOp, "unexpected filter data size");
+
+    SmallVector<int64_t> dilations =
+        llvm::to_vector(convOp.getDilations().getValues<int64_t>());
+    int64_t dh = dilations[0];
+    int64_t dw = dilations.size() > 1 ? dilations[1] : dilations[0];
+    int64_t newKh = dh * (kh - 1) + 1, newKw = dw * (kw - 1) + 1;
+    int64_t newBlockBytes = newKh * newKw * eltBytes;
+
+    SmallVector<char> data(c * c * newBlockBytes, 0);
+    for (int64_t ci = 0; ci < c; ++ci) {
+      char* dst = data.data() + (ci * c + ci) * newBlockBytes;
+      for (int64_t i = 0; i < kh; ++i) {
+        for (int64_t j = 0; j < kw; ++j) {
+          const char* src =
+              isSplat ? raw.data()
+                      : raw.data() + ci * blockBytes + (i * kw + j) * eltBytes;
+          std::memcpy(dst + (i * dh * newKw + j * dw) * eltBytes, src,
+                      eltBytes);
+        }
+      }
+    }
+
+    auto newFilterTy = RankedTensorType::get({c, c, newKh, newKw}, eltTy);
+    auto newFilterAttr = DenseResourceElementsAttr::get(
+        newFilterTy, "depthwise_filter",
+        HeapAsmResourceBlob::allocateAndCopyWithAlign(data, eltBytes));
+    Value newFilter =
+        arith::ConstantOp::create(rewriter, convOp.getLoc(), newFilterAttr);
+
+    rewriter.replaceOpWithNewOp<linalg::Conv2DNchwFchwOp>(
+        convOp, convOp.getResultTypes(),
+        ValueRange{convOp.getInputs()[0], newFilter},
+        ValueRange{convOp.getDpsInits()[0]}, convOp.getStrides(),
+        rewriter.getI64TensorAttr({1, 1}));
+    return success();
+  }
+};
+
+// Torch exports constants as dense resources, which the arith and math folders
+// do not read. Inline them so that e.g. a BatchNorm's rsqrt(var + eps) folds.
+// Operands of contractions, convolutions and transposes stay resources:
+// assign_layout folds resources of any size into packed constants but packs
+// large dense constants on the client.
+static void inlineResourceConstants(Operation* root) {
+  root->walk([](arith::ConstantOp op) {
+    auto resourceAttr = dyn_cast<DenseResourceElementsAttr>(op.getValue());
+    if (!resourceAttr) return;
+    if (llvm::any_of(op->getUsers(), [](Operation* user) {
+          if (isa<linalg::TransposeOp>(user)) return true;
+          auto linalgOp = dyn_cast<linalg::LinalgOp>(user);
+          return linalgOp && (linalg::isaContractionOpInterface(linalgOp) ||
+                              linalg::isaConvolutionOpInterface(linalgOp));
+        }))
+      return;
+    ShapedType type = resourceAttr.getType();
+    if (!type.hasStaticShape() || !type.getElementType().isIntOrFloat()) return;
+    ArrayRef<char> data = resourceAttr.getData();
+    if (data.empty()) return;
+    op.setValueAttr(DenseElementsAttr::getFromRawBuffer(type, data));
+  });
+}
+
+// arith.truncf only folds when the truncation is exact, so the f64 epsilon of a
+// BatchNorm (e.g. 1e-5) stays a runtime truncf and blocks folding
+// rsqrt(var + eps). Fold it with round-to-nearest-even.
+struct FoldConstantTruncF : public OpRewritePattern<arith::TruncFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::TruncFOp op,
+                                PatternRewriter& rewriter) const override {
+    DenseFPElementsAttr input;
+    if (!matchPattern(op.getIn(), m_Constant(&input))) return failure();
+    auto resultType = dyn_cast<RankedTensorType>(op.getType());
+    if (!resultType) return failure();
+    const llvm::fltSemantics& semantics =
+        cast<FloatType>(resultType.getElementType()).getFloatSemantics();
+    auto truncated =
+        input.mapValues(resultType.getElementType(), [&](const APFloat& value) {
+          APFloat result = value;
+          bool losesInfo;
+          result.convert(semantics, APFloat::rmNearestTiesToEven, &losesInfo);
+          return result.bitcastToAPInt();
+        });
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, resultType, truncated);
+    return success();
+  }
+};
+
+// x / c = x * (1 / c) for a constant c (a scalar, splat or dense constant),
+// including in a linalg.generic body with c defined outside. CKKS has no
+// ciphertext division. The reciprocal is exact when c is a power of two.
+struct DivFByConstantToMulF : public OpRewritePattern<arith::DivFOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(arith::DivFOp op,
+                                PatternRewriter& rewriter) const override {
+    Attribute divisor;
+    if (!matchPattern(op.getRhs(), m_Constant(&divisor)))
+      return rewriter.notifyMatchFailure(op, "divisor is not a constant");
+
+    bool invertible = true;
+    auto reciprocal = [&](const APFloat& value) {
+      APFloat result = APFloat::getOne(value.getSemantics());
+      if (result.divide(value, APFloat::rmNearestTiesToEven) &
+          (APFloat::opDivByZero | APFloat::opOverflow | APFloat::opInvalidOp))
+        invertible = false;
+      return result;
+    };
+
+    TypedAttr inverse;
+    if (auto floatAttr = dyn_cast<FloatAttr>(divisor)) {
+      inverse =
+          FloatAttr::get(floatAttr.getType(), reciprocal(floatAttr.getValue()));
+    } else if (auto dense = dyn_cast<DenseFPElementsAttr>(divisor)) {
+      inverse = cast<TypedAttr>(
+          dense.mapValues(dense.getElementType(), [&](const APFloat& value) {
+            return reciprocal(value).bitcastToAPInt();
+          }));
+    } else {
+      return rewriter.notifyMatchFailure(op, "unsupported constant divisor");
+    }
+    if (!invertible)
+      return rewriter.notifyMatchFailure(op, "divisor has no reciprocal");
+
+    auto inverseOp = arith::ConstantOp::create(rewriter, op.getLoc(), inverse);
+    auto mulOp = arith::MulFOp::create(rewriter, op.getLoc(), op.getLhs(),
+                                       inverseOp, op.getFastmathAttr());
+    // Copy the attributes before the replacement erases op.
+    mulOp->setDiscardableAttrs(op->getDiscardableAttrDictionary());
+    rewriter.replaceOp(op, mulOp);
+    return success();
+  }
+};
+
 struct LinalgCanonicalizations
     : public impl::LinalgCanonicalizationsBase<LinalgCanonicalizations> {
   void runOnOperation() override {
     MLIRContext* context = &getContext();
     auto* module = getOperation();
 
+    inlineResourceConstants(module);
+
     RewritePatternSet patterns(context);
     patterns.add<
-        BroadcastToExpandShape, DropCfAssertInLinalg, FoldBroadcastExtractSlice,
-        FoldConstantBroadcast, FoldConstantFill, FoldConstantLinalgTranspose,
+        BroadcastToExpandShape, DepthwiseConvToConv2DNchwFchw,
+        DropCfAssertInLinalg, FoldBroadcastExtractSlice, FoldConstantBroadcast,
+        FoldConstantFill, FoldConstantLinalgTranspose, FoldConstantTruncF,
         FuseConv2DPooling, LinalgGenericToElementwise, LinalgMapToElementwise,
         MaterializeBroadcasts, ReplaceMaxPoolNegativeInfinityPad,
-        RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D, RewriteTransposedMatvec,
-        RewriteTransposedVecmat, TrimMaxPoolTail, UndilateConv1DNcwFcw,
-        UndilateConv2DNchwFchw>(context);
+        RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D, RewriteVecmatAsMatvec,
+        TrimMaxPoolTail, UndilateConv1DNcwFcw, UndilateConv2DNchwFchw>(context);
+    patterns.add<DivFByConstantToMulF>(context);
 
     mlir::linalg::populateDecomposeProjectedPermutationPatterns(patterns);
 

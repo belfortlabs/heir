@@ -105,11 +105,10 @@ static TypedAttr gatherResourceRows(DenseResourceElementsAttr attr,
                                         std::move(compactBlob));
 }
 
-// Gathers the named rows of the packed matrix at compile time, or returns
-// nullptr when the producer is not a constant these can read.
-static TypedAttr gatherRowsIfConstant(Value diagonals,
-                                      RankedTensorType compactType,
-                                      ArrayRef<int64_t> indices) {
+}  // namespace
+
+TypedAttr gatherRowsIfConstant(Value diagonals, RankedTensorType compactType,
+                               ArrayRef<int64_t> indices) {
   DenseElementsAttr denseAttr;
   if (matchPattern(diagonals, m_Constant(&denseAttr))) {
     return gatherConstantRows(denseAttr, compactType, indices);
@@ -122,6 +121,8 @@ static TypedAttr gatherRowsIfConstant(Value diagonals,
   }
   return nullptr;
 }
+
+namespace {
 
 // A rotate_and_reduce marked as a linear transform maps directly onto
 // kernel.linear_transform: the plaintexts are the generalized diagonals and
@@ -199,6 +200,13 @@ LogicalResult convertRotateAndReduceOp(RotateAndReduceOp op, bool unroll) {
   std::optional<SSAValue> plaintextsLeaf = std::nullopt;
 
   if (op.getPlaintexts()) {
+    // This implementation reads plaintext i for step i; it cannot take the
+    // compact form that holds only the diagonals named by diagonal_indices.
+    if (op.getPlaintexts().getType().getDimSize(0) != steps) {
+      return op.emitOpError()
+             << "has compact plaintexts, which only a backend that evaluates "
+                "linear transforms directly can implement";
+    }
     plaintextsLeaf = std::optional<SSAValue>(op.getPlaintexts());
   }
 

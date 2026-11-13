@@ -88,6 +88,14 @@ def Cheddar_UserInterface : Cheddar_Type<"UserInterface", "user_interface"> {
   let asmName = "ui";
 }
 
+def Cheddar_SecretSeed : Cheddar_Type<"SecretSeed", "secret_seed"> {
+  let description = [{
+    Borrowed optional seed a Cyclops UserInterface derives its secrets from;
+    when empty, the secrets are sampled.
+  }];
+  let asmName = "secret_seed";
+}
+
 // Data types
 
 def Cheddar_Ciphertext : Cheddar_Type<"Ciphertext", "ciphertext", [SecretTypeInterface]> {

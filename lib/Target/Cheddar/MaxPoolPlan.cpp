@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <exception>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -10,8 +9,7 @@
 #include <tuple>
 #include <utility>
 
-#include "extension/max/MaxPoolPlanner.h"      // from @cyclops
-#include "extension/poly/SignApproximation.h"  // from @cyclops
+#include "lib/Target/Cheddar/CyclopsPlanner.h"
 #include "lib/Target/Cheddar/MaxPoolCyclopsConfig.h"
 #include "lib/Utils/MaxPoolUtils.h"
 
@@ -35,42 +33,58 @@ struct CachedRequirements {
 constexpr int kHighestEndLevel = 32;
 
 CachedRequirements computeRequirements(const MaxPoolShape& shape) {
-  std::optional<cyclops::MaxPoolConfig> config = toCyclopsMaxPoolConfig(shape);
+  const CyclopsPlanner& planner = getCyclopsPlanner();
+  if (!planner.maxPoolError.empty())
+    return {std::nullopt,
+            "the max pool level plan needs libcyclops_planner with the MaxPool "
+            "functions on the library path: " +
+                planner.maxPoolError};
+  std::optional<cyclops_max_pool_config> config =
+      toCyclopsMaxPoolConfig(planner, shape);
   if (!config)
     return {std::nullopt,
             "a field does not fit a 32-bit int, or value_bound is not "
             "positive"};
-  // The planner library reports a rejected shape with an exception.
-  try {
-    const cyclops::CompositePolynomial comparison =
-        cyclops::BuildMaxSelectorLowDepthSignApproximation();
-    int minimumEnd =
-        cyclops::MaxPoolMinimumBootstrapEndLevel(*config, comparison);
-    if (minimumEnd < 0)
-      return {std::nullopt, "no bootstrap end level up to 32 is enough"};
-    MaxPoolRequirements requirements{0, 0, minimumEnd};
-    for (int end = minimumEnd; end <= kHighestEndLevel; ++end) {
-      cyclops::MaxPoolPlan plan = cyclops::PlanMaxPoolLayout(*config, end);
-      int minimumInput =
-          cyclops::MaxPoolMinimumInputLevel(plan, end, comparison);
-      if (minimumInput < 0 ||
-          !cyclops::MaxPoolTryPlanLevels(plan, minimumInput, end, comparison))
-        return {std::nullopt,
-                "no input level is enough at bootstrap end level " +
-                    std::to_string(end)};
-      requirements.levelDrop = std::max(
-          requirements.levelDrop, minimumInput - plan.natural_output_level);
-      requirements.minimumInputLevel =
-          std::max(requirements.minimumInputLevel, minimumInput);
-    }
-    // An input comes from a bootstrap or an encryption, at most at the end
-    // level.
-    requirements.minimumBootstrapEndLevel = std::max(
-        requirements.minimumBootstrapEndLevel, requirements.minimumInputLevel);
-    return {requirements, ""};
-  } catch (const std::exception& error) {
-    return {std::nullopt, error.what()};
+  char* error = nullptr;
+  // Takes the planner's message for a failed call.
+  auto plannerError = [&] {
+    std::string message = error ? error : "out of memory";
+    planner.cyclops_free_error(error);
+    error = nullptr;
+    return CachedRequirements{std::nullopt, message};
+  };
+
+  int minimumEnd = -1;
+  if (planner.cyclops_max_pool_minimum_bootstrap_end_level(&*config,
+                                                           &minimumEnd, &error))
+    return plannerError();
+  if (minimumEnd < 0)
+    return {std::nullopt, "no bootstrap end level up to 32 is enough"};
+  MaxPoolRequirements requirements{0, 0, minimumEnd};
+  for (int end = minimumEnd; end <= kHighestEndLevel; ++end) {
+    int minimumInput = -1;
+    if (planner.cyclops_max_pool_minimum_input_level(&*config, end,
+                                                     &minimumInput, &error))
+      return plannerError();
+    int fits = 0;
+    cyclops_max_pool_levels levels;
+    if (minimumInput >= 0 &&
+        planner.cyclops_max_pool_plan_levels(&*config, minimumInput, end, &fits,
+                                             &levels, &error))
+      return plannerError();
+    if (!fits)
+      return {std::nullopt, "no input level is enough at bootstrap end level " +
+                                std::to_string(end)};
+    requirements.levelDrop = std::max(
+        requirements.levelDrop, minimumInput - levels.natural_output_level);
+    requirements.minimumInputLevel =
+        std::max(requirements.minimumInputLevel, minimumInput);
   }
+  // An input comes from a bootstrap or an encryption, at most at the end
+  // level.
+  requirements.minimumBootstrapEndLevel = std::max(
+      requirements.minimumBootstrapEndLevel, requirements.minimumInputLevel);
+  return {requirements, ""};
 }
 
 }  // namespace

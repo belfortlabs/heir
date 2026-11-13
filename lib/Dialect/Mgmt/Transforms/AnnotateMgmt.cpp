@@ -133,20 +133,49 @@ struct AnnotateMgmt : impl::AnnotateMgmtBase<AnnotateMgmt> {
       return;
     }
 
+    // A pinned top places the analysis's level 0 (fresh ciphertexts and
+    // bootstrap outputs) at that level instead of at the program's depth.
+    int base = baseLevel;
+    if (module) {
+      if (auto top = module->getAttrOfType<IntegerAttr>(
+              MgmtDialect::kTopLevelAttrName)) {
+        int depth = getMaxLevel(getOperation(), &solver);
+        if (top.getInt() < depth) {
+          module.emitError()
+              << "the program is " << depth << " levels deep, but "
+              << MgmtDialect::kTopLevelAttrName << " pins its top at level "
+              << top.getInt();
+          signalPassFailure();
+          return;
+        }
+        base += top.getInt() - depth;
+      }
+    }
+
     copyScalesToScaleAttr(getOperation());
     clearAttrs(getOperation(), MgmtDialect::kArgMgmtAttrName);
     // A kernel that bootstraps internally needs a minimum bootstrap end
     // level. A value right after a bootstrap has consumed
     // bootstrapLevelsConsumed levels, so its level is maxLevel -
-    // bootstrapLevelsConsumed + baseLevel. Raising the base level shifts every
+    // bootstrapLevelsConsumed + base. Raising the base level shifts every
     // level by the same amount.
-    int effectiveBaseLevel = baseLevel;
+    int effectiveBaseLevel = base;
     int maxLevel = getMaxLevel(getOperation(), &solver);
     getOperation()->walk([&](BootstrapsInternallyOpInterface op) {
       effectiveBaseLevel = std::max<int>(
           effectiveBaseLevel, op.getMinimumBootstrapEndLevel() - maxLevel +
                                   bootstrapLevelsConsumed);
     });
+    // A pinned top cannot move up to make room for such a kernel.
+    if (module && effectiveBaseLevel > base &&
+        module->hasAttr(MgmtDialect::kTopLevelAttrName)) {
+      module.emitError() << "a kernel that bootstraps internally needs the top "
+                            "level raised by "
+                         << effectiveBaseLevel - base << ", but "
+                         << MgmtDialect::kTopLevelAttrName << " pins it";
+      signalPassFailure();
+      return;
+    }
     annotateLevel(getOperation(), &solver, effectiveBaseLevel);
     annotateDimension(getOperation(), &solver);
     // Combine level and dimension (and optional scale) into MgmtAttr

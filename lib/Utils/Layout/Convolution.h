@@ -88,9 +88,13 @@ RankedTensorType get1dConvCwFcwFilterExpandedType(RankedTensorType filterType,
                                                   int64_t padding,
                                                   bool interchangeRows = true);
 
+// `inputGap` is the gap of pixel-shuffled data, as produced by an earlier
+// strided conv; the result is then shuffled by `inputGap` times the stride.
+// The parameters have no defaults, so every caller states the gap: a caller
+// that leaves it out undersizes the matrix of gapped data.
 RankedTensorType get2dConvChwFchwFilterExpandedType(
     RankedTensorType filterType, RankedTensorType dataType, int64_t padding,
-    ArrayRef<int64_t> strides = {1, 1}, bool interchangeRows = true);
+    ArrayRef<int64_t> strides, bool interchangeRows, int64_t inputGap);
 
 // Returns an IntegerRelation that represents a diagonalized 2-D Toeplitz matrix
 // that is used to compute a 1-D multichannel convolution filter such that the
@@ -105,13 +109,14 @@ FailureOr<presburger::IntegerRelation> get1dConvCwFcwFilterDiagonalizedRelation(
 // Returns a sequence of IntegerRelations that represents the layout mapping as
 // a series of simple steps (Toeplitz expansion, row interchange, flattening,
 // diagonalization). This is preferred for compilation performance to avoid ISL
-// hangs when generating loops.
+// hangs when generating loops. `inputGap` is as for
+// get2dConvChwFchwFilterExpandedType.
 FailureOr<std::vector<presburger::IntegerRelation>>
 get2dConvChwFchwFilterAsSequence(RankedTensorType filterType,
                                  RankedTensorType dataType,
                                  ArrayRef<int64_t> strides, int64_t padding,
-                                 int64_t minSlotCount,
-                                 bool interchangeRows = true);
+                                 int64_t minSlotCount, bool interchangeRows,
+                                 int64_t inputGap);
 
 // Returns an IntegerRelation for a row-interchange map that optimizes the
 // diagonal structure of a convolution's Toeplitz matrix.

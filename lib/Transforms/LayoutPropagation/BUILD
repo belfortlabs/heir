@@ -16,6 +16,7 @@ cc_library(
         ":new_pass_inc_gen",
         "@heir//lib/Analysis/SecretnessAnalysis",
         "@heir//lib/Dialect:HEIRInterfaces",
+        "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/Secret/IR:Dialect",
         "@heir//lib/Dialect/TensorExt/IR:Dialect",
         "@heir//lib/Dialect/TensorExt/Transforms:Patterns",
@@ -25,6 +26,7 @@ cc_library(
         "@heir//lib/Utils:MaxPoolUtils",
         "@heir//lib/Utils/Layout:Convolution",
         "@heir//lib/Utils/Layout:Hoisting",
+        "@heir//lib/Utils/Layout:InsertIntoZeros",
         "@heir//lib/Utils/Layout:IslConversion",
         "@heir//lib/Utils/Layout:Utils",
         "@llvm-project//llvm:Support",
@@ -53,6 +55,7 @@ cc_library(
     deps = [
         "@heir//lib/Dialect:HEIRInterfaces",
         "@heir//lib/Dialect/TensorExt/IR:TensorExtOps",
+        "@heir//lib/Utils/Layout:InsertIntoZeros",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:LinalgDialect",
         "@llvm-project//mlir:Support",

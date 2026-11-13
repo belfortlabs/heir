@@ -135,6 +135,7 @@
 #include "lib/Transforms/LinalgFuseLinearOps/LinalgFuseLinearOps.h"
 #include "lib/Transforms/LowerPolynomialEval/LowerPolynomialEval.h"
 #include "lib/Transforms/LowerUnpack/LowerUnpack.h"
+#include "lib/Transforms/LoweringHistory/LoweringHistory.h"
 #include "lib/Transforms/OperationBalancer/OperationBalancer.h"
 #include "lib/Transforms/OptimizeRelinearization/OptimizeRelinearization.h"
 #include "lib/Transforms/PolynomialApproximation/PolynomialApproximation.h"
@@ -429,6 +430,7 @@ int main(int argc, char** argv) {
   registerCompareToSignRewritePasses();
   registerActivationCanonicalizationsPasses();
   registerSelectRewritePasses();
+  registerLoweringHistoryPasses();
   registerConvertSecretForToStaticForPasses();
   registerConvertSecretWhileToStaticForPasses();
   registerConvertSecretExtractToStaticExtractPasses();

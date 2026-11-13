@@ -46,3 +46,37 @@ func.func @conv1d_ncw_three_channels(%arg0: !secret.secret<tensor<1x1x16xf32>>) 
   } -> !secret.secret<tensor<1x3x8xf32>>
   return %0 : !secret.secret<tensor<1x3x8xf32>>
 }
+
+// -----
+
+// A strided conv on the pixel-shuffled result of another strided conv. The
+// second conv reads its data in the shuffled layout, so its gap is 2 * 2 = 4
+// and its 5 output channels reserve ceil(5 / 16) = 1 block of 4x4.
+
+// CHECK: @conv2d_nchw_strided_chain_five_channels
+func.func @conv2d_nchw_strided_chain_five_channels(%arg0: !secret.secret<tensor<1x1x8x8xf32>>) -> !secret.secret<tensor<1x5x2x2xf32>> {
+  %cst1 = arith.constant dense<0.000000e+00> : tensor<1x4x4x4xf32>
+  %filter1 = arith.constant dense<2.500000e-01> : tensor<4x1x2x2xf32>
+  %cst2 = arith.constant dense<0.000000e+00> : tensor<1x5x2x2xf32>
+  %filter2 = arith.constant dense<5.000000e-01> : tensor<5x4x2x2xf32>
+
+  %0 = secret.generic(%arg0 : !secret.secret<tensor<1x1x8x8xf32>>) {
+  ^body(%input0: tensor<1x1x8x8xf32>):
+    // CHECK: %[[conv1:.*]] = linalg.conv_2d_nchw_fchw
+    // CHECK-SAME: heir.kernel_info = {gap_factor = 2 : i64, input_shape = array<i64: 1, 1, 8, 8>, result_shape = array<i64: 1, 1, 8, 8>}
+    %1 = linalg.conv_2d_nchw_fchw
+      { dilations = dense<1> : tensor<2xi64>, strides = dense<2> : tensor<2xi64> }
+      ins(%input0, %filter1 : tensor<1x1x8x8xf32>, tensor<4x1x2x2xf32>)
+      outs(%cst1 : tensor<1x4x4x4xf32>) -> tensor<1x4x4x4xf32>
+    // CHECK-NOT: tensor_ext.convert_layout
+    // CHECK: linalg.conv_2d_nchw_fchw
+    // CHECK-SAME: heir.kernel_info = {gap_factor = 4 : i64, input_shape = array<i64: 1, 4, 4, 4>, result_shape = array<i64: 1, 1, 8, 8>}
+    // CHECK-SAME: ins(%[[conv1]],
+    %2 = linalg.conv_2d_nchw_fchw
+      { dilations = dense<1> : tensor<2xi64>, strides = dense<2> : tensor<2xi64> }
+      ins(%1, %filter2 : tensor<1x4x4x4xf32>, tensor<5x4x2x2xf32>)
+      outs(%cst2 : tensor<1x5x2x2xf32>) -> tensor<1x5x2x2xf32>
+    secret.yield %2 : tensor<1x5x2x2xf32>
+  } -> !secret.secret<tensor<1x5x2x2xf32>>
+  return %0 : !secret.secret<tensor<1x5x2x2xf32>>
+}

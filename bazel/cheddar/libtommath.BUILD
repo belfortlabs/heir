@@ -15,10 +15,13 @@ cc_library(
         ["*.h"],
         allow_empty = True,
     ),
-    # bn_s_mp_rand_platform.c calls the random sources of other platforms
-    # behind constant-false MP_HAS() checks, and relies on the optimizer to
-    # drop those calls. Without it (fastbuild), a link fails on s_read_*.
-    copts = ["-O2"],
+    # libtommath drops calls to unavailable entropy sources by dead-code
+    # elimination, so it needs optimization even in fastbuild. Apple clang does
+    # not announce IEEE 754 doubles, without which mp_set_double is left out.
+    copts = ["-O2"] + select({
+        "@platforms//os:macos": ["-D__STDC_IEC_559__=1"],
+        "//conditions:default": [],
+    }),
     includes = ["."],
     visibility = ["//visibility:public"],
 )

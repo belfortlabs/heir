@@ -29,7 +29,6 @@ cc_binary(
         "HEIR_YOSYS_SCRIPTS_DIR=\\\"" + WORKSPACE_PATH + "lib/Transforms/YosysOptimizer/yosys\\\"",
     ],
     includes = ["include"],
-    tags = ["no-remote"],
     deps = [
         "@heir//lib/Analysis/NoiseAnalysis",  # buildcleaner: keep
         "@heir//lib/Analysis/NoiseAnalysis/BFV:NoiseAnalysis",  # buildcleaner: keep
@@ -163,6 +162,7 @@ cc_binary(
         "@heir//lib/Transforms/LinalgFuseLinearOps",
         "@heir//lib/Transforms/LowerPolynomialEval",
         "@heir//lib/Transforms/LowerUnpack",
+        "@heir//lib/Transforms/LoweringHistory",
         "@heir//lib/Transforms/MemrefToArith:MemrefToArithRegistration",
         "@heir//lib/Transforms/OperationBalancer",
         "@heir//lib/Transforms/OptimizeRelinearization",

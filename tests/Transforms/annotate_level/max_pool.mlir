@@ -1,3 +1,4 @@
+// REQUIRES: cyclops-planner
 // RUN: heir-opt --annotate-level %s | FileCheck %s
 
 // kernel.max_pool drops the levels of Cyclops' MaxPool from its input level:

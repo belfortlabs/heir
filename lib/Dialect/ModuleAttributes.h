@@ -34,6 +34,17 @@ constexpr const static ::llvm::StringLiteral kActualSlotCountAttrName =
 // a sparser packing.
 int64_t getEncodedSlotCount(Operation* moduleOp, int64_t ringCapacity);
 
+// The slot count layout-propagation packed the module's layouts for: its
+// min-slot-count option, raised when the module's kernels need more slots.
+constexpr const static ::llvm::StringLiteral kLayoutSlotCountAttrName =
+    "scheme.layout_slot_count";
+
+// Returns the larger of `minSlotCount` and the slot count recorded in
+// kLayoutSlotCountAttrName on `op` or its enclosing module. Passes that pack
+// or size ciphertexts after layout-propagation use this in place of their own
+// min-slot-count option, which can still ask for larger ciphertexts.
+int64_t getLayoutSlotCount(Operation* op, int64_t minSlotCount);
+
 bool moduleIsBGV(Operation* moduleOp);
 bool moduleIsBFV(Operation* moduleOp);
 bool moduleIsBGVOrBFV(Operation* moduleOp);

@@ -3,6 +3,7 @@ load("@heir//bazel/cheddar:config.bzl", "requires_cheddar")
 load("@heir//tools:heir-opt.bzl", "heir_opt")
 load("@heir//tools:heir-translate.bzl", "heir_translate")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(
     default_applicable_licenses = ["@heir//:license"],
@@ -126,11 +127,53 @@ cc_library(
     ],
 )
 
+heir_opt(
+    name = "math_emitc",
+    src = "math.mlir",
+    generated_filename = "math_emitc.mlir",
+    pass_flags = ["--cheddar-to-emitc"],
+)
+
+heir_translate(
+    name = "math_cpp_raw",
+    src = ":math_emitc.mlir",
+    generated_filename = "math_raw.cc",
+    pass_flags = ["--mlir-to-cpp"],
+)
+
+genrule(
+    name = "math_lib_src",
+    srcs = [":math_raw.cc"],
+    outs = ["math_lib.cc"],
+    cmd = """cat > $@ <<'PRELUDE_EOF'
+// AUTO-GENERATED: do not edit. See tests/Conversions/CheddarToEmitC/compile/BUILD.
+#include <cstdint>
+PRELUDE_EOF
+cat $(location :math_raw.cc) >> $@
+""",
+)
+
+cc_library(
+    name = "math_compiled",
+    srcs = [":math_lib_src"],
+)
+
+# Runs the emitted math functions on known values.
+cc_test(
+    name = "math_test",
+    srcs = ["math_test.cc"],
+    deps = [
+        ":math_compiled",
+        "@googletest//:gtest_main",
+    ],
+)
+
 build_test(
     name = "compile_test",
     targets = [
         ":kernels_compiled",
         ":kernels_cyclops_compiled",
+        ":math_compiled",
     ],
 )
 

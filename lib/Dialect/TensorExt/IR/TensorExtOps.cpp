@@ -99,9 +99,36 @@ struct FoldRotateOfConst : public OpRewritePattern<tensor_ext::RotateOp> {
   }
 };
 
+// rotate %t, x -> rotate %t, x mod n, where n is the size of the rotated
+// (last) axis.
+struct NormalizeRotationIndex : public OpRewritePattern<tensor_ext::RotateOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tensor_ext::RotateOp op,
+                                PatternRewriter& rewriter) const override {
+    APInt shiftValue;
+    if (!matchPattern(op.getShift(), m_ConstantInt(&shiftValue)))
+      return rewriter.notifyMatchFailure(op, "requires constant shift");
+    int64_t size = op.getTensor().getType().getShape().back();
+    if (ShapedType::isDynamic(size) || size <= 0)
+      return rewriter.notifyMatchFailure(op, "requires static axis size");
+    int64_t shift = shiftValue.getSExtValue();
+    if (shift >= 0 && shift < size)
+      return rewriter.notifyMatchFailure(op, "shift already normalized");
+    int64_t normalized = ((shift % size) + size) % size;
+    Type shiftType = op.getShift().getType();
+    Value newShift = arith::ConstantOp::create(
+        rewriter, op.getLoc(), shiftType,
+        rewriter.getIntegerAttr(shiftType, normalized));
+    rewriter.modifyOpInPlace(op,
+                             [&] { op.getShiftMutable().assign(newShift); });
+    return success();
+  }
+};
+
 void RotateOp::getCanonicalizationPatterns(RewritePatternSet& results,
                                            MLIRContext* context) {
-  results.add<FoldRotateOfConst>(context);
+  results.add<FoldRotateOfConst, NormalizeRotationIndex>(context);
   populateWithGenerated(results);
 }
 
@@ -386,10 +413,15 @@ LogicalResult RotateAndReduceOp::verify() {
 
   if (getPlaintexts()) {
     auto numPlaintexts = getPlaintexts().getType().getDimSize(0);
-    if (numPlaintexts != numSteps) {
+    // Compact plaintexts hold only the diagonals listed in diagonal_indices.
+    auto diagonalIndices = (*this)->getAttrOfType<DenseI32ArrayAttr>(
+        TensorExtDialect::kDiagonalIndicesAttrName);
+    bool isCompact = diagonalIndices && numPlaintexts == diagonalIndices.size();
+    if (numPlaintexts != numSteps && !isCompact) {
       return emitOpError()
              << "requires plaintext tensor to have the same number of "
-                "elements as steps, but found numPlaintexts="
+                "elements as steps or as diagonal_indices, but found "
+                "numPlaintexts="
              << numPlaintexts << " and steps=" << numSteps;
     }
   }

@@ -23,6 +23,15 @@ def Mgmt_Dialect : Dialect {
     constexpr const static ::llvm::StringLiteral
         kMulHeadroomAttrName = "mgmt.mul_headroom";
 
+    /// Module attribute pinning the level fresh ciphertexts and bootstrap
+    /// outputs are materialized at: the top of the modulus chain the program
+    /// is placed on. Without it the top is the program's own depth. Set by
+    /// parameter generation when the chain is deeper than the program (a
+    /// chain taken from a parameter file, whose bootstrap lands at a fixed
+    /// level), and honored by every annotate-mgmt run after it.
+    constexpr const static ::llvm::StringLiteral
+        kTopLevelAttrName = "mgmt.top_level";
+
     /// Name of the attribute holding OpenfheParamsAttr
     constexpr const static ::llvm::StringLiteral
         kArgOpenfheParamsAttrName = "mgmt.openfhe_params";

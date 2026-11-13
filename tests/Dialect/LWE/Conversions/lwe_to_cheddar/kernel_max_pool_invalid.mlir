@@ -1,8 +1,9 @@
+// REQUIRES: cyclops-planner
 // RUN: not heir-opt --lwe-to-cheddar=use-cyclops-runtime=true %s 2>&1 | FileCheck %s
 
 // The result type must be exactly the pool's level drop below the input.
 
-// CHECK: drops 3 levels; expected output level 1 but got 0
+// CHECK: drops 2 levels; expected output level 2 but got 0
 #enc = #lwe.inverse_canonical_encoding<scaling_factor = 45>
 #key = #lwe.key<>
 #chain_in = #lwe.modulus_chain<elements = <36028797018652673 : i64, 35184372121601 : i64, 35184372088833 : i64, 35184371826689 : i64, 35184371761153 : i64>, current = 4>

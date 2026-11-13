@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numeric>
@@ -23,6 +24,7 @@
 #include "lib/Dialect/TensorExt/IR/TensorExtAttributes.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
+#include "lib/Dialect/TensorExt/Transforms/ImplementRotateAndReduce.h"
 #include "lib/Kernel/AbstractValue.h"
 #include "lib/Kernel/ArithmeticDag.h"
 #include "lib/Kernel/IRMaterializingVisitor.h"
@@ -31,6 +33,7 @@
 #include "lib/Kernel/Utils.h"
 #include "lib/Target/CompilationTarget/CompilationTarget.h"
 #include "lib/Transforms/ConvertToCiphertextSemantics/AssignLayout.h"
+#include "lib/Transforms/ConvertToCiphertextSemantics/TensorKernelSupport.h"
 #include "lib/Transforms/ConvertToCiphertextSemantics/TypeConversion.h"
 #include "lib/Transforms/DropUnitDims/DropUnitDims.h"
 #include "lib/Transforms/LayoutPropagation/Utils.h"
@@ -40,6 +43,7 @@
 #include "lib/Utils/ContextAwareTypeConversion.h"
 #include "lib/Utils/Layout/Codegen.h"
 #include "lib/Utils/Layout/Convolution.h"
+#include "lib/Utils/Layout/InsertIntoZeros.h"
 #include "lib/Utils/Layout/Utils.h"
 #include "lib/Utils/MathUtils.h"
 #include "lib/Utils/MaxPoolUtils.h"
@@ -63,20 +67,22 @@
 #include "mlir/include/mlir/Dialect/Utils/StaticValueUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/AffineExpr.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/AffineMap.h"              // from @llvm-project
+#include "mlir/include/mlir/IR/AsmState.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/Attributes.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinOps.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
-#include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
-#include "mlir/include/mlir/IR/OpDefinition.h"           // from @llvm-project
-#include "mlir/include/mlir/IR/OperationSupport.h"       // from @llvm-project
-#include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
-#include "mlir/include/mlir/IR/TypeUtilities.h"          // from @llvm-project
-#include "mlir/include/mlir/IR/Value.h"                  // from @llvm-project
-#include "mlir/include/mlir/Support/LLVM.h"              // from @llvm-project
-#include "mlir/include/mlir/Support/LogicalResult.h"     // from @llvm-project
+#include "mlir/include/mlir/IR/DialectResourceBlobManager.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/Matchers.h"            // from @llvm-project
+#include "mlir/include/mlir/IR/OpDefinition.h"        // from @llvm-project
+#include "mlir/include/mlir/IR/OperationSupport.h"    // from @llvm-project
+#include "mlir/include/mlir/IR/PatternMatch.h"        // from @llvm-project
+#include "mlir/include/mlir/IR/TypeUtilities.h"       // from @llvm-project
+#include "mlir/include/mlir/IR/Value.h"               // from @llvm-project
+#include "mlir/include/mlir/Support/LLVM.h"           // from @llvm-project
+#include "mlir/include/mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/include/mlir/Transforms/DialectConversion.h"  // from @llvm-project
 #include "mlir/include/mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
 
@@ -552,10 +558,17 @@ class ConvertConvertLayout
   LogicalResult matchAndRewrite(
       tensor_ext::ConvertLayoutOp op, OpAdaptor adaptor,
       ContextAwareConversionPatternRewriter& rewriter) const final {
-    LayoutAttr fromLayout = dyn_cast<LayoutAttr>(op.getFromLayout());
-    LayoutAttr toLayout = dyn_cast<LayoutAttr>(op.getToLayout());
+    // A strided conv records its result layout as a list of steps; convert
+    // from (or to) the layout the list composes to.
+    auto asLayout = [&](Attribute attr) -> LayoutAttr {
+      if (auto arrayAttr = dyn_cast<ArrayAttr>(attr))
+        return LayoutAttr::composeLayouts(arrayAttr, getContext());
+      return dyn_cast<LayoutAttr>(attr);
+    };
+    LayoutAttr fromLayout = asLayout(op.getFromLayout());
+    LayoutAttr toLayout = asLayout(op.getToLayout());
     if (!fromLayout || !toLayout) {
-      return failure();
+      return rewriter.notifyMatchFailure(op, "unsupported layout attribute");
     }
 
     // This is persisted as an operation rather than lowered eagerly to a shift
@@ -779,6 +792,59 @@ class ConvertLinalgReduce : public ConversionBase<linalg::ReduceOp> {
   }
 };
 
+// Attributes on a packed constant with several consumers: the gathered
+// diagonals, their row indices, and the number of consumers not yet converted.
+// Later consumers reuse the gathered diagonals, so the full matrix is freed
+// after the first.
+constexpr StringLiteral kGatheredDiagonalsAttr =
+    "tensor_ext.gathered_diagonals";
+constexpr StringLiteral kGatheredRemainingAttr =
+    "tensor_ext.gathered_remaining";
+constexpr StringLiteral kGatheredRowsAttr = "tensor_ext.gathered_rows";
+
+// Zero rows (diagonals) of the packed matrix. A constant's rows are read from
+// its data, which also catches diagonals that are zero by value; otherwise the
+// rows the layout leaves empty are enumerated.
+static std::map<int, bool> getZeroDiagonals(
+    Value matrix, const presburger::IntegerRelation& layout) {
+  std::map<int, bool> zeroDiagonals;
+  auto type = cast<RankedTensorType>(matrix.getType());
+  int64_t numRows = type.getDimSize(0);
+  ArrayRef<char> raw;
+  if (auto constantOp = matrix.getDefiningOp<arith::ConstantOp>()) {
+    // Gathered for an earlier consumer, which may have freed the data.
+    if (auto rows =
+            constantOp->getAttrOfType<DenseI64ArrayAttr>(kGatheredRowsAttr)) {
+      for (int64_t row = 0; row < numRows; ++row) zeroDiagonals[row] = true;
+      for (int64_t row : rows.asArrayRef()) zeroDiagonals.erase(row);
+      return zeroDiagonals;
+    }
+    if (auto resource =
+            dyn_cast<DenseResourceElementsAttr>(constantOp.getValue())) {
+      raw = resource.getData();
+    } else if (auto dense = dyn_cast<DenseElementsAttr>(constantOp.getValue());
+               dense && !dense.isSplat()) {
+      raw = dense.getRawData();
+    }
+  }
+  bool byteAligned = type.getElementType().isIntOrFloat() &&
+                     type.getElementTypeBitWidth() % 8 == 0;
+  if (!raw.empty() && byteAligned && numRows > 0 &&
+      static_cast<int64_t>(raw.size()) % numRows == 0) {
+    size_t rowBytes = raw.size() / numRows;
+    for (int64_t row = 0; row < numRows; ++row) {
+      ArrayRef<char> bytes = raw.slice(row * rowBytes, rowBytes);
+      if (llvm::all_of(bytes, [](char c) { return c == 0; }))
+        zeroDiagonals[row] = true;
+    }
+    return zeroDiagonals;
+  }
+  PointCollector collector;
+  getCtComplementPoints(layout, collector, type);
+  for (const auto& point : collector.points) zeroDiagonals[point[0]] = true;
+  return zeroDiagonals;
+}
+
 struct ConvertLinalgDot : public ConversionBase<linalg::DotOp> {
  public:
   using ConversionBase<linalg::DotOp>::ConversionBase;
@@ -832,8 +898,277 @@ struct ConvertLinalgDot : public ConversionBase<linalg::DotOp> {
   }
 };
 
-// Lowers linalg.broadcast under bicyclic or tricyclic packing where the
-// broadcast acts as a zero-cost view without moving ciphertext data.
+// Splits a set of slot offsets (sorted, starting at 0) into a sequence of
+// (stride, count) factors such that every offset is uniquely a sum of
+// k_i * stride_i with 0 <= k_i < count_i. Returns std::nullopt if the set has
+// no such structure.
+std::optional<SmallVector<std::pair<int64_t, int64_t>>> factorSlotPattern(
+    std::vector<int64_t> pattern) {
+  SmallVector<std::pair<int64_t, int64_t>> factors;
+  while (pattern.size() > 1) {
+    std::set<int64_t> offsets(pattern.begin(), pattern.end());
+    int64_t stride = pattern[1];
+    int64_t count = 1;
+    while (offsets.count(count * stride)) ++count;
+    std::vector<int64_t> rowStarts;
+    for (int64_t offset : pattern) {
+      if (!offsets.count(offset - stride)) rowStarts.push_back(offset);
+    }
+    if (rowStarts.size() * count != pattern.size()) return std::nullopt;
+    for (int64_t start : rowStarts) {
+      for (int64_t k = 0; k < count; ++k) {
+        if (!offsets.count(start + k * stride)) return std::nullopt;
+      }
+    }
+    factors.push_back({stride, count});
+    pattern = rowStarts;
+  }
+  return factors;
+}
+
+// Moves the value in slot i of each ciphertext to slot i + shift.
+Value rotateSlotsRight(ImplicitLocOpBuilder& b, Value value, int64_t shift,
+                       int64_t numSlots) {
+  int64_t leftShift = (numSlots - shift % numSlots) % numSlots;
+  if (leftShift == 0) return value;
+  auto shiftOp = arith::ConstantIndexOp::create(b, leftShift);
+  auto rotateOp = tensor_ext::RotateOp::create(b, value, shiftOp);
+  setMaterializedAttr({shiftOp, rotateOp});
+  return rotateOp;
+}
+
+Value createSlotMask(ImplicitLocOpBuilder& b, RankedTensorType type,
+                     ArrayRef<int64_t> oneSlots) {
+  Type elementType = type.getElementType();
+  DenseElementsAttr maskAttr;
+  if (auto floatType = dyn_cast<FloatType>(elementType)) {
+    const auto& semantics = floatType.getFloatSemantics();
+    SmallVector<APFloat> values(type.getNumElements(),
+                                APFloat::getZero(semantics));
+    for (int64_t slot : oneSlots) values[slot] = APFloat::getOne(semantics);
+    maskAttr = DenseElementsAttr::get(type, values);
+  } else {
+    unsigned width = elementType.getIntOrFloatBitWidth();
+    SmallVector<APInt> values(type.getNumElements(), APInt(width, 0));
+    for (int64_t slot : oneSlots) values[slot] = APInt(width, 1);
+    maskAttr = DenseElementsAttr::get(type, values);
+  }
+  auto maskOp = arith::ConstantOp::create(b, type, maskAttr);
+  setMaterializedAttr(maskOp);
+  return maskOp;
+}
+
+Value addValues(ImplicitLocOpBuilder& b, Value lhs, Value rhs) {
+  if (!lhs) return rhs;
+  Operation* addOp = makeAppropriatelyTypedAddOp(b, b.getLoc(), lhs, rhs);
+  setMaterializedAttr(addOp);
+  return addOp->getResult(0);
+}
+
+// Lowers a broadcast whose result layout is not a view of the input layout.
+// Every result slot holds a copy of one input element. The kernel first moves
+// each input element to one anchor slot among its copies: the input is masked
+// once per (baby step, giant step) pair and rotated baby-step giant-step, so
+// the kernel has multiplicative depth 1. If the copies of every element form
+// the same pattern of offsets from their anchor, and that pattern is a product
+// of strided runs (as for a channel broadcast into a row-major or gapped
+// feature map), the anchors are then copied to the other slots with
+// unmasked rotate-and-add, log2(run length) rotations per run. Otherwise
+// every result slot is its own anchor.
+Value implementBroadcastByReplication(ImplicitLocOpBuilder& b, Value input,
+                                      const IntegerRelation& inputRel,
+                                      const IntegerRelation& resultRel,
+                                      ArrayRef<int64_t> broadcastDims,
+                                      int64_t inputRank, int64_t resultRank,
+                                      RankedTensorType resultCtType) {
+  auto inputCtType = cast<RankedTensorType>(input.getType());
+  int64_t numInputCts = inputCtType.getDimSize(0);
+  int64_t numSlots = inputCtType.getDimSize(1);
+  int64_t numResultCts = resultCtType.getDimSize(0);
+  assert(resultCtType.getDimSize(1) == numSlots &&
+         "input and result ciphertexts must have the same slot count");
+  RankedTensorType singleCtType =
+      RankedTensorType::get({1, numSlots}, inputCtType.getElementType());
+
+  using Index = std::vector<int64_t>;
+  using CtSlot = std::pair<int64_t, int64_t>;
+  std::map<Index, SmallVector<CtSlot>> sources;
+  {
+    PointPairCollector collector(inputRank, 2);
+    enumeratePoints(inputRel, collector);
+    for (const auto& [index, ctSlot] : collector.points)
+      sources[index].push_back({ctSlot[0], ctSlot[1]});
+  }
+
+  // Result slots per (result ciphertext, input element).
+  std::map<std::pair<int64_t, Index>, std::vector<int64_t>> copies;
+  {
+    PointPairCollector collector(resultRank, 2);
+    enumeratePoints(resultRel, collector);
+    for (const auto& [index, ctSlot] : collector.points) {
+      Index inputIndex;
+      for (int64_t dim = 0; dim < resultRank; ++dim) {
+        if (!llvm::is_contained(broadcastDims, dim))
+          inputIndex.push_back(index[dim]);
+      }
+      copies[{ctSlot[0], inputIndex}].push_back(ctSlot[1]);
+    }
+  }
+
+  std::vector<int64_t> commonPattern;
+  bool hasCommonPattern = true;
+  for (auto& [key, slots] : copies) {
+    llvm::sort(slots);
+    std::vector<int64_t> pattern;
+    for (int64_t slot : slots) pattern.push_back(slot - slots.front());
+    if (commonPattern.empty()) commonPattern = pattern;
+    if (pattern != commonPattern) hasCommonPattern = false;
+  }
+  std::optional<SmallVector<std::pair<int64_t, int64_t>>> factors;
+  if (hasCommonPattern) factors = factorSlotPattern(commonPattern);
+
+  // One move per anchor: (result ct, anchor slot, input ct, input slot,
+  // right shift).
+  struct Move {
+    int64_t resultCt, anchor, inputCt, inputSlot, shift;
+  };
+  std::vector<Move> moves;
+  for (const auto& [key, slots] : copies) {
+    const auto& [resultCt, inputIndex] = key;
+    ArrayRef<int64_t> anchors = slots;
+    if (factors.has_value()) anchors = anchors.take_front();
+    for (int64_t anchor : anchors) {
+      // Among the input's copies of this element, take the one closest
+      // below the anchor to keep the shifts small.
+      Move best{resultCt, anchor, 0, 0, numSlots};
+      for (const auto& [inputCt, inputSlot] : sources.at(inputIndex)) {
+        int64_t shift = ((anchor - inputSlot) % numSlots + numSlots) % numSlots;
+        if (shift < best.shift)
+          best = {resultCt, anchor, inputCt, inputSlot, shift};
+      }
+      moves.push_back(best);
+    }
+  }
+
+  // Pick the giant step that minimizes the number of rotations.
+  std::set<int64_t> candidateSteps = {numSlots};
+  for (const Move& move : moves) {
+    if (move.shift > 0 && candidateSteps.size() < 4096)
+      candidateSteps.insert(move.shift);
+  }
+  int64_t giantStep = numSlots;
+  size_t bestCost = std::numeric_limits<size_t>::max();
+  for (int64_t step : candidateSteps) {
+    std::set<CtSlot> babySteps, giantSteps;
+    for (const Move& move : moves) {
+      if (move.shift % step)
+        babySteps.insert({move.inputCt, move.shift % step});
+      if (move.shift / step)
+        giantSteps.insert({move.resultCt, move.shift / step});
+    }
+    if (babySteps.size() + giantSteps.size() < bestCost) {
+      bestCost = babySteps.size() + giantSteps.size();
+      giantStep = step;
+    }
+  }
+
+  SmallVector<Value> inputCts;
+  for (int64_t ct = 0; ct < numInputCts; ++ct) {
+    if (numInputCts == 1) {
+      inputCts.push_back(input);
+      continue;
+    }
+    SmallVector<OpFoldResult> offsets = {b.getIndexAttr(ct), b.getIndexAttr(0)};
+    SmallVector<OpFoldResult> sizes = {b.getIndexAttr(1),
+                                       b.getIndexAttr(numSlots)};
+    SmallVector<OpFoldResult> strides(2, b.getIndexAttr(1));
+    auto extractOp = tensor::ExtractSliceOp::create(b, singleCtType, input,
+                                                    offsets, sizes, strides);
+    setMaterializedAttr(extractOp);
+    inputCts.push_back(extractOp);
+  }
+
+  // (result ct, giant step) -> (input ct, baby step) -> masked input slots
+  std::map<CtSlot, std::map<CtSlot, std::vector<int64_t>>> maskSlots;
+  for (const Move& move : moves) {
+    int64_t baby = move.shift % giantStep;
+    maskSlots[{move.resultCt, move.shift / giantStep}][{move.inputCt, baby}]
+        .push_back((move.inputSlot + baby) % numSlots);
+  }
+
+  std::map<CtSlot, Value> babyRotations;
+  SmallVector<Value> resultCts(numResultCts);
+  for (const auto& [resultGiant, terms] : maskSlots) {
+    const auto& [resultCt, giant] = resultGiant;
+    Value inner;
+    for (const auto& [inputBaby, slots] : terms) {
+      const auto& [inputCt, baby] = inputBaby;
+      Value& rotated = babyRotations[inputBaby];
+      if (!rotated)
+        rotated = rotateSlotsRight(b, inputCts[inputCt], baby, numSlots);
+      Operation* mulOp = makeAppropriatelyTypedMulOp(
+          b, b.getLoc(), createSlotMask(b, singleCtType, slots), rotated);
+      setMaterializedAttr(mulOp);
+      inner = addValues(b, inner, mulOp->getResult(0));
+    }
+    resultCts[resultCt] =
+        addValues(b, resultCts[resultCt],
+                  rotateSlotsRight(b, inner, giant * giantStep, numSlots));
+  }
+
+  Value result;
+  if (numResultCts == 1) {
+    result = resultCts[0];
+  } else {
+    result = tensor::EmptyOp::create(b, resultCtType.getShape(),
+                                     resultCtType.getElementType());
+    setMaterializedAttr(result.getDefiningOp());
+    for (int64_t ct = 0; ct < numResultCts; ++ct) {
+      Value ctValue = resultCts[ct];
+      if (!ctValue) ctValue = createSlotMask(b, singleCtType, {});
+      SmallVector<OpFoldResult> offsets = {b.getIndexAttr(ct),
+                                           b.getIndexAttr(0)};
+      SmallVector<OpFoldResult> sizes = {b.getIndexAttr(1),
+                                         b.getIndexAttr(numSlots)};
+      SmallVector<OpFoldResult> strides(2, b.getIndexAttr(1));
+      auto insertOp = tensor::InsertSliceOp::create(b, ctValue, result, offsets,
+                                                    sizes, strides);
+      setMaterializedAttr(insertOp);
+      result = insertOp;
+    }
+  }
+
+  // Copy each anchor to the rest of its pattern: for every (stride, count)
+  // run, build the copies at offsets [0, count) * stride from doubling
+  // blocks, without masks.
+  if (factors.has_value()) {
+    for (const auto& [stride, count] : factors.value()) {
+      Value block = result;
+      Value acc;
+      int64_t blockLength = 1;
+      int64_t covered = 0;
+      for (int64_t bit = 1; bit <= count; bit <<= 1) {
+        if (count & bit) {
+          acc = addValues(
+              b, acc, rotateSlotsRight(b, block, covered * stride, numSlots));
+          covered += blockLength;
+        }
+        if ((bit << 1) <= count) {
+          block = addValues(
+              b, block,
+              rotateSlotsRight(b, block, blockLength * stride, numSlots));
+          blockLength *= 2;
+        }
+      }
+      result = acc;
+    }
+  }
+  return result;
+}
+
+// Lowers linalg.broadcast. Under bicyclic or tricyclic packing the broadcast
+// acts as a zero-cost view without moving ciphertext data; otherwise it uses
+// implementBroadcastByReplication.
 class ConvertLinalgBroadcast
     : public ContextAwareOpConversionPattern<linalg::BroadcastOp> {
  public:
@@ -893,10 +1228,15 @@ class ConvertLinalgBroadcast
       return success();
     }
 
-    // Lowering of non-cyclic broadcasts is postponed to a dedicated broadcast
-    // kernel (e.g. https://github.com/google/heir/pull/3163)
-    return rewriter.notifyMatchFailure(
-        op, "non-cyclic broadcasts are not supported yet");
+    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
+    Value result = implementBroadcastByReplication(
+        b, adaptor.getInput(), inputLayout.getIntegerRelation(),
+        resultLayout.getIntegerRelation(), op.getDimensions(),
+        inputType.getRank(), resultType.getRank(),
+        cast<RankedTensorType>(convertedResultType));
+    setAttributeAssociatedWith(result, kLayoutAttrName, resultLayout);
+    rewriter.replaceOp(op, result);
+    return success();
   }
 };
 
@@ -966,10 +1306,10 @@ class ConvertLinalgTranspose
     return success();
   }
 };
-static Value emitCompactLinearTransform(
+static FailureOr<Value> emitCompactLinearTransform(
     ContextAwareConversionPatternRewriter& rewriter, Location loc,
     TypedValue<RankedTensorType> input, TypedValue<RankedTensorType> matrix,
-    ArrayRef<int64_t> matrixShape, Attribute layoutAttr,
+    Value originalMatrix, ArrayRef<int64_t> matrixShape, Attribute layoutAttr,
     const std::map<int, bool>& zeroDiagonals);
 
 struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
@@ -989,7 +1329,7 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
     return kernelAttr && kernelAttr.getName() == KernelName::MatvecDiagonal;
   }
 
-  void haleviShoupKernel(
+  LogicalResult haleviShoupKernel(
       linalg::MatvecOp op, OpAdaptor adaptor,
       ContextAwareConversionPatternRewriter& rewriter) const {
     LLVM_DEBUG(llvm::dbgs()
@@ -1006,12 +1346,8 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
     LayoutAttr matrixLayout = getLayoutAttr(matrix);
     auto matrixRelation = matrixLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(matrixRelation, collector, matrix.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(matrix, matrixRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << matrix << "\n");
@@ -1022,13 +1358,14 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
     Attribute resultLayout = op->getAttr(kLayoutAttrName);
     if (resultLayout && succeeded(target) &&
         target->has_kernel_linear_transform) {
-      Value compact = emitCompactLinearTransform(
-          rewriter, op.getLoc(), input, matrix,
+      FailureOr<Value> compact = emitCompactLinearTransform(
+          rewriter, op.getLoc(), input, matrix, op.getInputs()[0],
           cast<RankedTensorType>(op.getInputs()[0].getType()).getShape(),
           resultLayout, zeroDiagonals);
-      addBiasAndReplace(rewriter, op, compact, adaptor.getOutputs()[0],
+      if (failed(compact)) return failure();
+      addBiasAndReplace(rewriter, op, *compact, adaptor.getOutputs()[0],
                         resultLayout);
-      return;
+      return success();
     }
 
     auto dagType = kernel::mlirTypeToDagType(input.getType());
@@ -1049,6 +1386,7 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
     // Add the initial accumulator value.
     Value result = adaptor.getOutputs()[0];
     addBiasAndReplace(rewriter, op, finalOutput, result, layoutAttr);
+    return success();
   }
 
   LogicalResult matchAndRewrite(
@@ -1064,8 +1402,7 @@ struct ConvertLinalgMatvecLayout : public ConversionBase<linalg::MatvecOp> {
           op, "missing new layout attribute for matrix and vector");
 
     if (supportsHaleviShoup(op, adaptor)) {
-      haleviShoupKernel(op, adaptor, rewriter);
-      return success();
+      return haleviShoupKernel(op, adaptor, rewriter);
     }
 
     // TODO(#1589): implement row-major naive matvec kernel
@@ -1246,6 +1583,31 @@ struct PreserveLinalgMatvecAsLinearTransform
   }
 };
 
+// Number of users of `originalMatrix` when it is an assign_layout result whose
+// users all take the compact path; otherwise 0. This assumes every user of
+// these op types takes the compact path when the backend evaluates linear
+// transforms directly.
+static unsigned numPackingConsumers(Value originalMatrix) {
+  if (!originalMatrix.getDefiningOp<tensor_ext::AssignLayoutOp>()) return 0;
+  if (!llvm::all_of(originalMatrix.getUsers(), [](Operation* user) {
+        return isa<linalg::MatvecOp, linalg::Conv1DNcwFcwOp,
+                   linalg::Conv2DNchwFchwOp>(user);
+      }))
+    return 0;
+  return llvm::range_size(originalMatrix.getUsers());
+}
+
+// Drops the data of the packed constant that folding an assign_layout created;
+// the blob manager would otherwise keep it until the context is destroyed.
+// Callers cache the gathered rows first for any remaining consumers.
+static void releaseFoldedMatrix(arith::ConstantOp packed) {
+  auto resource = dyn_cast<DenseResourceElementsAttr>(packed.getValue());
+  if (!resource || !resource.getRawHandle().getKey().contains("_packed"))
+    return;
+  if (auto* entry = resource.getRawHandle().getResource())
+    entry->setBlob(AsmResourceBlob());
+}
+
 // Emits the Halevi-Shoup transform as a compact rotate_and_reduce carrying the
 // diagonals, rather than expanding it into a rotate/multiply/accumulate DAG.
 // The op is marked as a linear transform so implement-rotate-and-reduce leaves
@@ -1256,10 +1618,10 @@ struct PreserveLinalgMatvecAsLinearTransform
 //
 // A squat packing (rows < cols) still needs the partial-rotate-and-reduce
 // afterwards, mirroring implementHaleviShoup.
-static Value emitCompactLinearTransform(
+static FailureOr<Value> emitCompactLinearTransform(
     ContextAwareConversionPatternRewriter& rewriter, Location loc,
     TypedValue<RankedTensorType> input, TypedValue<RankedTensorType> matrix,
-    ArrayRef<int64_t> matrixShape, Attribute layoutAttr,
+    Value originalMatrix, ArrayRef<int64_t> matrixShape, Attribute layoutAttr,
     const std::map<int, bool>& zeroDiagonals) {
   int64_t numDiagonals = matrix.getType().getShape()[0];
 
@@ -1272,9 +1634,66 @@ static Value emitCompactLinearTransform(
     nonzeroIndices.clear();
   }
 
+  // Gather the nonzero diagonals of a constant matrix here so the full packed
+  // matrix can be freed; implement-rotate-and-reduce would otherwise gather
+  // them later.
+  Value plaintexts = matrix;
+  auto packedOp = matrix.getDefiningOp<arith::ConstantOp>();
+  if (!nonzeroIndices.empty()) {
+    SmallVector<int64_t> rows(nonzeroIndices.begin(), nonzeroIndices.end());
+    auto compactType = RankedTensorType::get(
+        {static_cast<int64_t>(rows.size()), matrix.getType().getDimSize(1)},
+        matrix.getType().getElementType());
+    TypedAttr gathered;
+    if (packedOp) {
+      auto cached = packedOp->getAttrOfType<TypedAttr>(kGatheredDiagonalsAttr);
+      if (cached && cached.getType() == compactType) gathered = cached;
+    }
+    if (!gathered)
+      gathered = tensor_ext::gatherRowsIfConstant(matrix, compactType, rows);
+    if (gathered) {
+      auto gatheredOp = arith::ConstantOp::create(rewriter, loc, gathered);
+      setMaterializedAttr(gatheredOp);
+      plaintexts = gatheredOp.getResult();
+      // The consumer count is read on the first consumer only; later ones
+      // decrement the stored remainder.
+      std::optional<int64_t> remaining;
+      if (packedOp) {
+        if (auto remainingAttr =
+                packedOp->getAttrOfType<IntegerAttr>(kGatheredRemainingAttr))
+          remaining = remainingAttr.getInt() - 1;
+        else if (unsigned consumers = numPackingConsumers(originalMatrix))
+          remaining = static_cast<int64_t>(consumers) - 1;
+      }
+      if (remaining) {
+        if (*remaining > 0) {
+          packedOp->setAttr(kGatheredDiagonalsAttr, gathered);
+          packedOp->setAttr(kGatheredRowsAttr,
+                            rewriter.getDenseI64ArrayAttr(rows));
+          packedOp->setAttr(kGatheredRemainingAttr,
+                            rewriter.getI64IntegerAttr(*remaining));
+        } else {
+          packedOp->removeAttr(kGatheredDiagonalsAttr);
+          packedOp->removeAttr(kGatheredRowsAttr);
+          packedOp->removeAttr(kGatheredRemainingAttr);
+        }
+        releaseFoldedMatrix(packedOp);
+      }
+    }
+  }
+  if (plaintexts == matrix && packedOp) {
+    auto resource = dyn_cast<DenseResourceElementsAttr>(packedOp.getValue());
+    AsmResourceBlob* blob =
+        resource ? resource.getRawHandle().getBlob() : nullptr;
+    if (blob && blob->getData().empty())
+      return emitError(loc)
+             << "the data of packed matrix " << resource.getRawHandle().getKey()
+             << " was freed before this consumer read it";
+  }
+
   bool isFloat = isa<FloatType>(input.getType().getElementType());
   auto rar = tensor_ext::RotateAndReduceOp::create(
-      rewriter, loc, input, matrix, /*period=*/int64_t{1},
+      rewriter, loc, input, plaintexts, /*period=*/int64_t{1},
       /*steps=*/numDiagonals,
       /*reduceOp=*/llvm::StringRef(isFloat ? "arith.addf" : "arith.addi"));
   rar->setAttr(tensor_ext::TensorExtDialect::kLintransAttrName,
@@ -1367,12 +1786,8 @@ struct ConvertLinalgConv1D : public ConversionBase<linalg::Conv1DOp> {
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
     auto filterRelation = filterLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(filterRelation, collector, filter.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(filter, filterRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << filter << "\n");
@@ -1478,12 +1893,8 @@ struct ConvertLinalgConv2D : public ConversionBase<linalg::Conv2DOp> {
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
     auto filterRelation = filterLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(filterRelation, collector, matrix.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(matrix, filterRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << matrix << "\n");
@@ -1617,12 +2028,8 @@ struct ConvertLinalgConv1DNcwFcw
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
     auto filterRelation = filterLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(filterRelation, collector, matrix.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(matrix, filterRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << matrix << "\n");
@@ -1641,10 +2048,11 @@ struct ConvertLinalgConv1DNcwFcw
     auto target = getTargetConfig(op->getParentOfType<ModuleOp>());
     if (resultLayout && succeeded(target) &&
         target->has_kernel_linear_transform) {
-      Value compact = emitCompactLinearTransform(rewriter, op.getLoc(), data,
-                                                 matrix, matrixShapeForLayout,
-                                                 resultLayout, zeroDiagonals);
-      addBiasAndReplace(rewriter, op, compact, adaptor.getOutputs()[0],
+      FailureOr<Value> compact = emitCompactLinearTransform(
+          rewriter, op.getLoc(), data, matrix, op.getInputs()[1],
+          matrixShapeForLayout, resultLayout, zeroDiagonals);
+      if (failed(compact)) return failure();
+      addBiasAndReplace(rewriter, op, *compact, adaptor.getOutputs()[0],
                         resultLayout);
       return success();
     }
@@ -1751,11 +2159,15 @@ struct ConvertLinalgConv2DNchwFchw
         foldedConvMatrixOperand(op, dataType);
     if (failed(matrixOperand)) return failure();
     auto strides = llvm::to_vector(op.getStrides().getValues<int64_t>());
-    // Rows only interchange for a strided conv; keep this in step with
-    // LayoutPropagation, which sizes the filter layout the same way.
+    // Rows only interchange for a gapped result, whose gap is the stride times
+    // the gap of the data; keep this in step with LayoutPropagation, which
+    // sizes the filter layout the same way.
+    assert((!info || info->gapFactor % strides[0] == 0) &&
+           "gap factor must be a multiple of the stride");
+    int64_t inputGap = info ? info->gapFactor / strides[0] : 1;
     return get2dConvChwFchwFilterExpandedType(
         filterType, matrixOperand->dataType, matrixOperand->padding, strides,
-        /*interchangeRows=*/strides[0] > 1);
+        /*interchangeRows=*/strides[0] * inputGap > 1, inputGap);
   }
 
   LogicalResult haleviShoupKernel(
@@ -1782,12 +2194,8 @@ struct ConvertLinalgConv2DNchwFchw
     LayoutAttr filterLayout = getLayoutAttr(adaptor.getInputs()[1]);
     auto filterRelation = filterLayout.getIntegerRelation();
 
-    PointCollector collector;
-    std::map<int, bool> zeroDiagonals;
-    getCtComplementPoints(filterRelation, collector, matrix.getType());
-    for (const auto& point : collector.points) {
-      zeroDiagonals[point[0]] = true;
-    }
+    std::map<int, bool> zeroDiagonals =
+        getZeroDiagonals(matrix, filterRelation);
     LLVM_DEBUG(llvm::dbgs()
                << "Got " << zeroDiagonals.size()
                << " zero diagonals for filter: " << matrix << "\n");
@@ -1805,10 +2213,11 @@ struct ConvertLinalgConv2DNchwFchw
     auto target = getTargetConfig(op->getParentOfType<ModuleOp>());
     if (resultLayout && succeeded(target) &&
         target->has_kernel_linear_transform) {
-      Value compact = emitCompactLinearTransform(rewriter, op.getLoc(), data,
-                                                 matrix, matrixShapeForLayout,
-                                                 resultLayout, zeroDiagonals);
-      addBiasAndReplace(rewriter, op, compact, adaptor.getOutputs()[0],
+      FailureOr<Value> compact = emitCompactLinearTransform(
+          rewriter, op.getLoc(), data, matrix, op.getInputs()[1],
+          matrixShapeForLayout, resultLayout, zeroDiagonals);
+      if (failed(compact)) return failure();
+      addBiasAndReplace(rewriter, op, *compact, adaptor.getOutputs()[0],
                         resultLayout);
       return success();
     }
@@ -2062,30 +2471,7 @@ class ConvertTensorExtractLayout
     auto staticIndicesResult = getConstantIntValues(getAsOpFoldResult(indices));
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);
 
-    if (!staticIndicesResult.has_value()) {
-      // mask = createMaskFromDynamicIndices(tensorLayout, adaptor, b);
-      //
-      // The problem is that, although we could construct the right mask
-      // dynamically, then we need to figure out how to convert the masked
-      // ciphertext from its natural layout (zeros in most slots) to the
-      // appropriate scalar layout (perhaps replicated everywhere, depending on
-      // what layout-optimization picks for the result of this op). This
-      // requires, at the very least, finding the index of the first nonzero
-      // slot (which we can determine from the mask using a loop, yikes), and
-      // then rotating the masked ciphertext to put that first nonzero slot in
-      // slot 0, and masking out the rest of the slots so we statically know the
-      // layout.
-      //
-      // As a consequence, we need to perform a rotation by a dynamic index. And
-      // it's not clear how we could determine which rotation keys to generate
-      // to support that.
-      //
-      // Punting until we have a strong need for this use case.
-      //
-      // TODO(#2257): Support dynamic indices in tensor.extract
-      return op.emitError() << "tensor.extract with dynamic cleartext indices "
-                               "not supported yet";
-    }
+    if (failed(checkEncryptedExtract(op))) return failure();
 
     MaskResult maskResult = createMaskFromStaticIndices(
         tensorLayout, staticIndicesResult.value(), adaptor, b);
@@ -2119,6 +2505,55 @@ class ConvertTensorExtractLayout
   }
 };
 
+// Lowers an op that places its secret source into zeros: a zero tensor.pad,
+// or a partial insert into zeros (see isPartialInsertIntoZeros). Such an op
+// moves no data, so a remap from the source layout to the result layout through
+// `sourceToResult` (source index -> result index) lowers it. The zero positions
+// are unmapped in the result layout, and the remap fills them with zeros. The
+// remap is the identity unless a later pass changed the result layout.
+static LogicalResult remapIntoZeros(
+    Operation* op, Value source, const IntegerRelation& sourceToResult,
+    const ContextAwareTypeConverter* typeConverter,
+    ContextAwareConversionPatternRewriter& rewriter) {
+  Value result = op->getResult(0);
+  FailureOr<Attribute> resultLayoutResult =
+      typeConverter->getContextualAttr(result);
+  if (failed(resultLayoutResult)) {
+    return op->emitError() << "result tensor should have been assigned a "
+                              "layout by layout-propagation";
+  }
+  auto sourceLayout =
+      cast<LayoutAttr>(typeConverter->getContextualAttr(source).value());
+  auto resultLayout = cast<LayoutAttr>(resultLayoutResult.value());
+
+  Type resultCiphertextType =
+      typeConverter->convertType(result.getType(), resultLayout);
+  if (!resultCiphertextType) {
+    return op->emitError() << "failed to convert the result type";
+  }
+  if (source.getType() != resultCiphertextType) {
+    return op->emitError() << "unsupported " << op->getName()
+                           << " that changes the number of ciphertexts";
+  }
+
+  // (ct, slot) of the source -> source index -> result index -> (ct, slot)
+  // of the result.
+  IntegerRelation remapRel = sourceLayout.getIntegerRelation();
+  remapRel.inverse();
+  remapRel.compose(sourceToResult);
+  remapRel.compose(resultLayout.getIntegerRelation());
+
+  ImplicitLocOpBuilder b(op->getLoc(), rewriter);
+  Operation* remapAndExtract = remapAndExtractResult(
+      b, source, LayoutAttr::getFromIntegerRelation(op->getContext(), remapRel),
+      cast<RankedTensorType>(resultCiphertextType));
+  setMaterializedAttr(remapAndExtract);
+  setAttributeAssociatedWith(remapAndExtract->getResult(0), kLayoutAttrName,
+                             resultLayout);
+  rewriter.replaceOp(op, remapAndExtract->getResult(0));
+  return success();
+}
+
 class ConvertTensorPad : public ContextAwareOpConversionPattern<tensor::PadOp> {
  public:
   using ContextAwareOpConversionPattern<
@@ -2127,82 +2562,14 @@ class ConvertTensorPad : public ContextAwareOpConversionPattern<tensor::PadOp> {
   LogicalResult secretSourceSecretResult(
       tensor::PadOp op, OpAdaptor adaptor,
       ContextAwareConversionPatternRewriter& rewriter) const {
-    auto sourceTy = dyn_cast<RankedTensorType>(
-        maybeExtractSecretType(op.getSource().getType()));
-    auto resultTy = dyn_cast<RankedTensorType>(
-        maybeExtractSecretType(op.getResult().getType()));
-    if (!sourceTy || !resultTy || !sourceTy.hasStaticShape() ||
-        !resultTy.hasStaticShape()) {
-      return op.emitError("Only static shapes are supported for secret pad");
-    }
-    for (int64_t val : op.getStaticLow()) {
-      if (ShapedType::isDynamic(val)) {
-        return op.emitError(
-            "Only static low padding is supported for secret pad");
-      }
-    }
-    for (int64_t val : op.getStaticHigh()) {
-      if (ShapedType::isDynamic(val)) {
-        return op.emitError(
-            "Only static high padding is supported for secret pad");
-      }
-    }
-
-    FailureOr<Attribute> sourceLayoutResult =
-        getTypeConverter()->getContextualAttr(adaptor.getSource());
-    FailureOr<Attribute> resultLayoutResult =
-        getTypeConverter()->getContextualAttr(op.getResult());
-
-    LayoutAttr sourceLayout = cast<LayoutAttr>(sourceLayoutResult.value());
-    LayoutAttr resultLayout = cast<LayoutAttr>(resultLayoutResult.value());
-
-    // Check if padded value is constant 0.
-    Block& body = op.getRegion().front();
-    auto yieldOp = cast<tensor::YieldOp>(body.getTerminator());
-    Value yieldedValue = yieldOp.getValue();
-
-    if (!matchPattern(yieldedValue, m_AnyZeroFloat()) &&
-        !matchPattern(yieldedValue, m_Zero())) {
-      return op.emitError("Only zero padding is supported");
-    }
-
-    // Check if sourceCTType == targetCTType
-    auto sourceCTType = cast<RankedTensorType>(adaptor.getSource().getType());
-    auto targetCTType =
-        getTypeConverter()->convertType(op.getResultType(), resultLayout);
-    if (!targetCTType) {
-      return op.emitError("failed to convert target type");
-    }
-    if (sourceCTType != targetCTType) {
-      return op.emitError("Unsupported pad that changes number of ciphertexts");
-    }
-
-    SmallVector<int64_t> lowPadding = llvm::to_vector(op.getStaticLow());
-
-    IntegerRelation paddingRel =
-        getPaddingRelation(op.getResultType(), op.getSourceType(), lowPadding);
-
-    IntegerRelation sourceRel = sourceLayout.getIntegerRelation();
-    IntegerRelation resultRel = resultLayout.getIntegerRelation();
-
-    paddingRel.inverse();
-    sourceRel.inverse();
-    sourceRel.compose(paddingRel);
-    sourceRel.compose(resultRel);
-
-    LayoutAttr remapLayoutAttr =
-        LayoutAttr::getFromIntegerRelation(op.getContext(), sourceRel);
-
-    auto resultCiphertextSemanticType = cast<RankedTensorType>(targetCTType);
-    ImplicitLocOpBuilder b(op.getLoc(), rewriter);
-    auto remapAndExtract = remapAndExtractResult(
-        b, adaptor.getSource(), remapLayoutAttr, resultCiphertextSemanticType);
-
-    setMaterializedAttr(remapAndExtract);
-    setAttributeAssociatedWith(remapAndExtract->getResult(0), kLayoutAttrName,
-                               resultLayout);
-    rewriter.replaceOp(op, remapAndExtract->getResult(0));
-    return success();
+    if (failed(checkEncryptedPad(op))) return failure();
+    // getPaddingRelation maps the result index to the source index.
+    IntegerRelation sourceToResult =
+        getPaddingRelation(op.getResultType(), op.getSourceType(),
+                           llvm::to_vector(op.getStaticLow()));
+    sourceToResult.inverse();
+    return remapIntoZeros(op, adaptor.getSource(), sourceToResult,
+                          getTypeConverter(), rewriter);
   }
 
   LogicalResult matchAndRewrite(
@@ -2337,18 +2704,13 @@ class ConvertTensorInsertSlice
              << scalarLayout << " and tensor layout " << destLayout << "\n";
     }
 
-    SmallVector<int64_t> staticStrides =
-        SmallVector<int64_t>(op.getStaticStrides());
-    if (!llvm::all_of(staticStrides, [](int64_t s) { return s == 1; })) {
+    if (!op.hasUnitStride()) {
       return op.emitError()
              << "only unit strides of a tensor.insert_slice are supported";
     }
 
     // Convert the scalar layout to the destination layout subspace.
-    auto maybeSliceLayout = getSliceInsertionRelation(
-        op.getSourceType(), op.getResultType(),
-        SmallVector<int64_t>(op.getStaticOffsets()),
-        SmallVector<int64_t>(op.getStaticSizes()), staticStrides);
+    auto maybeSliceLayout = getInsertionRelation(op);
     if (failed(maybeSliceLayout)) {
       return op.emitError() << "failed to get layout for insert slice";
     }
@@ -2465,6 +2827,14 @@ class ConvertTensorInsertSlice
     }
 
     if (isSecretScalar && !isSecretDest) {
+      if (isPartialInsertIntoZeros(op)) {
+        FailureOr<IntegerRelation> insertion = getInsertionRelation(op);
+        if (failed(insertion)) {
+          return op.emitError() << "failed to get layout for insert slice";
+        }
+        return remapIntoZeros(op, adaptor.getSource(), insertion.value(),
+                              getTypeConverter(), rewriter);
+      }
       return op.emitError() << "dest tensor should have been assigned a layout "
                                "by layout-propagation";
     }
@@ -2813,17 +3183,17 @@ class ConvertTensorExtractSlice
     sourceRel.compose(extractSliceLayout.value());
     sourceRel.compose(resultRel);
 
-    LayoutAttr sliceLayoutAttr =
+    LayoutAttr remapLayoutAttr =
         LayoutAttr::getFromIntegerRelation(ctx, sourceRel);
     auto resultCiphertextSemanticType = cast<RankedTensorType>(
         getTypeConverter()->convertType(op.getResultType(), resultLayout));
     ImplicitLocOpBuilder b(op.getLoc(), rewriter);
     auto remapAndExtract = remapAndExtractResult(
-        b, adaptor.getSource(), sliceLayoutAttr, resultCiphertextSemanticType);
+        b, adaptor.getSource(), remapLayoutAttr, resultCiphertextSemanticType);
 
     setMaterializedAttr(remapAndExtract);
     setAttributeAssociatedWith(remapAndExtract->getResult(0), kLayoutAttrName,
-                               sliceLayoutAttr);
+                               resultLayout);
     rewriter.replaceOp(op, remapAndExtract->getResult(0));
     return success();
   }
@@ -3528,7 +3898,18 @@ struct ConvertToCiphertextSemantics
     MLIRContext* context = &getContext();
     auto* module = getOperation();
 
-    int64_t ctSize = minSlotCount;
+    // There is no pattern for a secret vecmat below, and the generic
+    // conversion would only retype its operands into an invalid op.
+    WalkResult vecmatResult = module->walk([&](linalg::VecmatOp op) {
+      if (!op->hasAttr(kLayoutAttrName)) return WalkResult::advance();
+      op.emitError() << "a secret linalg.vecmat has no ciphertext lowering; "
+                        "linalg-canonicalizations rewrites it as a "
+                        "linalg.matvec";
+      return WalkResult::interrupt();
+    });
+    if (vecmatResult.wasInterrupted()) return signalPassFailure();
+
+    int64_t ctSize = getLayoutSlotCount(module, minSlotCount);
     LayoutMaterializationTypeConverter typeConverter =
         LayoutMaterializationTypeConverter(ctSize);
 
@@ -3552,7 +3933,7 @@ struct ConvertToCiphertextSemantics
                  ConvertLinalgConv2D, ConvertLinalgConv2DNchwFchw,
                  ConvertLinalgConv1DNcwFcw>(typeConverter, context,
                                             unrollKernels);
-    patterns.add<ConvertAssignLayout>(typeConverter, context, minSlotCount,
+    patterns.add<ConvertAssignLayout>(typeConverter, context, ctSize,
                                       codegenStrategy);
 
     ConversionConfig config;
@@ -3580,6 +3961,9 @@ struct ConvertToCiphertextSemantics
       signalPassFailure();
     });
 
+    clearAttrs(module, kGatheredDiagonalsAttr);
+    clearAttrs(module, kGatheredRowsAttr);
+    clearAttrs(module, kGatheredRemainingAttr);
     clearAttrs(module, kLayoutAttrName);
     clearAttrs(module, kMaterializedAttrName);
   }

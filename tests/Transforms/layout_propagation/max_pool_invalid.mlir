@@ -55,17 +55,18 @@ module attributes {backend.cheddar} {
 // -----
 
 module attributes {backend.cheddar} {
-  func.func @too_many_slots(%arg0: !secret.secret<tensor<1x16x8xf32>>) -> !secret.secret<tensor<1x16x4xf32>> {
+  func.func @too_many_slots(%arg0: !secret.secret<tensor<1x16x4096xf32>>) -> !secret.secret<tensor<1x16x2048xf32>> {
     %neg_inf = arith.constant 0xFF800000 : f32
-    %0 = tensor.empty() : tensor<1x16x4xf32>
-    %1 = linalg.fill ins(%neg_inf : f32) outs(%0 : tensor<1x16x4xf32>) -> tensor<1x16x4xf32>
+    %0 = tensor.empty() : tensor<1x16x2048xf32>
+    %1 = linalg.fill ins(%neg_inf : f32) outs(%0 : tensor<1x16x2048xf32>) -> tensor<1x16x2048xf32>
     %window = tensor.empty() : tensor<2xf32>
-    %r = secret.generic(%arg0 : !secret.secret<tensor<1x16x8xf32>>) {
-    ^body(%x: tensor<1x16x8xf32>):
-      // expected-error@below {{requires the input (128 elements) to fit one ciphertext of 64 slots}}
-      %2 = linalg.pooling_ncw_max {dilations = dense<1> : vector<1xi64>, domain_lower = 0.0 : f64, domain_upper = 1.0 : f64, strides = dense<2> : vector<1xi64>} ins(%x, %window : tensor<1x16x8xf32>, tensor<2xf32>) outs(%1 : tensor<1x16x4xf32>) -> tensor<1x16x4xf32>
-      secret.yield %2 : tensor<1x16x4xf32>
-    } -> !secret.secret<tensor<1x16x4xf32>>
-    return %r : !secret.secret<tensor<1x16x4xf32>>
+    %r = secret.generic(%arg0 : !secret.secret<tensor<1x16x4096xf32>>) {
+    ^body(%x: tensor<1x16x4096xf32>):
+      // The input must fit one ciphertext of the largest ring.
+      // expected-error@below {{needs 65536 slots, but the backend's largest ring degree 65536 holds 32768}}
+      %2 = linalg.pooling_ncw_max {dilations = dense<1> : vector<1xi64>, domain_lower = 0.0 : f64, domain_upper = 1.0 : f64, strides = dense<2> : vector<1xi64>} ins(%x, %window : tensor<1x16x4096xf32>, tensor<2xf32>) outs(%1 : tensor<1x16x2048xf32>) -> tensor<1x16x2048xf32>
+      secret.yield %2 : tensor<1x16x2048xf32>
+    } -> !secret.secret<tensor<1x16x2048xf32>>
+    return %r : !secret.secret<tensor<1x16x2048xf32>>
   }
 }

@@ -406,7 +406,8 @@ TEST(EvaluateTest, EvaluateLayoutFor2DConvChwFchwAsSequence) {
   // Test 1: No Interchange
   {
     auto maybeRels = get2dConvChwFchwFilterAsSequence(
-        filterType, dataType, strides, padding, minSlotCount, false);
+        filterType, dataType, strides, padding, minSlotCount, false,
+        /*inputGap=*/1);
     ASSERT_TRUE(succeeded(maybeRels));
     auto rels = maybeRels.value();
     ASSERT_EQ(rels.size(), 4);
@@ -440,7 +441,8 @@ TEST(EvaluateTest, EvaluateLayoutFor2DConvChwFchwAsSequence) {
   // Test 2: With Interchange
   {
     auto maybeRels = get2dConvChwFchwFilterAsSequence(
-        filterType, dataType, strides, padding, minSlotCount, true);
+        filterType, dataType, strides, padding, minSlotCount, true,
+        /*inputGap=*/1);
     ASSERT_TRUE(succeeded(maybeRels));
     auto rels = maybeRels.value();
     ASSERT_EQ(rels.size(), 5);
@@ -646,7 +648,7 @@ void checkConv2dFilterRelationsEquivalence(MLIRContext& context,
 
   auto sequenceRels = get2dConvChwFchwFilterAsSequence(
       filterType, dataType, strides, padding, minSlotCount,
-      /*interchangeRows=*/true);
+      /*interchangeRows=*/true, /*inputGap=*/1);
   ASSERT_TRUE(succeeded(sequenceRels));
   auto rels = sequenceRels.value();
   ASSERT_THAT(rels.size(), Eq(5));

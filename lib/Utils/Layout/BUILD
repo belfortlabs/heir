@@ -63,6 +63,21 @@ cc_library(
 )
 
 cc_library(
+    name = "InsertIntoZeros",
+    srcs = ["InsertIntoZeros.cpp"],
+    hdrs = ["InsertIntoZeros.h"],
+    deps = [
+        ":Utils",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:Analysis",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LinalgDialect",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TensorDialect",
+    ],
+)
+
+cc_library(
     name = "Convolution",
     srcs = ["Convolution.cpp"],
     hdrs = ["Convolution.h"],

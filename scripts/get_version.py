@@ -103,9 +103,7 @@ def main():
   args = parser.parse_args()
 
   package = args.package or get_package_name()
-  version = calculate_version(
-      args.event, args.ref, args.tag, package
-  )
+  version = calculate_version(args.event, args.ref, args.tag, package)
 
   if args.gha:
     # Writing to GITHUB_OUTPUT if available

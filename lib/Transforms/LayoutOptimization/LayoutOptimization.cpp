@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "lib/Analysis/LayoutFoldingAnalysis/LayoutFoldingAnalysis.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretDialect.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtAttributes.h"
@@ -103,11 +104,15 @@ struct LayoutOptimization : impl::LayoutOptimizationBase<LayoutOptimization> {
                            KernelAttr oldKernel, KernelName newKernel);
 
   void runOnOperation() override;
+
+  // The slot count the layouts are packed for.
+  int64_t slotCount;
 };
 
 void LayoutOptimization::runOnOperation() {
   auto* ctx = &getContext();
   IRRewriter builder(ctx);
+  slotCount = getLayoutSlotCount(getOperation(), minSlotCount);
 
   RewritePatternSet preprocessingPatterns(ctx);
   preprocessingPatterns.add<FoldMatvecInputConversionIntoPlaintext>(ctx);
@@ -260,6 +265,11 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
     }
   }
 
+  if (hoistingOptions.empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "Skipping op, no valid hoisting results\n");
+    return UNHOISTABLE;
+  }
+
   // Select the least costly layout conversion to hoist.
   auto* minHoistingCost = llvm::min_element(
       hoistingOptions, [](const HoistOption& a, const HoistOption& b) {
@@ -280,7 +290,10 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
 
   builder.setInsertionPoint(op);
   for (auto i = 0; i < op->getNumOperands(); ++i) {
-    // Convert each operand layout given the result.
+    // Convert each operand layout given the result. A null layout marks an
+    // operand that needs none, like the zeros of a partial insert into zeros.
+    Attribute newInputLayout = minHoistResult.newInputLayouts[i];
+    if (!newInputLayout) continue;
     auto operand = op->getOperand(i);
     auto originalLayout = findAttributeAssociatedWith(operand, kLayoutAttrName);
     if (failed(originalLayout)) {
@@ -292,7 +305,6 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
     LLVM_DEBUG(llvm::dbgs() << "Converting operand " << i << " with layout "
                             << originalLayout.value() << " to layout "
                             << minHoistResult.newInputLayouts[i] << "\n");
-    Attribute newInputLayout = minHoistResult.newInputLayouts[i];
     auto newInput = ConvertLayoutOp::create(
         builder, op->getLoc(), operand, originalLayout.value(), newInputLayout);
     setAttributeAssociatedWith(newInput.getResult(), kLayoutAttrName,
@@ -325,20 +337,8 @@ LayoutOptimization::OpHoistResult LayoutOptimization::hoistOp(
 
 Cost LayoutOptimization::costOfLayoutConversion(Attribute fromLayout,
                                                 Attribute toLayout) {
-  LayoutAttr fromLayoutAttr = dyn_cast<LayoutAttr>(fromLayout);
-  LayoutAttr toLayoutAttr = dyn_cast<LayoutAttr>(toLayout);
-
-  if (!fromLayoutAttr || !toLayoutAttr) {
-    return fromLayout == toLayout ? 0 : 1;
-  }
-
-  if (fromLayoutAttr == toLayoutAttr) {
-    return 0;
-  }
-
-  return computeCostOfLayoutConversion(minSlotCount, fromLayoutAttr,
-                                       toLayoutAttr, vveRandomSeed,
-                                       vveRandomTries);
+  return computeCostOfLayoutConversion(slotCount, fromLayout, toLayout,
+                                       vveRandomSeed, vveRandomTries);
 }
 
 OperandChange LayoutOptimization::costOfChangedOperand(OpOperand& operand,
@@ -565,6 +565,8 @@ std::vector<HoistOption> LayoutOptimization::computeHoistingOptions(
   KernelAttr oldKernel = op->getAttrOfType<KernelAttr>(kKernelAttrName);
   std::vector<HoistOption> options;
   for (HoistResult& result : results) {
+    // hoistOp rejects a result without one layout per operand.
+    if (result.newInputLayouts.size() != op->getNumOperands()) continue;
     HoistOption& option = options.emplace_back();
     option.hoistResult = result;
     option.cost = 0;
@@ -577,8 +579,13 @@ std::vector<HoistOption> LayoutOptimization::computeHoistingOptions(
     DenseMap<std::tuple<Value, Attribute, Attribute>, Cost> operandChangeMap;
     SmallVector<Cost> operandChangeCosts;
     for (auto& operand : op->getOpOperands()) {
-      auto computedCost =
-          costOfChangedOperand(operand, op, outputLayout, solver);
+      // An operand with a null layout needs none, and costs nothing.
+      if (!result.newInputLayouts[operand.getOperandNumber()]) continue;
+      // The hoister's layout for this operand, which differs from the result
+      // layout for ops that change shape (collapse_shape, pad, matvec, ...).
+      auto computedCost = costOfChangedOperand(
+          operand, op, result.newInputLayouts[operand.getOperandNumber()],
+          solver);
       operandChangeCosts.push_back(computedCost.cost);
       auto key = std::make_tuple(operand.get(), computedCost.fromLayout,
                                  computedCost.toLayout);

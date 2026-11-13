@@ -36,12 +36,11 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          GITHUB_REF_NAME: ${{ github.ref }}
           TAG_NAME: ${{ github.event.release.tag_name || inputs.tag_name || '' }}
         run: |
           python scripts/get_version.py \
             --event "$EVENT_NAME" \
-            --ref "$GITHUB_REF_NAME" \
+            --ref "$GITHUB_REF" \
             --tag "$TAG_NAME" \
             --gha
 

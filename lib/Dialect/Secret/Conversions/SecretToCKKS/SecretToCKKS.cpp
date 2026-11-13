@@ -1,6 +1,5 @@
 #include "lib/Dialect/Secret/Conversions/SecretToCKKS/SecretToCKKS.h"
 
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <optional>
@@ -345,17 +344,17 @@ struct LinearTransformOpConversion
       }
     }
 
-    // Handle mgmt attrs
+    // The new op's attributes are read as its result's, so only the generic's
+    // result attrs carry over. Its operand attrs, e.g. the operand's mgmt.mgmt
+    // one level higher, would be misread as the result's.
     convertArrayOfDicts(op.getAllResultAttrsAttr(), attrsToPreserve);
-    convertArrayOfDicts(op.getAllOperandAttrsAttr(), attrsToPreserve);
     DenseSet<StringRef> seenNames;
     SmallVector<NamedAttribute> dedupedAttrsToPreserve;
-    for (auto attr : llvm::reverse(attrsToPreserve)) {
+    for (auto attr : attrsToPreserve) {
       if (seenNames.insert(attr.getName().getValue()).second) {
         dedupedAttrsToPreserve.push_back(attr);
       }
     }
-    std::reverse(dedupedAttrsToPreserve.begin(), dedupedAttrsToPreserve.end());
     auto newLtOp = kernel::LinearTransformOp::create(
         rewriter, ltOp.getLoc(), resultTypes, inputs, dedupedAttrsToPreserve);
 

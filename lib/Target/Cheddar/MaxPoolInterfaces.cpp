@@ -9,6 +9,7 @@
 #include "lib/Dialect/Kernel/IR/KernelOps.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtAttributes.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
+#include "lib/Target/Cheddar/CyclopsPlanner.h"
 #include "lib/Target/Cheddar/MaxPoolPlan.h"
 #include "lib/Utils/MaxPoolUtils.h"
 #include "llvm/include/llvm/ADT/Twine.h"              // from @llvm-project
@@ -27,9 +28,23 @@ namespace cheddar {
 
 namespace {
 
+// The level model needs Cyclops' planner library, which heir-opt loads at run
+// time. The interfaces cannot report a diagnostic, so a missing library stops
+// heir-opt with a message instead of a wrong level plan.
+void requirePlanner() {
+  const std::string& error = getCyclopsPlanner().maxPoolError;
+  if (!error.empty())
+    llvm::report_fatal_error(
+        llvm::Twine("the level plan of a max pool needs libcyclops_planner "
+                    "with the MaxPool functions on the library path: ") +
+            error,
+        /*gen_crash_diag=*/false);
+}
+
 // The verifier of kernel.max_pool accepts only shapes that the planner
 // accepts, so a rejection here is a disagreement between the two.
 MaxPoolRequirements getRequirements(kernel::MaxPoolOp op) {
+  requirePlanner();
   std::string error;
   std::optional<MaxPoolRequirements> requirements = getMaxPoolRequirements(
       {static_cast<int64_t>(op.getNumSlots()),
@@ -86,6 +101,7 @@ struct LinalgMaxPoolReducesLevelModel
     auto layout = op->getAttrOfType<tensor_ext::LayoutAttr>(
         tensor_ext::TensorExtDialect::kLayoutAttrName);
     if (failed(pool) || !layout) return std::nullopt;
+    requirePlanner();
     presburger::IntegerRelation relation = layout.getIntegerRelation();
     std::optional<int64_t> lastSlot = relation.getConstantBound64(
         presburger::BoundType::UB,

@@ -19,8 +19,9 @@
 #include "llvm/include/llvm/Support/raw_ostream.h"  // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/PresburgerSpace.h"  // from @llvm-project
-#include "mlir/include/mlir/IR/Attributes.h"  // from @llvm-project
-#include "mlir/include/mlir/Support/LLVM.h"   // from @llvm-project
+#include "mlir/include/mlir/IR/Attributes.h"         // from @llvm-project
+#include "mlir/include/mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/include/mlir/Support/LLVM.h"          // from @llvm-project
 
 #define DEBUG_TYPE "layout-conversion-cost"
 
@@ -86,6 +87,9 @@ Cost computeCostOfLayoutConversion(int64_t numCiphertexts, int64_t minSlotCount,
     return 0;
   }
 
+  assert(fromLayout.getIntegerRelation().getNumDomainVars() ==
+             toLayout.getIntegerRelation().getNumDomainVars() &&
+         "a layout conversion must keep the tensor's rank");
   std::shared_ptr<IntegerRelation> composedLayout =
       fromLayout.getIntegerRelation().clone();
   composedLayout->inverse();
@@ -137,11 +141,18 @@ Cost computeCostOfLayoutConversion(int64_t minSlotCount, Attribute fromLayout,
     return 0;
   }
 
-  LayoutAttr fromLayoutAttr = dyn_cast<LayoutAttr>(fromLayout);
-  LayoutAttr toLayoutAttr = dyn_cast<LayoutAttr>(toLayout);
+  // A strided conv records its result layout as a list of steps; cost the
+  // conversion from (or to) the layout the list composes to.
+  auto asLayout = [](Attribute attr) -> LayoutAttr {
+    if (auto arrayAttr = dyn_cast<ArrayAttr>(attr))
+      return LayoutAttr::composeLayouts(arrayAttr, attr.getContext());
+    return dyn_cast<LayoutAttr>(attr);
+  };
+  LayoutAttr fromLayoutAttr = asLayout(fromLayout);
+  LayoutAttr toLayoutAttr = asLayout(toLayout);
 
   if (!fromLayoutAttr || !toLayoutAttr) {
-    return fromLayout == toLayout ? 0 : 1;
+    return 1;
   }
 
   // Combine random seed with hashes over from- and to-layout, guaranteeing the

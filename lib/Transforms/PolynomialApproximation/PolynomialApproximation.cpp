@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <type_traits>
 #include <utility>
 
 #include "lib/Analysis/SecretnessAnalysis/SecretnessAnalysis.h"
@@ -12,6 +14,7 @@
 #include "lib/Dialect/Polynomial/IR/PolynomialAttributes.h"
 #include "lib/Dialect/Polynomial/IR/PolynomialOps.h"
 #include "lib/Dialect/Polynomial/IR/PolynomialTypes.h"
+#include "lib/Transforms/LoweringHistory/LoweringHistory.h"
 #include "lib/Utils/Approximation/CaratheodoryFejer.h"
 #include "lib/Utils/Polynomial/Polynomial.h"
 #include "lib/Utils/Utils.h"
@@ -26,6 +29,7 @@
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
+#include "mlir/include/mlir/IR/Diagnostics.h"            // from @llvm-project
 #include "mlir/include/mlir/IR/MLIRContext.h"            // from @llvm-project
 #include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
@@ -291,7 +295,11 @@ struct ConvertUnaryOp : public OpRewritePattern<OpTy> {
     TypedChebyshevPolynomialAttr polyAttr =
         TypedChebyshevPolynomialAttr::get(polyType, poly);
     auto evalOp =
-        rewriter.replaceOpWithNewOp<EvalOp>(op, polyAttr, op.getOperand());
+        EvalOp::create(rewriter,
+                       getLoweringLocation(op, "polynomial-approximation",
+                                           EvalOp::getOperationName()),
+                       polyAttr, op.getOperand());
+    rewriter.replaceOp(op, evalOp.getResult());
     // These attributes need to be preserved when the polynomial is in the
     // Chebyshev basis, so that later passes can apply domain rescaling
     // properly.
@@ -424,7 +432,11 @@ struct ConvertBinaryConstOp : public OpRewritePattern<OpTy> {
     TypedChebyshevPolynomialAttr polyAttr =
         TypedChebyshevPolynomialAttr::get(polyType, poly);
     auto evalOp =
-        rewriter.replaceOpWithNewOp<EvalOp>(op, polyAttr, nonConstOperand);
+        EvalOp::create(rewriter,
+                       getLoweringLocation(op, "polynomial-approximation",
+                                           EvalOp::getOperationName()),
+                       polyAttr, nonConstOperand);
+    rewriter.replaceOp(op, evalOp.getResult());
     // These attributes need to be preserved when the polynomial is in the
     // Chebyshev basis, so that later passes can apply domain rescaling
     // properly.
@@ -636,6 +648,109 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
   DataFlowSolver* solver;
 };
 
+// clamp(x, lo, hi) = lo + relu(x - lo) - relu(x - hi) for lo < hi, matched as
+// either min(max(x, lo), hi) or max(min(x, hi), lo) with constant bounds (e.g.
+// ReLU6 = clamp(x, 0, 6), hard-sigmoid = clamp(x / 6 + 1/2, 0, 1)). Both ReLUs
+// read x, so they are evaluated in parallel and the clamp costs the depth of a
+// single ReLU, and each goes through the ReLU approximation (including
+// use-composite-relu), instead of two chained approximations of the min and
+// the max.
+//
+// The inner op's domain is the range of x (the outer op's domain describes the
+// already clamped-from-one-side value), so each ReLU gets that domain shifted
+// by its bound. Without a domain the default [-1, 1] is shifted the same way.
+// A ReLU whose shifted domain is entirely on one side of zero is zero or the
+// identity there, so it is not approximated; without calibrated domains this
+// drops the upper bound of ReLU6, which lies outside [-1, 1]. Only a clamp of
+// a secret x is split: a plaintext clamp stays exact.
+template <typename OuterOp, typename InnerOp>
+struct ClampViaTwoRelus : public OpRewritePattern<OuterOp> {
+  ClampViaTwoRelus(MLIRContext* context, DataFlowSolver* solver)
+      : OpRewritePattern<OuterOp>(context), solver(solver) {}
+
+  LogicalResult matchAndRewrite(OuterOp op,
+                                PatternRewriter& rewriter) const override {
+    // Split a binary op into its non-constant operand and constant value.
+    auto splitConstant =
+        [](Operation* binOp) -> std::optional<std::pair<Value, APFloat>> {
+      for (int i = 0; i < 2; ++i) {
+        FailureOr<APFloat> c = getSingleValueOrSplat(binOp->getOperand(i));
+        if (succeeded(c)) return std::make_pair(binOp->getOperand(1 - i), *c);
+      }
+      return std::nullopt;
+    };
+
+    auto outer = splitConstant(op);
+    if (!outer) return rewriter.notifyMatchFailure(op, "no constant bound");
+    auto innerOp = outer->first.template getDefiningOp<InnerOp>();
+    if (!innerOp) return rewriter.notifyMatchFailure(op, "not a clamp");
+    // If the inner op has other users, it stays and is approximated anyway, so
+    // the split would add two ReLUs to it instead of one min/max.
+    if (!innerOp->hasOneUse())
+      return rewriter.notifyMatchFailure(op, "inner op has other users");
+    auto inner = splitConstant(innerOp);
+    if (!inner) return rewriter.notifyMatchFailure(op, "no constant bound");
+    if (!mlir::heir::isSecret(inner->first, solver))
+      return rewriter.notifyMatchFailure(op, "operand is not secret");
+
+    constexpr bool kMaxInside = std::is_same_v<InnerOp, arith::MaximumFOp>;
+    Value x = inner->first;
+    APFloat lo = kMaxInside ? inner->second : outer->second;
+    APFloat hi = kMaxInside ? outer->second : inner->second;
+    double loValue = lo.convertToDouble();
+    double hiValue = hi.convertToDouble();
+    if (!(loValue < hiValue))
+      return rewriter.notifyMatchFailure(op, "empty clamp interval");
+
+    double domainLower = kDefaultDomainLower;
+    double domainUpper = kDefaultDomainUpper;
+    if (auto a = dyn_cast_or_null<FloatAttr>(innerOp->getAttr("domain_lower")))
+      domainLower = a.getValueAsDouble();
+    if (auto a = dyn_cast_or_null<FloatAttr>(innerOp->getAttr("domain_upper")))
+      domainUpper = a.getValueAsDouble();
+
+    Location loc = op.getLoc();
+    Type ty = op.getType();
+    auto constant = [&](const APFloat& value) -> Value {
+      return arith::ConstantOp::create(rewriter, loc, ty,
+                                       getScalarOrDenseAttr(ty, value));
+    };
+    // relu(x - bound), with the domain of x shifted by -bound, or a null value
+    // if that domain is entirely negative.
+    auto relu = [&](const APFloat& bound, double boundValue) -> Value {
+      double lower = domainLower - boundValue;
+      double upper = domainUpper - boundValue;
+      if (upper <= 0) return Value();
+      Value shifted = x;
+      if (!bound.isZero())
+        shifted = arith::SubFOp::create(rewriter, loc, x, constant(bound));
+      if (lower >= 0) return shifted;
+      auto zero = APFloat::getZero(bound.getSemantics());
+      auto maxOp =
+          arith::MaximumFOp::create(rewriter, loc, shifted, constant(zero));
+      maxOp->setAttr("domain_lower", rewriter.getF64FloatAttr(lower));
+      maxOp->setAttr("domain_upper", rewriter.getF64FloatAttr(upper));
+      if (Attribute degree = innerOp->getAttr("degree"))
+        maxOp->setAttr("degree", degree);
+      return maxOp.getResult();
+    };
+
+    // relu(x - hi) is nonzero only where relu(x - lo) is.
+    Value result = relu(lo, loValue);
+    if (Value reluHi = relu(hi, hiValue))
+      result = arith::SubFOp::create(rewriter, loc, result, reluHi);
+    if (!result)
+      result = constant(lo);
+    else if (!lo.isZero())
+      result = arith::AddFOp::create(rewriter, loc, result, constant(lo));
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+
+ private:
+  DataFlowSolver* solver;
+};
+
 // Use a square and multiply algorithm for x^n where n is a constant.
 struct SquareAndMultiplyForPowOp : public OpRewritePattern<math::FPowIOp> {
   SquareAndMultiplyForPowOp(MLIRContext* context)
@@ -683,6 +798,24 @@ struct PolynomialApproximation
 
   void runOnOperation() override {
     MLIRContext* context = &getContext();
+
+    // Split secret clamps into ReLUs before anything approximates their
+    // min/max halves. The split has its own secretness analysis, so the main
+    // analysis below covers the values that the split creates.
+    {
+      DataFlowSolver clampSolver;
+      dataflow::loadBaselineAnalyses(clampSolver);
+      clampSolver.load<SecretnessAnalysis>();
+      if (failed(clampSolver.initializeAndRun(getOperation()))) {
+        getOperation()->emitOpError() << "Failed to run SecretnessAnalysis.\n";
+        return signalPassFailure();
+      }
+      RewritePatternSet clampPatterns(context);
+      clampPatterns.add<ClampViaTwoRelus<arith::MinimumFOp, arith::MaximumFOp>,
+                        ClampViaTwoRelus<arith::MaximumFOp, arith::MinimumFOp>>(
+          context, &clampSolver);
+      (void)applyPatternsGreedily(getOperation(), std::move(clampPatterns));
+    }
 
     DataFlowSolver solver;
     dataflow::loadBaselineAnalyses(solver);
@@ -782,7 +915,18 @@ struct PolynomialApproximation
 
     // TODO (#1221): Investigate whether folding (default: on) can be skipped
     // here.
-    (void)applyPatternsGreedily(getOperation(), std::move(patterns));
+    // A pattern can diagnose invalid input and return match failure. The
+    // greedy driver may still converge successfully, so propagate emitted
+    // errors as well as driver failures to the pass manager. Ordinary
+    // notifyMatchFailure calls do not emit errors and must remain benign.
+    bool emittedError = false;
+    ScopedDiagnosticHandler diagnostics(&getContext(), [&](Diagnostic& diag) {
+      emittedError |= diag.getSeverity() == DiagnosticSeverity::Error;
+      return failure();
+    });
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))) ||
+        emittedError)
+      signalPassFailure();
   }
 };
 

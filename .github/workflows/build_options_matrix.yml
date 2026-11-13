@@ -23,8 +23,8 @@ jobs:
     runs-on:
       labels: ubuntu-latest
     env:
-      BUILDBUDDY_API_KEY: ${{ github.repository == 'google/heir' && secrets.BUILDBUDDY_API_KEY || 'SEVzwPt2S7PHhY1OxD3u' }}
-      BAZEL_CONFIG_FLAG: ${{ github.repository == 'google/heir' && '--config=ci --config=remote' || '--config=ci' }}
+      BUILDBUDDY_API_KEY: ${{ (github.repository == 'google/heir' || github.repository == 'belfortlabs/heir') && secrets.BUILDBUDDY_API_KEY || 'SEVzwPt2S7PHhY1OxD3u' }}
+      BAZEL_CONFIG_FLAG: ${{ (github.repository == 'google/heir' || github.repository == 'belfortlabs/heir') && '--config=ci --config=remote' || '--config=ci' }}
       # Conditionally apply filters unless compilation_mode is 'opt'
       BUILD_TAG_FILTER: ${{ matrix.compilation_mode != 'opt' && '--build_tag_filters=-nofastbuild' || '' }}
       TEST_TAG_FILTER: ${{ matrix.compilation_mode != 'opt' && '--test_tag_filters=-nofastbuild' || '' }}

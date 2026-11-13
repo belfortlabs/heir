@@ -17,6 +17,9 @@ class CompilationTarget<string name> {
   // Whether the backend evaluates a whole max pooling layer in one call, via
   // kernel.max_pool.
   int has_kernel_max_pool = 0;
+  // The largest ring degree N the backend supports. HEIR packs at most N/2
+  // slots per ciphertext. 0 means no limit.
+  int max_ring_degree = 0;
 }
 
 #endif // LIB_TARGET_COMPILATIONTARGET_HEIRTARGET_TD_

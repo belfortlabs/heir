@@ -12,6 +12,7 @@
 
 #include "lib/Analysis/SecretnessAnalysis/SecretnessAnalysis.h"
 #include "lib/Dialect/HEIRInterfaces.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretDialect.h"
 #include "lib/Dialect/Secret/IR/SecretOps.h"
@@ -26,16 +27,20 @@
 #include "lib/Utils/AttributeUtils.h"
 #include "lib/Utils/Layout/Convolution.h"
 #include "lib/Utils/Layout/Hoisting.h"
+#include "lib/Utils/Layout/InsertIntoZeros.h"
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/Layout/Utils.h"
 #include "lib/Utils/MaxPoolUtils.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"               // from @llvm-project
+#include "llvm/include/llvm/ADT/STLFunctionalExtras.h"     // from @llvm-project
+#include "llvm/include/llvm/ADT/ScopeExit.h"               // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVectorExtras.h"       // from @llvm-project
 #include "llvm/include/llvm/ADT/TypeSwitch.h"              // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"               // from @llvm-project
 #include "llvm/include/llvm/Support/ErrorHandling.h"       // from @llvm-project
 #include "llvm/include/llvm/Support/FormatVariadic.h"      // from @llvm-project
+#include "llvm/include/llvm/Support/MathExtras.h"          // from @llvm-project
 #include "mlir/include/mlir/Analysis/DataFlow/Utils.h"     // from @llvm-project
 #include "mlir/include/mlir/Analysis/DataFlowFramework.h"  // from @llvm-project
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
@@ -52,11 +57,12 @@
 #include "mlir/include/mlir/IR/AffineMap.h"              // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"      // from @llvm-project
+#include "mlir/include/mlir/IR/BuiltinOps.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/Diagnostics.h"            // from @llvm-project
-#include "mlir/include/mlir/IR/Matchers.h"               // from @llvm-project
 #include "mlir/include/mlir/IR/Operation.h"              // from @llvm-project
+#include "mlir/include/mlir/IR/OwningOpRef.h"            // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/Types.h"                  // from @llvm-project
 #include "mlir/include/mlir/IR/Value.h"                  // from @llvm-project
@@ -165,7 +171,9 @@ struct FoldedConvPadding {
 // keeps the unfolded path.
 std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
     Value data, RankedTensorType matrixDataType, LayoutAttr dataLayout,
-    int64_t ciphertextSize) {
+    int64_t ciphertextSize,
+    llvm::function_ref<IntegerRelation(RankedTensorType)> unpaddedLayout =
+        nullptr) {
   int64_t rank = matrixDataType.getRank();
   if ((rank != 3 && rank != 4) || matrixDataType.getDimSize(0) != 1) {
     return std::nullopt;
@@ -201,9 +209,7 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
   if (!padOp) return std::nullopt;
 
   Value padValue = padOp.getConstantPaddingValue();
-  bool zeroPad = padValue && (matchPattern(padValue, m_AnyZeroFloat()) ||
-                              matchPattern(padValue, m_Zero()));
-  if (!zeroPad) return std::nullopt;
+  if (!padValue || !isZeroScalarOrSplat(padValue)) return std::nullopt;
 
   // A conv's `padding` parameter is a single symmetric value shared by every
   // spatial dim, so only a pad that is symmetric, equal across the spatial
@@ -229,12 +235,14 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
       foldConvSpatialPadding(matrixDataType, p);
   if (!matrixOperand) return std::nullopt;
 
-  // The layout we expect on the padded value: the unpadded row-major layout
-  // with each spatial index shifted by `p`. If the actual layout is anything
-  // else (a conversion intervened, a non-row-major producer, reshapes that did
-  // not cancel) do not fold.
+  // The layout we expect on the padded value: the unpadded layout (row-major
+  // unless `unpaddedLayout` says otherwise) with each spatial index shifted by
+  // `p`. If the actual layout is anything else (a conversion intervened, a
+  // different producer layout, reshapes that did not cancel) do not fold.
   IntegerRelation expected =
-      getRowMajorLayoutRelation(matrixOperand->dataType, ciphertextSize);
+      unpaddedLayout
+          ? unpaddedLayout(matrixOperand->dataType)
+          : getRowMajorLayoutRelation(matrixOperand->dataType, ciphertextSize);
   unsigned domainOffset =
       expected.getVarKindOffset(presburger::VarKind::Domain);
   for (int64_t dim = 2; dim < rank; ++dim) {
@@ -244,7 +252,7 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
     LLVM_DEBUG(llvm::dbgs()
                << "conv found a pad of " << p
                << " but the operand layout does not match the shifted "
-                  "unpadded row-major layout; not folding\n");
+                  "unpadded layout; not folding\n");
     return std::nullopt;
   }
 
@@ -253,17 +261,36 @@ std::optional<FoldedConvPadding> tryFoldPadIntoConvPadding(
   return FoldedConvPadding{*matrixOperand, expected};
 }
 
-// Return a copy of the kernel info associated with the value and update the
-// result shape to the new result shape. If the value does not have a kernel
-// info, return an empty Attribute.
-
-Attribute cloneKernelInfoWithResultShape(Value value,
-                                         ArrayRef<int64_t> resultShape) {
+// Return a copy of the kernel info associated with the value, with the new
+// result shape. If the value does not have a kernel info, return an empty
+// Attribute. Use it only for a result whose layout is the value's layout
+// (reshaped, sliced or padded): the gap factor describes that layout, so a
+// result with a new layout takes makeUngappedKernelInfoAttr instead.
+Attribute layoutPreservingKernelInfo(Value value,
+                                     ArrayRef<int64_t> resultShape) {
   auto kernelInfo = findAttributeAssociatedWith(value, kKernelInfoAttrName);
   if (succeeded(kernelInfo)) {
     auto info = getKernelInfo(kernelInfo.value()).value();
     info.resultShape = llvm::to_vector(resultShape);
     return makeKernelInfoAttr(value.getContext(), info);
+  }
+  return Attribute{};
+}
+
+Attribute makeUngappedKernelInfoAttr(MLIRContext* ctx,
+                                     ArrayRef<int64_t> resultShape) {
+  return makeKernelInfoAttr(
+      ctx,
+      KernelInfo{.resultShape = llvm::to_vector(resultShape), .gapFactor = 1});
+}
+
+// Return the kernel info of the first operand that has one, unchanged, for an
+// op whose results keep that operand's layout. If no operand has one, return
+// an empty Attribute.
+Attribute findOperandKernelInfo(Operation* op) {
+  for (Value operand : op->getOperands()) {
+    auto info = findAttributeAssociatedWith(operand, kKernelInfoAttrName);
+    if (succeeded(info)) return info.value();
   }
   return Attribute{};
 }
@@ -301,6 +328,7 @@ struct LayoutPropagation : impl::LayoutPropagationBase<LayoutPropagation> {
   LogicalResult visitOperation(tensor::ExtractOp op);
   LogicalResult visitOperation(tensor::InsertOp op);
   LogicalResult visitOperation(tensor::InsertSliceOp op);
+  LogicalResult visitPartialInsertIntoZeros(tensor::InsertSliceOp op);
   LogicalResult visitOperation(tensor::ExtractSliceOp op);
   LogicalResult visitOperation(tensor::PadOp op);
 
@@ -354,7 +382,19 @@ struct LayoutPropagation : impl::LayoutPropagationBase<LayoutPropagation> {
 
   // Add an op attribute denoting the layouts of the op results. Assumes the
   // assignedLayouts map contains the layout for the result SSA values already.
+  // Without `kernelInfoAttr`, each tensor result gets an ungapped kernel info:
+  // an op that keeps an operand's layout must pass that operand's kernel info.
   void setResultLayoutAttr(Operation* op, Attribute kernelInfoAttr = {});
+
+  // Fails when `op`'s kernel, whose packing spans `slots` values per
+  // ciphertext, needs more than minSlotCount slots. The failure is silent and
+  // records the power of two that fits in requiredSlotCount, for
+  // runOnOperation to retry with, unless `slots` exceeds the slots of the
+  // backend's largest ring, which is a compile error.
+  LogicalResult requireSlots(Operation* op, int64_t slots);
+
+  // Assigns layouts to the whole IR, packing them for minSlotCount slots.
+  LogicalResult propagate();
 
   void runOnOperation() override;
 
@@ -378,6 +418,11 @@ struct LayoutPropagation : impl::LayoutPropagationBase<LayoutPropagation> {
 
   DenseMap<Value, Attribute> assignedLayouts;
   DataFlowSolver* solver;
+  // The backend's largest ring degree, and the slots its ciphertexts hold. 0
+  // when the module names no backend or the backend sets no limit.
+  int64_t maxRingDegree = 0;
+  int64_t maxSlotCount = 0;
+  int64_t requiredSlotCount = 0;
 };
 
 FailureOr<AssignLayoutOp> LayoutPropagation::assignDefaultLayoutForOpOperand(
@@ -532,10 +577,7 @@ LogicalResult LayoutPropagation::visitOperation(func::FuncOp op) {
             cast<SecretType>(arg.getType()).getValueType())) {
       setAttributeAssociatedWith(
           arg, kKernelInfoAttrName,
-          makeKernelInfoAttr(
-              arg.getContext(),
-              KernelInfo{.resultShape = llvm::to_vector(tensorType.getShape()),
-                         .gapFactor = 1}));
+          makeUngappedKernelInfoAttr(arg.getContext(), tensorType.getShape()));
     }
   }
 
@@ -640,7 +682,7 @@ LogicalResult LayoutPropagation::visitOperation(CollapseShapeOp op) {
   LayoutAttr resultLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, relation);
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(tensor, op.getResultType().getShape());
+      layoutPreservingKernelInfo(tensor, op.getResultType().getShape());
 
   assignedLayouts.insert({op.getResult(), resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -667,7 +709,7 @@ LogicalResult LayoutPropagation::visitOperation(ExpandShapeOp op) {
   LayoutAttr resultLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, expandedRelation);
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(tensor, op.getResultType().getShape());
+      layoutPreservingKernelInfo(tensor, op.getResultType().getShape());
 
   assignedLayouts.insert({op.getResult(), resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -687,18 +729,21 @@ LogicalResult LayoutPropagation::visitOperation(VecmatOp op) {
   MLIRContext* ctx = &getContext();
   mlir::IRRewriter builder(ctx);
 
-  if (vecType.getDimSize(0) > minSlotCount) {
-    return op->emitError() << "Vector must fit into a single ciphertext";
+  // Each ciphertext holds the whole vector, or a whole diagonal of the matrix.
+  ArrayRef<int64_t> matrixShape =
+      cast<RankedTensorType>(matrix.getType()).getShape();
+  if (failed(requireSlots(op, std::max(matrixShape[0], matrixShape[1])))) {
+    return failure();
   }
 
   // Assign a row major layout to the input vec.
   LayoutAttr vecLayout = getComposedLayoutAttr(vec);
   if (!isRelationRowMajor(vecType, minSlotCount,
                           vecLayout.getIntegerRelation())) {
-    // Insert a layout conversion op to make the vec layout per-row
+    // Insert a layout conversion op to make the vec layout row major
     auto [toReplace, newVecLayoutAttr] =
         convertToLayout(ctx, builder, op, vec, vecLayout,
-                        getPerRowLayoutRelation(vecType, minSlotCount));
+                        getRowMajorLayoutRelation(vecType, minSlotCount));
     debugAssignLayout(toReplace, newVecLayoutAttr);
     assignedLayouts.insert({toReplace, newVecLayoutAttr});
     vec = toReplace;
@@ -729,7 +774,7 @@ LogicalResult LayoutPropagation::visitOperation(VecmatOp op) {
     matrix = toReplace;
   }
 
-  // The output has the same per-row layout as the input matrix.
+  // The output is a row-major vector, so it is not gapped.
   auto result = vecmatOp->getResult(0);
   RankedTensorType outputType = cast<RankedTensorType>(result.getType());
   IntegerRelation outputLayoutResult =
@@ -737,7 +782,7 @@ LogicalResult LayoutPropagation::visitOperation(VecmatOp op) {
   LayoutAttr outputLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, outputLayoutResult);
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(vec, outputType.getShape());
+      makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
   assignedLayouts.insert({result, outputLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -760,21 +805,45 @@ LogicalResult LayoutPropagation::visitOperation(BroadcastOp op) {
 
   // If the input is in cyclic layout and the result can be packed in a
   // cyclic layout, the result is assigned the cyclic layout (which
-  // lowers to zero-cost). Otherwise, assign the row-major default layout.
+  // lowers to zero-cost). Otherwise, if a user combines the result with a
+  // secret value of the same type that already has a layout (e.g., a
+  // squeeze-excite scale multiplied into a feature map), use that layout so
+  // the user needs no conversion. Layouts are assigned in program order, so
+  // this applies only when the sibling is defined before the broadcast;
+  // otherwise, assign the row-major default layout. A new layout is not
+  // gapped. A borrowed one takes the sibling's kernel info too, because the
+  // elementwise user inherits kernel info from its first operand, which in
+  // torch's operand order is the broadcast.
   LayoutAttr resultLayoutAttr;
+  Attribute kernelInfoAttr =
+      makeUngappedKernelInfoAttr(ctx, resultType.getShape());
   IntegerRelation cyclicResultRel =
       getCyclicLayoutRelation(resultType, minSlotCount);
+  Value sibling;
+  for (Operation* user : result.getUsers()) {
+    for (Value operand : user->getOperands()) {
+      if (operand != result && operand.getType() == resultType &&
+          assignedLayouts.contains(operand) && isSecret(operand, solver)) {
+        sibling = operand;
+        break;
+      }
+    }
+    if (sibling) break;
+  }
   if (isRelationCyclic(inputType, minSlotCount,
                        inputLayout.getIntegerRelation()) &&
       isRelationCyclic(resultType, minSlotCount, cyclicResultRel)) {
     resultLayoutAttr = LayoutAttr::getFromIntegerRelation(ctx, cyclicResultRel);
+  } else if (sibling) {
+    resultLayoutAttr = getComposedLayoutAttr(sibling);
+    auto siblingKernelInfo =
+        findAttributeAssociatedWith(sibling, kKernelInfoAttrName);
+    if (succeeded(siblingKernelInfo)) kernelInfoAttr = *siblingKernelInfo;
   } else {
     resultLayoutAttr = LayoutAttr::getFromIntegerRelation(
         ctx, getRowMajorLayoutRelation(resultType, minSlotCount));
   }
 
-  Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(input, resultType.getShape());
   assignedLayouts.insert({result, resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
   debugAssignLayout(result, resultLayoutAttr);
@@ -798,7 +867,7 @@ LogicalResult LayoutPropagation::visitOperation(TransposeOp op) {
   LayoutAttr resultLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, relation);
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(input, resultType.getShape());
+      layoutPreservingKernelInfo(input, resultType.getShape());
   assignedLayouts.insert({result, resultLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
   debugAssignLayout(result, resultLayoutAttr);
@@ -812,6 +881,12 @@ LogicalResult LayoutPropagation::visitOperation(MatvecOp op) {
 
   // TODO(#1597): a layout optimizer should really be selecting the diagonal
   // layout instead of this pass.
+
+  // Each ciphertext holds a whole diagonal of the matrix.
+  if (failed(requireSlots(
+          op, std::max(matrixType.getDimSize(0), matrixType.getDimSize(1))))) {
+    return failure();
+  }
 
   LayoutAttr matrixLayout = getComposedLayoutAttr(matrix);
   // The Halevi-Shoup kernel (all we support at this time) requires one
@@ -856,8 +931,10 @@ LogicalResult LayoutPropagation::visitOperation(MatvecOp op) {
     return failure();
   }
   LayoutAttr resultLayout = outputLayoutResult.value();
+  // The matrix is usually a plaintext without kernel info, and the vector's may
+  // describe a gapped layout the kernel does not produce.
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(matrix, outputType.getShape());
+      makeUngappedKernelInfoAttr(&getContext(), outputType.getShape());
 
   assignedLayouts.insert({result, resultLayout});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -879,9 +956,9 @@ LogicalResult LayoutPropagation::visitOperation(DotOp op) {
   if (failed(layout)) {
     return failure();
   }
-  Attribute kernelInfoAttr = cloneKernelInfoWithResultShape(
-      op.getInputs().front(),
-      cast<RankedTensorType>(result.getType()).getShape());
+  // The result has the default layout, so it is not gapped.
+  Attribute kernelInfoAttr = makeUngappedKernelInfoAttr(
+      &getContext(), cast<RankedTensorType>(result.getType()).getShape());
   assignedLayouts.insert({result, layout.value()});
   setResultLayoutAttr(op, kernelInfoAttr);
   debugAssignLayout(result, layout.value());
@@ -936,11 +1013,8 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DOp op) {
   auto filterType = cast<RankedTensorType>(filter.getType());
 
   // Flattened data must fit into the ciphertext size.
-  if (dataType.getNumElements() > minSlotCount) {
-    return op->emitOpError()
-           << "Flattened data must fit into a single ciphertext, but got "
-           << dataType.getNumElements() << " elements and ciphertext size is "
-           << minSlotCount;
+  if (failed(requireSlots(op, dataType.getNumElements()))) {
+    return failure();
   }
 
   MLIRContext* ctx = &getContext();
@@ -991,8 +1065,9 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DOp op) {
     return failure();
   }
   LayoutAttr resultLayout = outputLayoutResult.value();
+  // The kernel reads row-major data, so the result is not gapped.
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(data, outputType.getShape());
+      makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
   assignedLayouts.insert({result, resultLayout});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -1011,11 +1086,8 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DOp op) {
   auto filterType = cast<RankedTensorType>(filter.getType());
 
   // Flattened data must fit into the ciphertext size.
-  if (dataType.getNumElements() > minSlotCount) {
-    return op->emitOpError()
-           << "Flattened data must fit into a single ciphertext, but got "
-           << dataType.getNumElements() << " elements and ciphertext size is "
-           << minSlotCount;
+  if (failed(requireSlots(op, dataType.getNumElements()))) {
+    return failure();
   }
 
   MLIRContext* ctx = &getContext();
@@ -1066,8 +1138,9 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DOp op) {
     return failure();
   }
   LayoutAttr resultLayout = outputLayoutResult.value();
+  // The kernel reads row-major data, so the result is not gapped.
   Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(data, outputType.getShape());
+      makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
   assignedLayouts.insert({result, resultLayout});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -1123,6 +1196,15 @@ LogicalResult LayoutPropagation::visitOperation(Conv1DNcwFcwOp op) {
         convertToLayout(ctx, builder, op, data, dataLayout, targetDataRelation);
     debugAssignLayout(toReplace, newDataLayoutAttr);
     assignedLayouts.insert({toReplace, newDataLayoutAttr});
+  }
+
+  // Each ciphertext holds a whole diagonal of the expanded filter matrix.
+  RankedTensorType expandedFilterType = get1dConvCwFcwFilterExpandedType(
+      filterType, matrixOperand.dataType, stride, matrixOperand.padding,
+      interchangeRows);
+  if (failed(requireSlots(op, std::max(expandedFilterType.getDimSize(0),
+                                       expandedFilterType.getDimSize(1))))) {
+    return failure();
   }
 
   // The kernel for this operation requires expanding the conv filter matrix
@@ -1204,11 +1286,9 @@ LogicalResult LayoutPropagation::visitOperation(PoolingNcwMaxOp op) {
     return op->emitOpError(
         "requires a backend with a max pool kernel (has_kernel_max_pool)");
   }
-  if (pool->channels * pool->length > minSlotCount) {
-    return op->emitOpError()
-           << "requires the input (" << pool->channels * pool->length
-           << " elements) to fit one ciphertext of "
-           << static_cast<int64_t>(minSlotCount) << " slots";
+  // One Cyclops call pools one ciphertext.
+  if (failed(requireSlots(op, pool->channels * pool->length))) {
+    return failure();
   }
 
   MLIRContext* ctx = &getContext();
@@ -1234,9 +1314,26 @@ LogicalResult LayoutPropagation::visitOperation(PoolingNcwMaxOp op) {
       ctx, getCompactRowMajorLayoutRelation(outputType, minSlotCount));
   assignedLayouts.insert({op.getResult(0), resultLayout});
   debugAssignLayout(op.getResult(0), resultLayout);
-  setResultLayoutAttr(
-      op, cloneKernelInfoWithResultShape(data, outputType.getShape()));
+  // The compact output is not gapped.
+  setResultLayoutAttr(op,
+                      makeUngappedKernelInfoAttr(ctx, outputType.getShape()));
   return success();
+}
+
+// The layout of a 2-D conv result pixel-shuffled by `gap`, as the list of
+// layouts to compose: the row-major result, then the shuffle.
+static ArrayAttr get2dConvGappedLayouts(MLIRContext* ctx,
+                                        RankedTensorType resultType,
+                                        int64_t gap, int64_t minSlotCount) {
+  SmallVector<int64_t> gaps = {gap, gap};
+  IntegerRelation rowMajor =
+      get2dConvResultRelation(resultType, gaps, /*padding=*/0, minSlotCount,
+                              /*interchangeRows=*/true);
+  IntegerRelation shuffle =
+      get2dConvRowInterchangeLayoutRelation(resultType, gaps, minSlotCount);
+  return ArrayAttr::get(ctx,
+                        {LayoutAttr::getFromIntegerRelation(ctx, rowMajor),
+                         LayoutAttr::getFromIntegerRelation(ctx, shuffle)});
 }
 
 LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
@@ -1256,11 +1353,6 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     return op->emitOpError() << "Expected equal strides for Conv2DNchwFchwOp";
   }
 
-  // Interchange rows only if the stride is greater than 1. Otherwise, we can
-  // densely pack the rows and outputs without channel gapping.
-  bool interchangeRows = strides[0] > 1;
-
-  // Ensure data is in gapped row-major layout with current inputGap.
   // We expect 4-D tensor (N, C, H, W) but only support N=1.
   if (dataType.getRank() != 4 || dataType.getDimSize(0) != 1) {
     return op->emitOpError() << "Expected 4-D data tensor (N=1, C, H, W)";
@@ -1274,40 +1366,67 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   if (!dataKernelInfo) {
     return op->emitOpError() << "Failed to get kernel info for data input";
   }
-  // The gap factor accumulates the producer's gap, so it can exceed the stride
-  // when this conv follows another strided one.
-  auto gapFactor = strides[0] * dataKernelInfo->gapFactor;
-  // The layout relations shuffle by this conv's own stride, so that is the
-  // block size the channel padding below rounds up to. A conv whose gap exceeds
-  // its stride packs its result against gap^2 instead, and padding cannot
-  // reconcile the two, so keep rejecting those rather than mis-packing them.
-  if (interchangeRows && gapFactor != strides[0] &&
-      outputType.getDimSize(1) % (gapFactor * gapFactor) != 0) {
-    return op->emitOpError()
-           << "Expected number of output channels (" << outputType.getDimSize(1)
-           << ") to be divisible by gap^2 (" << gapFactor * gapFactor << ")";
-  }
+  // Gapped data is the pixel-shuffled result of an earlier strided conv. The
+  // Toeplitz matrix reads it in place, and the result is shuffled by the input
+  // gap times the stride, so the result reserves whole blocks of gap^2
+  // channels.
+  int64_t inputGap = dataKernelInfo->gapFactor;
+  int64_t gapFactor = strides[0] * inputGap;
 
-  RankedTensorType fheInputType = RankedTensorType::get(
-      dataKernelInfo->resultShape, outputType.getElementType());
+  // Interchange rows only if the result is gapped. Otherwise, we can densely
+  // pack the rows and outputs without channel gapping.
+  bool interchangeRows = gapFactor > 1;
+
+  // The matrix of gapped data is built against its logical shape, and the
+  // filter relation places each element at its shuffled position.
+  RankedTensorType fheInputType =
+      inputGap > 1 ? dataType
+                   : RankedTensorType::get(dataKernelInfo->resultShape,
+                                           outputType.getElementType());
 
   LayoutAttr dataLayout = getComposedLayoutAttr(data);
 
   // The Toeplitz matrix is built against the FHE input shape, unless a zero
   // `tensor.pad` on the spatial dims folds into the conv's own `padding`
   // parameter. When it does, the ciphertext holds only the unpadded data and
-  // the matrix must be built against that smaller operand.
+  // the matrix must be built against that smaller operand. Gapped data keeps
+  // its producer's shuffled layout, padded or not.
   ConvMatrixOperand matrixOperand{fheInputType};
   IntegerRelation targetDataRelation =
       getRowMajorLayoutRelation(fheInputType, minSlotCount);
   // A fold only succeeds once `data` is proven to already carry the target
   // relation, so only the unfolded path can still need a conversion.
   bool dataLayoutMatchesTarget = false;
-  if (auto folded = tryFoldPadIntoConvPadding(data, fheInputType, dataLayout,
-                                              minSlotCount)) {
+  if (inputGap > 1) {
+    auto gappedLayout = [&](RankedTensorType type) {
+      return LayoutAttr::composeLayouts(
+                 get2dConvGappedLayouts(ctx, type, inputGap, minSlotCount), ctx)
+          .getIntegerRelation();
+    };
+    if (auto folded = tryFoldPadIntoConvPadding(data, fheInputType, dataLayout,
+                                                minSlotCount, gappedLayout)) {
+      matrixOperand = folded->matrixOperand;
+      targetDataRelation = folded->targetRelation;
+      dataLayoutMatchesTarget = true;
+    } else {
+      targetDataRelation = gappedLayout(dataType);
+    }
+  } else if (auto folded = tryFoldPadIntoConvPadding(
+                 data, fheInputType, dataLayout, minSlotCount)) {
     matrixOperand = folded->matrixOperand;
     targetDataRelation = folded->targetRelation;
     dataLayoutMatchesTarget = true;
+  }
+
+  // Each ciphertext holds a whole diagonal of the expanded filter matrix, which
+  // is built against the operand the ciphertext holds: gapped by the
+  // producer's strides, and without a pad that folded into the conv.
+  RankedTensorType expandedFilterType = get2dConvChwFchwFilterExpandedType(
+      filterType, matrixOperand.dataType, matrixOperand.padding, strides,
+      interchangeRows, inputGap);
+  if (failed(requireSlots(op, std::max(expandedFilterType.getDimSize(0),
+                                       expandedFilterType.getDimSize(1))))) {
+    return failure();
   }
 
   RankedTensorType fheOutputType = outputType;
@@ -1315,10 +1434,13 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
     // If interchangeRows is on, then the output shape may include reshaping the
     // striding and gapping. The spatial extents come from the operand the
     // ciphertext actually holds, i.e. the unpadded one when the pad folded.
-    int64_t hFhe = std::max(matrixOperand.dataType.getDimSize(2),
-                            outputType.getDimSize(2) * gapFactor);
-    int64_t wFhe = std::max(matrixOperand.dataType.getDimSize(3),
-                            outputType.getDimSize(3) * gapFactor);
+    // Gapped data is read in place, so only the shuffled result counts.
+    int64_t hFhe = outputType.getDimSize(2) * gapFactor;
+    int64_t wFhe = outputType.getDimSize(3) * gapFactor;
+    if (inputGap == 1) {
+      hFhe = std::max(hFhe, matrixOperand.dataType.getDimSize(2));
+      wFhe = std::max(wFhe, matrixOperand.dataType.getDimSize(3));
+    }
     // The interchanged layout groups the output channels into gap x gap blocks,
     // so the ciphertext holds whole blocks. A channel count that is not a
     // multiple of gap^2 rounds up, and the extra channels stay empty.
@@ -1329,8 +1451,10 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
         RankedTensorType::get({outputType.getDimSize(0), cFhe, hFhe, wFhe},
                               outputType.getElementType());
   }
-  // `inputShape` stays the padded FHE shape; ConvertToCiphertextSemantics
-  // re-derives the unpadded operand from it and the folded padding attribute.
+  // `inputShape` is the shape the matrix is built against before a folded pad
+  // is removed: the padded FHE shape, or the logical data shape for gapped
+  // data. ConvertToCiphertextSemantics re-derives the unpadded operand from it
+  // and the folded padding attribute.
   KernelInfo kernelInfo = {
       .inputShape = llvm::to_vector(fheInputType.getShape()),
       .resultShape = llvm::to_vector(fheOutputType.getShape()),
@@ -1356,7 +1480,7 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   }
   auto maybeRels = get2dConvChwFchwFilterAsSequence(
       filterType, matrixOperand.dataType, strides, matrixOperand.padding,
-      minSlotCount, interchangeRows);
+      minSlotCount, interchangeRows, inputGap);
   if (failed(maybeRels)) {
     return failure();
   }
@@ -1386,17 +1510,13 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   // pixel-shuffled gap. Future users may need to insert a layout conversion.
   auto result = op->getResult(0);
   Attribute resultLayoutAttr;
-  presburger::IntegerRelation rel1 = get2dConvResultRelation(
-      outputType, strides, /*padding=*/0, minSlotCount, interchangeRows);
-
   if (interchangeRows) {
-    presburger::IntegerRelation rel2 = get2dConvRowInterchangeLayoutRelation(
-        outputType, strides, minSlotCount);
-    LayoutAttr layout1 = LayoutAttr::getFromIntegerRelation(ctx, rel1);
-    LayoutAttr layout2 = LayoutAttr::getFromIntegerRelation(ctx, rel2);
-    resultLayoutAttr = ArrayAttr::get(ctx, {layout1, layout2});
+    resultLayoutAttr =
+        get2dConvGappedLayouts(ctx, outputType, gapFactor, minSlotCount);
   } else {
-    resultLayoutAttr = LayoutAttr::getFromIntegerRelation(ctx, rel1);
+    resultLayoutAttr = LayoutAttr::getFromIntegerRelation(
+        ctx, get2dConvResultRelation(outputType, strides, /*padding=*/0,
+                                     minSlotCount, interchangeRows));
   }
 
   // Record what the filter was diagonalized against, so that
@@ -1404,16 +1524,10 @@ LogicalResult LayoutPropagation::visitOperation(Conv2DNchwFchwOp op) {
   setConvFoldedPadding(op, matrixOperand.padding);
 
   assignedLayouts.insert({result, resultLayoutAttr});
-  auto resultKernelInfo =
-      cloneKernelInfoWithResultShape(data, outputType.getShape());
-
-  setResultLayoutAttr(op, resultKernelInfo);
+  setResultLayoutAttr(op, kernelInfoAttr);
   auto kernelAttr =
       secret::KernelAttr::get(ctx, KernelName::MatvecDiagonal, /*force=*/false);
   op->setAttr(secret::SecretDialect::kKernelAttrName, kernelAttr);
-
-  setAttributeAssociatedWith(op.getResult(0), kKernelInfoAttrName,
-                             kernelInfoAttr);
 
   return alignInitWithResultLayout(op, op.getOutputs().front(),
                                    resultLayoutAttr);
@@ -1454,6 +1568,14 @@ LogicalResult LayoutPropagation::visitOperation(BatchMatmulOp op) {
 
   // Tricyclic ct-ct batch matmul.
   if (secretLhs && secretRhs && lhsCoprime && rhsCoprime) {
+    // The cyclic kernel holds each operand, and the result, in one ciphertext
+    // (a diagonal of a plaintext weight spans the whole weight).
+    if (failed(requireSlots(
+            op, std::max({lhsType.getNumElements(), rhsType.getNumElements(),
+                          cast<RankedTensorType>(result.getType())
+                              .getNumElements()})))) {
+      return failure();
+    }
     LayoutAttr lhsLayout = getComposedLayoutAttr(lhs);
     if (!isRelationTricyclic(lhsType, minSlotCount,
                              lhsLayout.getIntegerRelation())) {
@@ -1526,9 +1648,8 @@ LogicalResult LayoutPropagation::visitOperation(BatchMatmulOp op) {
       RankedTensorType bmmOutputType = cast<RankedTensorType>(result.getType());
       int64_t period = hDim * ctStride;
       int64_t reach = period * (nDim - 1);
-      if (reach + bmmOutputType.getNumElements() > minSlotCount) {
-        return builder.notifyMatchFailure(
-            op, "slot count budget exceeded for batch matmul diagonal reach");
+      if (failed(requireSlots(op, reach + bmmOutputType.getNumElements()))) {
+        return failure();
       }
 
       LayoutAttr secretLayout = getComposedLayoutAttr(secretOperand);
@@ -1628,6 +1749,14 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
   // Bicyclic ct-ct matmul.
   if (inputSecret && filterSecret && lhsCoprime && rhsCoprime &&
       outputCoprime) {
+    // The cyclic kernel holds each operand, and the result, in one ciphertext
+    // (a diagonal of a plaintext weight spans the whole weight).
+    if (failed(requireSlots(
+            op, std::max({lhsType.getNumElements(), rhsType.getNumElements(),
+                          cast<RankedTensorType>(result.getType())
+                              .getNumElements()})))) {
+      return failure();
+    }
     LayoutAttr lhsLayout = getComposedLayoutAttr(lhs);
     if (!isRelationBicyclic(lhsType, minSlotCount,
                             lhsLayout.getIntegerRelation())) {
@@ -1653,8 +1782,9 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
         getBicyclicLayoutRelation(outputType, minSlotCount);
     LayoutAttr outputLayoutAttr =
         LayoutAttr::getFromIntegerRelation(ctx, outputLayoutResult);
+    // The operands are bicyclic, so the result is not gapped.
     auto kernelInfoAttr =
-        cloneKernelInfoWithResultShape(lhs, outputType.getShape());
+        makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
     assignedLayouts.insert({result, outputLayoutAttr});
     setResultLayoutAttr(op, kernelInfoAttr);
@@ -1672,6 +1802,14 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
   // with period the secret operand's packed row (or column) count.
   if (outputCoprime && ((inputSecret && !filterSecret && lhsCoprime) ||
                         (!inputSecret && filterSecret && rhsCoprime))) {
+    // The cyclic kernel holds each operand, and the result, in one ciphertext
+    // (a diagonal of a plaintext weight spans the whole weight).
+    if (failed(requireSlots(
+            op, std::max({lhsType.getNumElements(), rhsType.getNumElements(),
+                          cast<RankedTensorType>(result.getType())
+                              .getNumElements()})))) {
+      return failure();
+    }
     Value secretOperand = inputSecret ? lhs : rhs;
     RankedTensorType secretType = inputSecret ? lhsType : rhsType;
     Value weight = inputSecret ? rhs : lhs;
@@ -1733,8 +1871,9 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
     RankedTensorType outputType = cast<RankedTensorType>(result.getType());
     LayoutAttr outputLayoutAttr = LayoutAttr::getFromIntegerRelation(
         ctx, getBicyclicLayoutRelation(outputType, minSlotCount));
+    // The secret operand is bicyclic, so the result is not gapped.
     auto kernelInfoAttr =
-        cloneKernelInfoWithResultShape(secretOperand, outputType.getShape());
+        makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
     assignedLayouts.insert({result, outputLayoutAttr});
     debugAssignLayout(result, outputLayoutAttr);
@@ -1754,6 +1893,12 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
         ctx, KernelName::MatmulBicyclicDiagonal, /*force=*/false);
     op->setAttr(secret::SecretDialect::kKernelAttrName, kernelAttr);
     return success();
+  }
+
+  // Each ciphertext holds a row of the input matrix, or a whole diagonal of the
+  // filter matrix.
+  if (failed(requireSlots(op, std::max(nDim, pDim)))) {
+    return failure();
   }
 
   // Assign a per-row layout to the input matrix. Each row of the input matrix
@@ -1794,8 +1939,8 @@ LogicalResult LayoutPropagation::visitOperation(MatmulOp op) {
       getPerRowLayoutRelation(outputType, minSlotCount);
   LayoutAttr outputLayoutAttr =
       LayoutAttr::getFromIntegerRelation(ctx, outputLayoutResult);
-  auto kernelInfoAttr =
-      cloneKernelInfoWithResultShape(lhs, outputType.getShape());
+  // The input matrix is per-row, so the result is not gapped.
+  auto kernelInfoAttr = makeUngappedKernelInfoAttr(ctx, outputType.getShape());
 
   assignedLayouts.insert({result, outputLayoutAttr});
   setResultLayoutAttr(op, kernelInfoAttr);
@@ -1837,7 +1982,10 @@ LogicalResult LayoutPropagation::visitOperation(ReduceOp op) {
     assignedLayouts.insert({result, resultLayout});
     debugAssignLayout(result, resultLayout);
   }
-  setResultLayoutAttr(op);
+  // The inputs are row-major, so the results are not gapped.
+  auto resultType = cast<ShapedType>(op->getResult(0).getType());
+  setResultLayoutAttr(op,
+                      makeUngappedKernelInfoAttr(ctx, resultType.getShape()));
   return success();
 }
 
@@ -1871,7 +2019,7 @@ LogicalResult LayoutPropagation::visitOperation(affine::AffineForOp op) {
     debugAssignLayout(result, layout);
   }
 
-  setResultLayoutAttr(op);
+  setResultLayoutAttr(op, findOperandKernelInfo(op));
   return success();
 }
 
@@ -1881,10 +2029,10 @@ LogicalResult LayoutPropagation::visitOperation(tensor::ExtractOp op) {
   LLVM_DEBUG(llvm::dbgs() << "Assigning scalar layout " << scalarLayout
                           << " to value " << op.getResult() << "\n");
   Value result = op.getResult();
-  auto kernelInfoAttr = cloneKernelInfoWithResultShape(op.getTensor(), {});
   assignedLayouts.insert({result, scalarLayout});
   debugAssignLayout(result, scalarLayout);
-  setResultLayoutAttr(op, kernelInfoAttr);
+  // The scalar layout is new, so the result is not gapped.
+  setResultLayoutAttr(op, makeUngappedKernelInfoAttr(op.getContext(), {}));
   return success();
 }
 
@@ -1894,8 +2042,8 @@ LogicalResult LayoutPropagation::visitOperation(tensor::InsertOp op) {
   // which will assign a default scalar layout if it is secret and has no
   // layout.
   LayoutAttr tensorLayout = getComposedLayoutAttr(op.getDest());
-  auto kernelInfoAttr = cloneKernelInfoWithResultShape(
-      op.getScalar(), op.getDest().getType().getShape());
+  auto kernelInfoAttr = layoutPreservingKernelInfo(
+      op.getDest(), op.getDest().getType().getShape());
   Value result = op.getResult();
   assignedLayouts.insert({result, tensorLayout});
   debugAssignLayout(result, tensorLayout);
@@ -1904,18 +2052,51 @@ LogicalResult LayoutPropagation::visitOperation(tensor::InsertOp op) {
 }
 
 LogicalResult LayoutPropagation::visitOperation(tensor::InsertSliceOp op) {
+  if (isPartialInsertIntoZeros(op)) return visitPartialInsertIntoZeros(op);
+
   // Set the result layout to be the same as the dest tensor.
   if (!assignedLayouts.contains(op.getDest())) {
     return op->emitError() << "Destination tensor has no assigned layout";
   }
   LayoutAttr destLayout = getComposedLayoutAttr(op.getDest());
-  auto kernelInfoAttr = cloneKernelInfoWithResultShape(
-      op.getSource(), op.getDest().getType().getShape());
+  auto kernelInfoAttr = layoutPreservingKernelInfo(
+      op.getDest(), op.getDest().getType().getShape());
 
   Value result = op.getResult();
   assignedLayouts.insert({result, destLayout});
   debugAssignLayout(result, destLayout);
   setResultLayoutAttr(op, kernelInfoAttr);
+  return success();
+}
+
+LogicalResult LayoutPropagation::visitPartialInsertIntoZeros(
+    tensor::InsertSliceOp op) {
+  if (!assignedLayouts.contains(op.getSource())) {
+    return op->emitError() << "Source tensor has no assigned layout";
+  }
+
+  // The insert moves no data: result[offset + i * stride] = source[i], so the
+  // result layout maps each result index back to its source index, then
+  // through the source layout. The other result positions stay unmapped, and
+  // unmapped points are zero-filled when a layout is materialized, which
+  // matches the zeros of the destination.
+  FailureOr<IntegerRelation> insertion = getInsertionRelation(op);
+  if (failed(insertion)) {
+    return op->emitError() << "failed to get the layout of the inserted slice";
+  }
+  insertion->inverse();
+  insertion->compose(
+      getComposedLayoutAttr(op.getSource()).getIntegerRelation());
+
+  LayoutAttr resultLayout =
+      LayoutAttr::getFromIntegerRelation(op.getContext(), insertion.value());
+  Value result = op.getResult();
+  assignedLayouts.insert({result, resultLayout});
+  debugAssignLayout(result, resultLayout);
+  // A gap factor describes a multiplexed layout of the result shape, which a
+  // partial insert does not keep in general.
+  setResultLayoutAttr(op, makeUngappedKernelInfoAttr(
+                              op.getContext(), op.getResultType().getShape()));
   return success();
 }
 
@@ -1943,18 +2124,41 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
   }
 
   Value padValue = op.getConstantPaddingValue();
-  bool isZeroPad = padValue && (matchPattern(padValue, m_AnyZeroFloat()) ||
-                                matchPattern(padValue, m_Zero()));
-  if (!isZeroPad) {
+  if (!padValue || !isZeroScalarOrSplat(padValue)) {
     return op->emitError()
            << "layout propagation only supports zero-padding tensor.pad";
+  }
+
+  RankedTensorType paddedType = op.getResultType();
+  LayoutAttr sourceLayout = getComposedLayoutAttr(op.getSource());
+  Attribute kernelInfoAttr =
+      layoutPreservingKernelInfo(op.getSource(), paddedType.getShape());
+  std::optional<KernelInfo> info =
+      kernelInfoAttr ? getKernelInfo(kernelInfoAttr) : std::nullopt;
+  // A 1-D conv reads only row-major data, so it would convert gapped data after
+  // the pad anyway. Un-shuffle before the pad instead, so the conv can fold the
+  // pad into its padding parameter. A 2-D conv folds the pad into its read of
+  // the gapped data and needs no conversion. The producing conv's input rank
+  // tells them apart; DropUnitDims leaves 2-D pads at rank 3 too.
+  if (info && info->gapFactor > 1 && info->inputShape.size() == 3) {
+    IntegerRelation rowMajor =
+        getRowMajorLayoutRelation(op.getSourceType(), minSlotCount);
+    if (!isRelationEqual(sourceLayout.getIntegerRelation(), rowMajor)) {
+      mlir::IRRewriter builder(op.getContext());
+      auto [converted, convertedLayout] = convertToLayout(
+          op.getContext(), builder, op, op.getSource(), sourceLayout, rowMajor);
+      debugAssignLayout(converted, convertedLayout);
+      assignedLayouts.insert({converted, convertedLayout});
+      sourceLayout = convertedLayout;
+    }
+    info->gapFactor = 1;
+    kernelInfoAttr = makeKernelInfoAttr(op.getContext(), *info);
   }
 
   // Check if this pad is eligible to be folded forward into a conv op.
   // If so, we use the shifted relation (special case) to ensure the fold
   // pattern matches.
   bool isEligibleForConvFusion = false;
-  RankedTensorType paddedType = op.getResultType();
   if (paddedType.getRank() == 3 && paddedType.getDimSize(0) == 1) {
     ArrayRef<int64_t> low = op.getStaticLow();
     ArrayRef<int64_t> high = op.getStaticHigh();
@@ -1972,8 +2176,7 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
     // low padding. Pad positions stay unmapped in the relation; unmapped points
     // are zero-filled when a layout is materialized, which matches the
     // zero-fill pad body.
-    IntegerRelation padRelation =
-        getComposedLayoutAttr(op.getSource()).getIntegerRelation();
+    IntegerRelation padRelation = sourceLayout.getIntegerRelation();
     auto domainVarOffset =
         padRelation.getVarKindOffset(presburger::VarKind::Domain);
     for (auto [dim, low] : llvm::enumerate(op.getStaticLow())) {
@@ -1984,8 +2187,6 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
 
     LayoutAttr outputLayout =
         LayoutAttr::getFromIntegerRelation(op.getContext(), padRelation);
-    Attribute kernelInfoAttr = cloneKernelInfoWithResultShape(
-        op.getSource(), op.getResultType().getShape());
     assignedLayouts.insert({op.getResult(), outputLayout});
     debugAssignLayout(op.getResult(), outputLayout);
     setResultLayoutAttr(op, kernelInfoAttr);
@@ -1994,17 +2195,11 @@ LogicalResult LayoutPropagation::visitOperation(tensor::PadOp op) {
 
   // General case: use getPaddingRelation and compose.
   SmallVector<int64_t> lowPadding = llvm::to_vector(op.getStaticLow());
-  IntegerRelation sourceLayout =
-      getComposedLayoutAttr(op.getSource()).getIntegerRelation();
-
   RankedTensorType unpaddedType = op.getSourceType();
   IntegerRelation paddingRel =
       getPaddingRelation(paddedType, unpaddedType, lowPadding);
 
-  paddingRel.compose(sourceLayout);
-
-  Attribute kernelInfoAttr =
-      cloneKernelInfoWithResultShape(op.getSource(), paddedType.getShape());
+  paddingRel.compose(sourceLayout.getIntegerRelation());
 
   LayoutAttr outputLayout =
       LayoutAttr::getFromIntegerRelation(op.getContext(), paddingRel);
@@ -2053,8 +2248,8 @@ LogicalResult LayoutPropagation::visitOperation(tensor::ExtractSliceOp op) {
   auto zeroIndexedSliceLayout =
       shiftVar(sliceExtractionLayout, ctVarOffset, -ctLowerBound.value());
 
-  Attribute kernelInfoAttr = cloneKernelInfoWithResultShape(
-      op.getSource(), op.getResultType().getShape());
+  Attribute kernelInfoAttr =
+      layoutPreservingKernelInfo(op.getSource(), op.getResultType().getShape());
   LayoutAttr outputLayout = LayoutAttr::getFromIntegerRelation(
       op.getContext(), zeroIndexedSliceLayout);
   assignedLayouts.insert({op.getResult(), outputLayout});
@@ -2295,6 +2490,14 @@ CompatibilityResult LayoutPropagation::hasCompatibleArgumentLayouts(
   if (!assignedLayouts.contains(insert)) {
     return {false, op->emitError("input tensor has no assigned layout")};
   }
+  // The result layout of a partial insert into zeros follows from the source
+  // layout alone.
+  if (isPartialInsertIntoZeros(op)) return {true, std::nullopt};
+  if (!isSlabInsert(op)) {
+    return {false, op->emitError("unsupported tensor.insert_slice: the slice "
+                                 "does not fill whole slabs of the result, "
+                                 "and the destination is not all zeros")};
+  }
   if (!assignedLayouts.contains(dest)) {
     return {false, op->emitError("destination tensor has no assigned layout")};
   }
@@ -2482,7 +2685,7 @@ void LayoutPropagation::rectifyIncompatibleOperandLayouts(ReduceOp op) {
         return operand.getOwner() == op;
       });
       assignedLayouts.insert({toReplace, reducedInputLayout});
-      setResultLayoutAttr(convertOp);
+      setResultLayoutAttr(convertOp, findOperandKernelInfo(convertOp));
     }
   }
 }
@@ -2513,7 +2716,7 @@ void LayoutPropagation::rectifyIncompatibleOperandLayouts(
     return operand.getOwner() == op;
   });
   assignedLayouts.insert({toReplace, newLayoutAttr});
-  setResultLayoutAttr(convertLayoutOp);
+  setResultLayoutAttr(convertLayoutOp, findOperandKernelInfo(convertLayoutOp));
 }
 
 void LayoutPropagation::rectifyIncompatibleOperandLayouts(tensor::InsertOp op) {
@@ -2549,7 +2752,7 @@ void LayoutPropagation::rectifyIncompatibleOperandLayouts(tensor::InsertOp op) {
     return operand.getOwner() == op;
   });
   assignedLayouts.insert({toReplace, newScalarLayout});
-  setResultLayoutAttr(convertOp);
+  setResultLayoutAttr(convertOp, findOperandKernelInfo(convertOp));
 }
 
 void LayoutPropagation::passLayoutThroughOp(Operation* op) {
@@ -2559,7 +2762,7 @@ void LayoutPropagation::passLayoutThroughOp(Operation* op) {
     assignedLayouts.insert({result, layout});
     debugAssignLayout(result, layout);
   }
-  setResultLayoutAttr(op);
+  setResultLayoutAttr(op, findOperandKernelInfo(op));
 }
 
 FailureOr<LayoutAttr> LayoutPropagation::defaultLayoutForScalarType(
@@ -2611,21 +2814,15 @@ FailureOr<LayoutAttr> LayoutPropagation::defaultLayoutForType(Type type) {
 
 void LayoutPropagation::setResultLayoutAttr(Operation* op,
                                             Attribute kernelInfo) {
-  // If no kernelInfo attribute is present, check if any of the operands have
-  // one.
-  if (!kernelInfo && op->getNumOperands() > 0) {
-    for (Value operand : op->getOperands()) {
-      auto info = findAttributeAssociatedWith(operand, kKernelInfoAttrName);
-      if (succeeded(info)) {
-        kernelInfo = info.value();
-        break;
-      }
+  for (Value result : op->getResults()) {
+    Attribute resultKernelInfo = kernelInfo;
+    if (!resultKernelInfo) {
+      auto tensorType = dyn_cast<RankedTensorType>(result.getType());
+      if (!tensorType) continue;
+      resultKernelInfo =
+          makeUngappedKernelInfoAttr(op->getContext(), tensorType.getShape());
     }
-  }
-  if (kernelInfo) {
-    for (Value result : op->getResults()) {
-      setAttributeAssociatedWith(result, kKernelInfoAttrName, kernelInfo);
-    }
+    setAttributeAssociatedWith(result, kKernelInfoAttrName, resultKernelInfo);
   }
 
   OpBuilder builder(&getContext());
@@ -2642,19 +2839,31 @@ void LayoutPropagation::setResultLayoutAttr(Operation* op,
               builder.getArrayAttr(resultLayouts));
 }
 
-void LayoutPropagation::runOnOperation() {
+LogicalResult LayoutPropagation::requireSlots(Operation* op, int64_t slots) {
+  if (slots <= minSlotCount) return success();
+  int64_t needed = llvm::PowerOf2Ceil(slots);
+  if (maxSlotCount > 0 && needed > maxSlotCount) {
+    return op->emitOpError() << "needs " << slots
+                             << " slots, but the backend's largest ring degree "
+                             << maxRingDegree << " holds " << maxSlotCount;
+  }
+  requiredSlotCount = std::max(requiredSlotCount, needed);
+  return failure();
+}
+
+LogicalResult LayoutPropagation::propagate() {
   DataFlowSolver solver;
   dataflow::loadBaselineAnalyses(solver);
   solver.load<SecretnessAnalysis>();
   if (failed(solver.initializeAndRun(getOperation()))) {
-    getOperation()->emitOpError() << "Failed to run secretness analysis.\n";
-    signalPassFailure();
-    return;
+    return getOperation()->emitOpError()
+           << "Failed to run secretness analysis.\n";
   }
   this->solver = &solver;
 
   LLVM_DEBUG(llvm::dbgs() << "Running layout propagation on operation: "
-                          << getOperation()->getName() << "\n");
+                          << getOperation()->getName() << " with "
+                          << minSlotCount << " slots\n");
   WalkResult result =
       getOperation()->walk<WalkOrder::PreOrder>([&](Operation* op) {
         LogicalResult result = visitOperation(op);
@@ -2663,10 +2872,67 @@ void LayoutPropagation::runOnOperation() {
         }
         return WalkResult::advance();
       });
+  return failure(result.wasInterrupted());
+}
 
-  if (result.wasInterrupted()) {
+void LayoutPropagation::runOnOperation() {
+  // The backend's largest ring bounds the slots a ciphertext holds: half the
+  // ring degree, as parameter generation sizes the ring at twice the slot
+  // count for every scheme.
+  ModuleOp module = getOperation();
+  Operation* root = module;
+  FailureOr<int64_t> degree = getMaxRingDegree(module);
+  if (failed(degree)) {
     signalPassFailure();
+    return;
   }
+  maxRingDegree = *degree;
+  maxSlotCount = maxRingDegree / 2;
+
+  // minSlotCount is a lower bound: it starts at the count an earlier run
+  // recorded on the module, is raised for this run when a kernel needs more
+  // slots, and is restored for the next run of the pass.
+  int optionSlotCount = minSlotCount;
+  llvm::scope_exit restoreOption([&] { minSlotCount = optionSlotCount; });
+  minSlotCount = getLayoutSlotCount(root, minSlotCount);
+
+  if (maxSlotCount > 0 && minSlotCount > maxSlotCount) {
+    root->emitOpError() << "min-slot-count "
+                        << static_cast<int64_t>(minSlotCount) << " exceeds the "
+                        << maxSlotCount
+                        << " slots of the backend's largest ring degree "
+                        << maxRingDegree;
+    signalPassFailure();
+    return;
+  }
+
+  // A kernel's slot requirement is only known once its operands have layouts:
+  // a strided conv reads its input with the gaps its producers left. Every
+  // layout is packed for the same slot count, so when a kernel needs more,
+  // propagation restarts from the input IR with the larger count.
+  while (true) {
+    OwningOpRef<Operation*> snapshot = root->clone();
+    requiredSlotCount = 0;
+    if (succeeded(propagate())) break;
+    if (requiredSlotCount == 0) {
+      signalPassFailure();
+      return;
+    }
+    LLVM_DEBUG(llvm::dbgs() << "Restarting layout propagation with "
+                            << requiredSlotCount << " slots\n");
+    assignedLayouts.clear();
+    for (auto [region, saved] :
+         llvm::zip(root->getRegions(), snapshot->getRegions())) {
+      region.takeBody(saved);
+    }
+    root->setAttrs(snapshot->getAttrDictionary());
+    minSlotCount = requiredSlotCount;
+  }
+
+  // Later passes pack and size ciphertexts for the same slot count.
+  module->setAttr(
+      kLayoutSlotCountAttrName,
+      IntegerAttr::get(IntegerType::get(&getContext(), 64), minSlotCount));
 
   RewritePatternSet cleanupPatterns(&getContext());
   cleanupPatterns.add<tensor_ext::FoldConvertLayoutIntoAssignLayoutPattern>(

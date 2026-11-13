@@ -47,8 +47,9 @@ func.func @conv2d_stride_chain(%arg0: !secret.secret<tensor<1x1x10x10xf32>>) -> 
       ins(%input0, %filter1 : tensor<1x1x10x10xf32>, tensor<4x1x2x2xf32>)
       outs(%cst1 : tensor<1x4x5x5xf32>) -> tensor<1x4x5x5xf32>
 
+    // CHECK-NOT: tensor_ext.convert_layout
     // CHECK: linalg.conv_2d_nchw_fchw
-    // CHECK-SAME: heir.kernel_info = {gap_factor = 2 : i64, input_shape = array<i64: 1, 1, 10, 10>, result_shape = array<i64: 1, 1, 3, 3>}
+    // CHECK-SAME: heir.kernel_info = {gap_factor = 2 : i64, input_shape = array<i64: 1, 4, 5, 5>, result_shape = array<i64: 1, 1, 6, 6>}
     %2 = linalg.conv_2d_nchw_fchw
       { dilations = dense<1> : tensor<2xi64>, strides = dense<1> : tensor<2xi64> }
       ins(%1, %filter2 : tensor<1x4x5x5xf32>, tensor<1x4x3x3xf32>)

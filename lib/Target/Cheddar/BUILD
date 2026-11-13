@@ -12,43 +12,51 @@ heir_backend_config(
     srcs = ["TargetConfig.td"],
 )
 
-# The Cyclops MaxPoolConfig of a kernel.max_pool. Include it only from targets
-# that define CYCLOPS_PLANNER_BUILD, as the planner library does.
+# Loads Cyclops' proprietary planner library at run time. heir-opt does not
+# link it; it finds libcyclops_planner on the library path.
+cc_library(
+    name = "CyclopsPlanner",
+    srcs = ["CyclopsPlanner.cpp"],
+    hdrs = ["CyclopsPlanner.h"],
+    linkopts = select({
+        "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
+        "//conditions:default": [
+            "-ldl",
+            "-Wl,-rpath,$$ORIGIN",
+        ],
+    }),
+    deps = ["@heir//bazel/cyclops:planner"],
+)
+
+# The Cyclops MaxPoolConfig of a kernel.max_pool.
 cc_library(
     name = "MaxPoolCyclopsConfig",
     hdrs = ["MaxPoolCyclopsConfig.h"],
-    tags = ["no-remote"],
     deps = [
-        "@cyclops//:planner",
+        ":CyclopsPlanner",
         "@heir//lib/Utils:MaxPoolUtils",
     ],
 )
 
-# Calls the CPU-only Cyclops planner library, which reports errors with
-# exceptions and is built on the trusted host.
+# The level requirements of a max pool, from Cyclops' planner.
 cc_library(
     name = "MaxPoolPlan",
     srcs = ["MaxPoolPlan.cpp"],
     hdrs = ["MaxPoolPlan.h"],
-    copts = ["-fexceptions"],
     implementation_deps = [
+        ":CyclopsPlanner",
         ":MaxPoolCyclopsConfig",
-        "@cyclops//:planner",
     ],
-    linkopts = select({
-        "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
-        "//conditions:default": ["-Wl,-rpath,$$ORIGIN"],
-    }),
-    local_defines = ["CYCLOPS_PLANNER_BUILD"],
-    tags = ["no-remote"],
     deps = ["@heir//lib/Utils:MaxPoolUtils"],
 )
 
 cc_test(
     name = "MaxPoolPlanTest",
     srcs = ["MaxPoolPlanTest.cpp"],
+    # The planner library is on the local machine.
     tags = ["no-remote"],
     deps = [
+        ":CyclopsPlanner",
         ":MaxPoolPlan",
         "@googletest//:gtest_main",
     ],
@@ -61,6 +69,7 @@ cc_library(
     srcs = ["MaxPoolInterfaces.cpp"],
     hdrs = ["MaxPoolInterfaces.h"],
     deps = [
+        ":CyclopsPlanner",
         ":MaxPoolPlan",
         "@heir//lib/Dialect:HEIRInterfaces",
         "@heir//lib/Dialect/Kernel/IR:Dialect",

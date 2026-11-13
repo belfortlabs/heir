@@ -66,6 +66,7 @@
 #include "lib/Transforms/LayoutPropagation/LayoutPropagation.h"
 #include "lib/Transforms/LinalgCanonicalizations/LinalgCanonicalizations.h"
 #include "lib/Transforms/LinalgFuseLinearOps/LinalgFuseLinearOps.h"
+#include "lib/Transforms/LoweringHistory/LoweringHistory.h"
 #include "lib/Transforms/OperationBalancer/OperationBalancer.h"
 #include "lib/Transforms/OptimizeRelinearization/OptimizeRelinearization.h"
 #include "lib/Transforms/PopulateScale/PopulateScale.h"
@@ -89,6 +90,7 @@
 #include "mlir/include/mlir/Dialect/Arith/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Bufferization/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/Passes.h"  // from @llvm-project
+#include "mlir/include/mlir/Dialect/Math/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/MemRef/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/include/mlir/Pass/PassManager.h"   // from @llvm-project
 #include "mlir/include/mlir/Pass/PassOptions.h"   // from @llvm-project
@@ -220,7 +222,13 @@ void mlirToSecretArithmeticPipelineBuilder(
   // Vectorize and optimize rotations
   // TODO(#2320): figure out where this fits in the new pipeline
   hecoSIMDVectorizerPipelineBuilder(pm, !options.unrollFheKernelLoops);
+  // Normalize/unroll first so indices that become constants remain supported.
+  pm.addPass(createValidateTensorKernels());
   mathToPolynomialApproximationBuilder(pm, options.useCompositeRelu);
+
+  if (options.loweringHistory)
+    pm.addPass(createRecordLoweringHistory(
+        RecordLoweringHistoryOptions{"before-layout-assignment"}));
 
   // Layout assignment and optimization
   LayoutPropagationOptions layoutPropagationOptions;
@@ -236,6 +244,10 @@ void mlirToSecretArithmeticPipelineBuilder(
   earlyBootstrapOptions.levelBudget = options.greedyLevelBudget;
   earlyBootstrapOptions.bootstrapWaterline = options.greedyBootstrapWaterline;
   pm.addPass(createEarlyBootstrapPlacement(earlyBootstrapOptions));
+
+  if (options.loweringHistory)
+    pm.addPass(createRecordLoweringHistory(
+        RecordLoweringHistoryOptions{"before-ciphertext-conversion"}));
 
   // Linalg kernel implementation
   ConvertToCiphertextSemanticsOptions convertToCiphertextSemanticsOptions;
@@ -525,6 +537,7 @@ void mlirToRLWEPipeline(OpPassManager& pm,
       generateParamOptions.scalingModBits = options.scalingModBits;
       generateParamOptions.minSlotCount = options.minSlotCount;
       generateParamOptions.usePublicKey = options.usePublicKey;
+      generateParamOptions.cheddarParameterFile = options.cheddarParameterFile;
       pm.addPass(createGenerateParamCKKS(generateParamOptions));
 
       PopulateScaleCKKSOptions populateScaleCKKSOptions;
@@ -820,6 +833,14 @@ void cheddarToEmitCPipelineBuilder(OpPassManager& pm) {
   pm.addPass(bufferization::createBufferDeallocationSimplificationPass());
   pm.addPass(bufferization::createLowerDeallocationsPass());
 
+  // MathToEmitC lowers the math ops that have a <cmath> function. Expand
+  // the ones without one into ops that do: rsqrt into divf and sqrt, clampf
+  // into min/max (lowered by arith-expand below), fpowi into multiplications
+  // or pow, and ctlz into integer arithmetic.
+  math::MathExpandOpsPassOptions mathExpandOptions;
+  mathExpandOptions.opMnemonics = {"rsqrt", "clampf", "fpowi", "ctlz"};
+  pm.addPass(math::createMathExpandOpsPass(mathExpandOptions));
+
   arith::ArithExpandOpsPassOptions arithExpandOptions;
   arithExpandOptions.includeMinMaxF = true;
   arithExpandOptions.includeMinMaxI = true;
@@ -852,15 +873,25 @@ void linalgPreprocessingBuilder(OpPassManager& manager) {
 void torchLinalgToCkksBuilder(OpPassManager& manager,
                               const MlirToRLWEPipelineOptions& options) {
   manager.addPass(debug::createDebugValidateNames());
+  if (options.loweringHistory) {
+    manager.addPass(createExplainLoweringHistory());
+    manager.addPass(createRecordLoweringHistory(
+        RecordLoweringHistoryOptions{"torch-linalg-input"}));
+  }
   linalgPreprocessingBuilder(manager);
+  if (options.loweringHistory)
+    manager.addPass(createRecordLoweringHistory(
+        RecordLoweringHistoryOptions{"after-linalg-preprocessing"}));
   MlirToRLWEPipelineOptions suboptions;
 
+  suboptions.loweringHistory = options.loweringHistory;
   suboptions.enableArithmetization = true;
   suboptions.minSlotCount = options.minSlotCount;
   suboptions.greedyBootstrapWaterline = options.greedyBootstrapWaterline;
   suboptions.useCompositeRelu = options.useCompositeRelu;
   suboptions.scalingModBits = options.scalingModBits;
   suboptions.firstModBits = options.firstModBits;
+  suboptions.cheddarParameterFile = options.cheddarParameterFile;
   suboptions.enableSplitPreprocessing = options.enableSplitPreprocessing;
   suboptions.unrollFheKernelLoops = options.unrollFheKernelLoops;
   suboptions.usePublicKey = options.usePublicKey;

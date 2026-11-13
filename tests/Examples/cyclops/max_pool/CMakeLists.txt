@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.30)
 project(heir_cyclops_max_pool LANGUAGES C CXX ASM)
 set(CMAKE_CXX_STANDARD 20)
-if(NOT CYCLOPS_SOURCE_DIR OR NOT HEIR_BIN_DIR)
-  message(FATAL_ERROR "Set CYCLOPS_SOURCE_DIR and HEIR_BIN_DIR")
+if(NOT CYCLOPS_SOURCE_DIR OR NOT HEIR_BIN_DIR OR NOT CYCLOPS_PLANNER_DIR)
+  message(FATAL_ERROR
+    "Set CYCLOPS_SOURCE_DIR, HEIR_BIN_DIR and CYCLOPS_PLANNER_DIR")
 endif()
 # The CPU and GPU runtimes define the same Cyclops symbols, so each side is a
 # separate configure: run_max_pool_e2e.sh builds both.
@@ -48,7 +49,11 @@ set(model "${CMAKE_CURRENT_SOURCE_DIR}/max_pool.mlir")
 # relative DEPENDS against the source directory first.
 add_custom_command(
   OUTPUT max_pool_emitc.mlir
-  COMMAND "${HEIR_BIN_DIR}/heir-opt" "${model}"
+  # heir-opt loads Cyclops' planner library from the library path.
+  COMMAND "${CMAKE_COMMAND}" -E env
+    "LD_LIBRARY_PATH=${CYCLOPS_PLANNER_DIR}"
+    "DYLD_LIBRARY_PATH=${CYCLOPS_PLANNER_DIR}"
+    "${HEIR_BIN_DIR}/heir-opt" "${model}"
     "--annotate-module=backend=cheddar scheme=ckks"
     "--torch-linalg-to-ckks=min-slot-count=4096"
     "--scheme-to-cheddar=entry-function=max_pool runtime=cyclops"
