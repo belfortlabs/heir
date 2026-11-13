@@ -35,6 +35,23 @@ int main() {
   auto firstKeys = api::KeyGen(context, seed);
   auto secondKeys = api::KeyGen(context, seed);
   if (!decryptsWith(firstKeys, secondKeys)) return 1;
+  // Without its rotation keys, KeyGen leaves them to the Galois key upload,
+  // from which the server derives every planned rotation key.
+  auto request = api::GetKeyRequest();
+  auto galoisKeys = api::KeyGen(context, std::nullopt, false);
+  std::stringstream galoisWire;
+  heir::cyclops::writeGaloisKeys(*galoisKeys.storage, context->param_, request,
+                                 galoisWire);
+  api::EvaluationKeys derived;
+  heir::cyclops::readGaloisKeys(context->param_, request, galoisWire, derived);
+  // Layouts whose Galois plan would upload more keep their keys in KeyGen.
+  for (auto& [index, value] : galoisKeys.storage->MutableEvkMap())
+    derived.insert_or_assign(index, std::move(value));
+  for (const auto& [key, count] : request.AllRequests())
+    if (key.rot_idx != 0)
+      (void)derived.GetRotationKey(key.rot_idx, context->NativeSecretId(),
+                                   context->param_, key.level, key.key_mode,
+                                   key.required_num_aux);
   // Model preprocessing can produce arrays larger than Clang's fold limit.
   std::array<float, 403> values;
   for (unsigned i = 0; i < values.size(); ++i) values[i] = i / 8.0f;
