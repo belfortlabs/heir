@@ -7,15 +7,13 @@
 #include "lib/Dialect/HEIRInterfaces.h"
 #include "lib/Dialect/Kernel/IR/KernelDialect.h"
 #include "lib/Dialect/Kernel/IR/KernelOps.h"
-#include "lib/Dialect/TensorExt/IR/TensorExtAttributes.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
 #include "lib/Target/Cheddar/CyclopsPlanner.h"
 #include "lib/Target/Cheddar/MaxPoolPlan.h"
 #include "lib/Utils/MaxPoolUtils.h"
-#include "llvm/include/llvm/ADT/Twine.h"              // from @llvm-project
-#include "llvm/include/llvm/Support/ErrorHandling.h"  // from @llvm-project
-#include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
-#include "mlir/include/mlir/Analysis/Presburger/PresburgerSpace.h"  // from @llvm-project
+#include "llvm/include/llvm/ADT/Twine.h"                 // from @llvm-project
+#include "llvm/include/llvm/Support/ErrorHandling.h"     // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/DialectRegistry.h"        // from @llvm-project
 #include "mlir/include/mlir/IR/MLIRContext.h"            // from @llvm-project
@@ -89,25 +87,31 @@ struct KernelMaxPoolBootstrapsInternallyModel
 };
 
 // A max pool lowers to kernel.max_pool, whose level cost depends on the slot
-// count. Layout propagation records the result layout on the op, and the slot
-// count is the bound of that layout's slot variable.
+// count. The pool's result layout is compact, so it does not give the slot
+// count: layout propagation records it on the module, and every ciphertext has
+// that many slots.
 struct LinalgMaxPoolReducesLevelModel
     : public ReducesLevelOpInterface::ExternalModel<
           LinalgMaxPoolReducesLevelModel, linalg::PoolingNcwMaxOp> {
   static std::optional<MaxPoolRequirements> getRequirements(Operation* op) {
+    if (!op->hasAttr(tensor_ext::TensorExtDialect::kLayoutAttrName))
+      return std::nullopt;
     std::string reason;
     FailureOr<SupportedMaxPool> pool =
         getSupportedMaxPool(cast<linalg::PoolingNcwMaxOp>(op), reason);
-    auto layout = op->getAttrOfType<tensor_ext::LayoutAttr>(
-        tensor_ext::TensorExtDialect::kLayoutAttrName);
-    if (failed(pool) || !layout) return std::nullopt;
+    int64_t numSlots = getLayoutSlotCount(op, /*minSlotCount=*/0);
+    if (failed(pool) || numSlots <= 0) return std::nullopt;
     requirePlanner();
-    presburger::IntegerRelation relation = layout.getIntegerRelation();
-    std::optional<int64_t> lastSlot = relation.getConstantBound64(
-        presburger::BoundType::UB,
-        relation.getVarKindOffset(presburger::VarKind::Range) + 1);
-    if (!lastSlot) return std::nullopt;
-    return getMaxPoolRequirements(pool->getKernelShape(*lastSlot + 1));
+    std::string error;
+    std::optional<MaxPoolRequirements> requirements =
+        getMaxPoolRequirements(pool->getKernelShape(numSlots), &error);
+    if (!requirements)
+      llvm::report_fatal_error(
+          llvm::Twine("the Cyclops max pool planner rejects the "
+                      "kernel.max_pool of a linalg.pooling_ncw_max: ") +
+              error,
+          /*gen_crash_diag=*/false);
+    return requirements;
   }
 
   // Before layout propagation, count one level, as for the other linalg ops.
