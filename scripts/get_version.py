@@ -52,7 +52,11 @@ def get_next_dev_version(package_name):
   return f"{today}.dev{next_dev}"
 
 
-def calculate_version(event, ref, tag, package):
+# release.yml's daily schedule; its monthly one releases YYYY.MM.DD.
+DAILY_CRON = "0 2 * * *"
+
+
+def calculate_version(event, ref, tag, package, schedule=""):
   version = "0.0.0"
 
   match event:
@@ -68,6 +72,8 @@ def calculate_version(event, ref, tag, package):
     case "schedule":
       if tag:
         version = tag.lstrip("v")
+      elif schedule == DAILY_CRON:
+        version = get_next_dev_version(package)
       else:
         version = datetime.datetime.now(datetime.timezone.utc).strftime(
             "%Y.%m.%d"
@@ -95,6 +101,9 @@ def main():
   )
   parser.add_argument("--tag", help="Release tag name")
   parser.add_argument(
+      "--schedule", default="", help="The cron of a schedule event"
+  )
+  parser.add_argument(
       "--package",
       default=None,
       help="PyPI package name (defaults to the name in pyproject.toml)",
@@ -106,7 +115,9 @@ def main():
   args = parser.parse_args()
 
   package = args.package or get_package_name()
-  version = calculate_version(args.event, args.ref, args.tag, package)
+  version = calculate_version(
+      args.event, args.ref, args.tag, package, args.schedule
+  )
 
   if args.gha:
     # Writing to GITHUB_OUTPUT if available
