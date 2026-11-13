@@ -27,4 +27,16 @@ module attributes {backend.cheddar, ckks.schemeParam = #ckks.scheme_param<logN =
     %0 = kernel.max_pool %arg0 {num_slots = 64 : i64, input_length = 32 : i64, window_size = 2 : i64, stride = 2 : i64, value_bound = 0.5 : f64} : tensor<1x!ct_in> -> tensor<1x!ct_out>
     return %0 : tensor<1x!ct_out>
   }
+
+  // Cyclops' MaxPool reads its input again after it writes its output, so the
+  // output never reuses the input, even when the input is a local result.
+  // CHECK: func.func @local_input
+  // CHECK: %[[sum:.*]] = cheddar.add
+  // CHECK: %[[dest:.*]] = tensor.empty
+  // CHECK: cheddar.max_pool %{{.*}}, %[[sum]], %{{.*}}, %[[dest]]
+  func.func @local_input(%arg0: tensor<1x!ct_in>) -> tensor<1x!ct_out> {
+    %sum = ckks.add %arg0, %arg0 : (tensor<1x!ct_in>, tensor<1x!ct_in>) -> tensor<1x!ct_in>
+    %0 = kernel.max_pool %sum {num_slots = 64 : i64, input_length = 32 : i64, window_size = 2 : i64, stride = 2 : i64, value_bound = 0.5 : f64} : tensor<1x!ct_in> -> tensor<1x!ct_out>
+    return %0 : tensor<1x!ct_out>
+  }
 }

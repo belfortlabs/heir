@@ -951,8 +951,10 @@ struct ConvertKernelMaxPoolOp : public OpConversionPattern<kernel::MaxPoolOp> {
              << inputLevel - levelsToDrop << " but got " << outputLevel;
 
     Type resultType = typeConverter->convertType(op.getOutput().getType());
-    Value dest =
-        makeReusableDest(rewriter, op.getLoc(), resultType, adaptor.getInput());
+    // Not makeReusableDest: Cyclops' MaxPool writes its output after the first
+    // chain and reads the input again for each later chain, so the output must
+    // not be the input object.
+    Value dest = makeEmptyDest(rewriter, op.getLoc(), resultType);
     auto result = cheddar::MaxPoolOp::create(
         rewriter, op.getLoc(), resultType, bootCtx.value(), adaptor.getInput(),
         evkMap.value(), dest, op.getNumSlotsAttr(), op.getInputLengthAttr(),
