@@ -36,14 +36,17 @@ def get_next_dev_version(package_name):
   today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y.%m.%d")
   versions = get_pypi_versions(package_name)
 
-  # Find versions matching today's date and the .dev suffix
-  pattern = re.compile(rf"^{re.escape(today)}\.dev(\d+)$")
+  # Find versions matching today's date and the .dev suffix. PyPI lists
+  # normalized versions (2026.11.3.dev0 for 2026.11.03.dev0), so compare the
+  # date numerically.
+  today_parts = tuple(int(part) for part in today.split("."))
+  pattern = re.compile(r"^(\d+)\.(\d+)\.(\d+)\.dev(\d+)$")
   max_dev = -1
 
   for v in versions:
     match = pattern.match(v)
-    if match:
-      max_dev = max(max_dev, int(match.group(1)))
+    if match and tuple(int(g) for g in match.groups()[:3]) == today_parts:
+      max_dev = max(max_dev, int(match.group(4)))
 
   next_dev = max_dev + 1
   return f"{today}.dev{next_dev}"
