@@ -461,12 +461,14 @@ struct ConvertMakeParameter
     // additional base, the default aux count) default to what a HEIR-generated
     // chain uses; they are spelled out only from the first one that differs.
     SmallVector<std::string> arguments = {
-        std::to_string(set.getLogN()),
-        scale,
-        std::to_string(set.getDefaultEncryptionLevelOrDefault()),
-        levels,
-        primes(set.getMainPrimes()),
-        primes(set.getAuxPrimes()),
+        std::to_string(set.getLogN()), scale,
+        // Cyclops' third argument is its max encryption level, where a
+        // bootstrap's ModRaise lands: the top of the chain. scale-snu's is
+        // the default encryption level.
+        std::to_string(useCyclopsRuntime(op)
+                           ? set.getMaxLevel()
+                           : set.getDefaultEncryptionLevelOrDefault()),
+        levels, primes(set.getMainPrimes()), primes(set.getAuxPrimes()),
         primes(set.getTerminalPrimes()),
         "std::pair<int, int>{" +
             std::to_string(set.getAdditionalBasePair().first) + ", " +

@@ -49,7 +49,7 @@ module attributes {
 // RATIO: cheddar.create_boot_context
 // RATIO-SAME: logMessageRatio = 9
 
-// EMITC: emitc.verbatim "static Parameter<word> cheddar_param(16, static_cast<double>(UINT64_C(1) << 35), 1, std::vector<std::pair<int, int>>{{[{][{]}}0, 2}, {2, 1}, {3, 1}}, std::vector<word>{969146369ULL, 1172439041ULL, 958136321ULL}, std::vector<word>{964558849ULL, 974258177ULL}, std::vector<word>{30539777ULL, 32899073ULL}, std::pair<int, int>{0, 0}, 1);"
+// EMITC: emitc.verbatim "static Parameter<word> cheddar_param(16, static_cast<double>(UINT64_C(1) << 35), 2, std::vector<std::pair<int, int>>{{[{][{]}}0, 2}, {2, 1}, {3, 1}}, std::vector<word>{969146369ULL, 1172439041ULL, 958136321ULL}, std::vector<word>{964558849ULL, 974258177ULL}, std::vector<word>{30539777ULL, 32899073ULL}, std::pair<int, int>{0, 0}, 1);"
 // EMITC: emitc.verbatim "cheddar_param.SetDenseHammingWeight(1024);"
 // EMITC: emitc.verbatim "cheddar_param.SetSparseHammingWeight(32);"
 // EMITC: emitc.verbatim "cheddar_param.SetMaxLogPQ(1730);"
