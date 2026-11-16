@@ -447,8 +447,7 @@ llvm::Expected<ParameterFile> parseCyclops(const Reader& reader,
     auto logDegree = reader.integer(*profile, "log_degree", "profile");
     if (!logDegree) return logDegree.takeError();
     ring.logDegree = *logDegree;
-    auto level =
-        reader.integer(*profile, "default_encryption_level", "profile");
+    auto level = reader.integer(*profile, "max_encryption_level", "profile");
     if (!level) return level.takeError();
     ring.defaultEncryptionLevel = *level;
     auto weight = reader.integer(*profile, "hamming_weight", "profile");
@@ -469,12 +468,12 @@ llvm::Expected<ParameterFile> parseCyclops(const Reader& reader,
     if (ring.defaultEncryptionLevel < 0 ||
         ring.defaultEncryptionLevel >= numResidualLevels)
       return reader.fail(
-          "profile default_encryption_level is outside ring_chain "
+          "profile max_encryption_level is outside ring_chain "
           "level_config");
     if (index > 0 && ring.defaultEncryptionLevel <
                          file.profiles.back().defaultEncryptionLevel)
       return reader.fail(
-          "profile default_encryption_level values must not decrease with "
+          "profile max_encryption_level values must not decrease with "
           "ring degree");
     if (ring.hammingWeight <= 0 || ring.maxLogPq <= 0.0)
       return reader.fail(

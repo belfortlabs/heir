@@ -2,7 +2,7 @@
 #define BAZEL_CYCLOPS_CYCLOPS_PLANNER_H_
 
 // The functions of Cyclops' planner/include/cyclops_planner.h (at commit
-// 838a4570419e8d8c18020e252033d4b234e8f9bd), and the constants HEIR uses, for
+// bee9a8639bd803c74e69592434fcb6d2b201f814), and the constants HEIR uses, for
 // loading the planner at run time.
 // The constants keep Cyclops' values; the structs keep its layout.
 // header_check.py checks this copy against a Cyclops checkout or release.
@@ -54,7 +54,7 @@ typedef struct cyclops_evk_request cyclops_evk_request;
 void cyclops_free_error(char* error);
 
 cyclops_params* cyclops_params_create(
-    int log_degree, double base_scale, int default_encryption_level,
+    int log_degree, double base_scale, int max_encryption_level,
     const int32_t* level_config, size_t num_level_config,
     const uint64_t* main_primes, size_t num_main_primes,
     const uint64_t* aux_primes, size_t num_aux_primes,
@@ -101,6 +101,12 @@ int cyclops_add_bootstrap_required_rotations(
     cyclops_evk_request* request, const cyclops_params* params,
     int num_cts_levels, int num_stc_levels, int log_message_ratio,
     const cyclops_mod1* mod1, int num_slots, int variant, int key_mode,
+    char** error);
+int cyclops_add_bootstrap_circuit_required_rotations(
+    cyclops_evk_request* request, const cyclops_params* params,
+    int num_cts_levels, int num_stc_levels, int log_message_ratio,
+    const cyclops_mod1* mod1, int circuit, const int32_t* bypass,
+    size_t num_bypass_phases, int num_slots, int variant, int key_mode,
     char** error);
 int cyclops_add_bootstrap_non_dft_required_keys(
     cyclops_evk_request* request, int max_level, int num_cts_levels,
