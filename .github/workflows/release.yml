@@ -171,3 +171,28 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1.13
         with:
           verbose: true
+
+  # Tests the new wheel against medusa-deployment (its cross-repo.yml), which
+  # reports failures to Slack. The token comes from a GitHub App whose only
+  # permission is actions: write on medusa-deployment.
+  trigger-cross-repo:
+    name: Trigger medusa-deployment cross-repo CI
+    needs: [build-wheels, pypi_upload, perform_release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create token
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.CROSS_REPO_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CROSS_REPO_APP_KEY }}
+          owner: belfortlabs
+          repositories: medusa-deployment
+          permission-actions: write
+      - name: Dispatch cross-repo.yml
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ needs.build-wheels.outputs.version }}
+        run: |
+          gh workflow run cross-repo.yml --repo belfortlabs/medusa-deployment --ref dev \
+            -f component=heir -f heir-version="$VERSION"
