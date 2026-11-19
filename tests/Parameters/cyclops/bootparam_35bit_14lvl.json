@@ -47,10 +47,10 @@
     ],
 
     "profiles": [
-      { "log_degree": 13, "default_encryption_level": 2, "hamming_weight": 128, "max_log_pq": 184 },
-      { "log_degree": 14, "default_encryption_level": 9, "hamming_weight": 256, "max_log_pq": 417 },
-      { "log_degree": 15, "default_encryption_level": 14, "hamming_weight": 512, "max_log_pq": 865 },
-      { "log_degree": 16, "default_encryption_level": 14, "hamming_weight": 1024, "max_log_pq": 1730 }
+      { "log_degree": 13, "max_encryption_level": 2, "hamming_weight": 128, "max_log_pq": 184 },
+      { "log_degree": 14, "max_encryption_level": 9, "hamming_weight": 256, "max_log_pq": 417 },
+      { "log_degree": 15, "max_encryption_level": 14, "hamming_weight": 512, "max_log_pq": 865 },
+      { "log_degree": 16, "max_encryption_level": 14, "hamming_weight": 1024, "max_log_pq": 1730 }
     ]
   }
 }

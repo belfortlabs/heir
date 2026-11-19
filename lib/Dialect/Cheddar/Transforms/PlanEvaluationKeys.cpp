@@ -174,8 +174,11 @@ struct PlanEvaluationKeysPass
         api.cyclops_params_create(
             parameterSet.getLogN(),
             static_cast<double>(uint64_t{1} << parameterSet.getLogScale()),
-            parameterSet.getDefaultEncryptionLevelOrDefault(), levels.data(),
-            levels.size() / 2, primesOf(parameterSet.getMainPrimes()),
+            // Cyclops' max encryption level is where a bootstrap's ModRaise
+            // lands: the top of the chain, as Cyclops' own parameter loader
+            // sets it for a ring that bootstraps.
+            parameterSet.getMaxLevel(), levels.data(), levels.size() / 2,
+            primesOf(parameterSet.getMainPrimes()),
             sizeOf(parameterSet.getMainPrimes()),
             primesOf(parameterSet.getAuxPrimes()),
             sizeOf(parameterSet.getAuxPrimes()),

@@ -1216,7 +1216,7 @@ struct CheddarEmitCEntryInterfacePass
       if (failed(verifyKeyPlanningMetadata(functions->setup)))
         return signalPassFailure();
       sides = {InterfaceSide::Client, InterfaceSide::Server};
-      extensionIncludes = {"extension/boot/BootContext.h",
+      extensionIncludes = {"extension/boot/standard/BootContext.h",
                            "extension/poly/EvalPoly.h",
                            "extension/linalg/LinearTransform.h"};
     }

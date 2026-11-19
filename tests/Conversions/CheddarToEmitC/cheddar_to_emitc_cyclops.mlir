@@ -58,4 +58,15 @@ module attributes {cheddar.runtime = "cyclops"} {
     %result = cheddar.hconj_add %ctx, %evk, %lhs, %rhs, %dest : (!context, !evk_map, tensor<!ciphertext>, tensor<!ciphertext>, tensor<!ciphertext>) -> tensor<!ciphertext>
     return %result : tensor<!ciphertext>
   }
+
+  // Cyclops' max encryption level is the top of the chain, where a
+  // bootstrap's ModRaise lands, even when fresh ciphertexts sit below it.
+  // CHECK: func.func @parameter
+  // CHECK: emitc.verbatim "static Parameter<word> cheddar_param(14, static_cast<double>(UINT64_C(1) << 45), 2, std::vector<std::pair<int, int>>{{[{][{]}}1, 0}, {2, 0}, {3, 0}}, std::vector<word>{1ULL, 2ULL, 3ULL}, std::vector<word>{4ULL, 5ULL});"
+  func.func @parameter() -> tensor<!context> {
+    %p = cheddar.make_parameter {parameterSet = #cheddar.parameter_set<logN = 14, logScale = 45, mainPrimes = [1, 2, 3], auxPrimes = [4, 5], defaultEncryptionLevel = 1>} : !cheddar.parameter
+    %dest = tensor.empty() : tensor<!context>
+    %context = cheddar.create_context %p, %dest : (!cheddar.parameter, tensor<!context>) -> tensor<!context>
+    return %context : tensor<!context>
+  }
 }
