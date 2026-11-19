@@ -78,6 +78,28 @@ SmallVector<LinearTransformKeyShape> collectLinearTransformKeyShapes(
   return shapes;
 }
 
+// One distinct cheddar.max_pool, for Cyclops' MaxPool key planner.
+SmallVector<DictionaryAttr> collectMaxPoolKeyShapes(ModuleOp moduleOp) {
+  SmallVector<DictionaryAttr> shapes;
+  llvm::SmallDenseSet<Attribute> seen;
+  moduleOp->walk([&](MaxPoolOp op) {
+    Builder b(op.getContext());
+    auto shape = b.getDictionaryAttr({
+        b.getNamedAttr("num_slots", op.getNumSlotsAttr()),
+        b.getNamedAttr("input_length", op.getInputLengthAttr()),
+        b.getNamedAttr("window_size", op.getWindowSizeAttr()),
+        b.getNamedAttr("stride", op.getStrideAttr()),
+        b.getNamedAttr("dilation", op.getDilationAttr()),
+        b.getNamedAttr("ceil_mode", op.getCeilModeAttr()),
+        b.getNamedAttr("value_bound", op.getValueBoundAttr()),
+        b.getNamedAttr("level", op.getLevelAttr()),
+        b.getNamedAttr("level_consumption", op.getLevelConsumptionAttr()),
+    });
+    if (seen.insert(shape).second) shapes.push_back(shape);
+  });
+  return shapes;
+}
+
 // The levels the program relinearizes at, for the Cyclops client's key
 // request: the ops keyed by the evaluation-key map and the levels a polynomial
 // evaluation descends through.
@@ -130,7 +152,8 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry,
                          ArrayRef<std::pair<int64_t, int64_t>> rotationKeys,
                          BootstrapConfigAttr bootstrap,
                          int64_t bootstrapNumSlots, bool useCyclopsRuntime,
-                         ArrayRef<LinearTransformKeyShape> transformShapes) {
+                         ArrayRef<LinearTransformKeyShape> transformShapes,
+                         ArrayRef<DictionaryAttr> maxPoolShapes) {
   MLIRContext* ctx = moduleOp.getContext();
   bool bootstraps = bootstrap != nullptr;
 
@@ -218,6 +241,10 @@ void buildConfigureFuncs(ModuleOp moduleOp, func::FuncOp entry,
     }
     clientSetup->setAttr(kLinearTransformKeysAttrName,
                          builder.getArrayAttr(shapes));
+    if (!maxPoolShapes.empty())
+      clientSetup->setAttr(kMaxPoolKeysAttrName,
+                           builder.getArrayAttr(SmallVector<Attribute>(
+                               maxPoolShapes.begin(), maxPoolShapes.end())));
     if (bootstraps) {
       clientSetup->setAttr(kBootstrapSlotsAttrName, i64(bootstrapNumSlots));
       clientSetup->setAttr(kBootstrapConfigAttrName, bootstrap);
@@ -486,7 +513,10 @@ struct CheddarConfigureCryptoContext
       return;
     }
     bool bootstraps = false;
-    moduleOp.walk([&](BootOp) { bootstraps = true; });
+    // A max pool bootstraps its comparisons internally.
+    moduleOp.walk([&](Operation* op) {
+      if (isa<BootOp, MaxPoolOp>(op)) bootstraps = true;
+    });
     int64_t bootstrapNumSlots = 0;
     if (bootstraps) {
       auto slotsAttr =
@@ -563,7 +593,8 @@ struct CheddarConfigureCryptoContext
     }
     buildConfigureFuncs(moduleOp, entry, *parameterSet, rotationKeys, bootstrap,
                         bootstrapNumSlots, useCyclopsRuntime,
-                        collectLinearTransformKeyShapes(moduleOp));
+                        collectLinearTransformKeyShapes(moduleOp),
+                        collectMaxPoolKeyShapes(moduleOp));
 
     if (useCyclopsRuntime) {
       if (failed(dropUnusedDebugKeys(moduleOp))) {

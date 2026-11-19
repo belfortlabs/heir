@@ -1,7 +1,5 @@
 #include "lib/Dialect/Cheddar/Transforms/PlanEvaluationKeys.h"
 
-#include <dlfcn.h>
-
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -12,6 +10,9 @@
 #include "lib/Dialect/Cheddar/IR/CheddarOps.h"
 #include "lib/Dialect/Cheddar/IR/CheddarTypes.h"
 #include "lib/Dialect/ModuleAttributes.h"
+#include "lib/Target/Cheddar/CyclopsPlanner.h"
+#include "lib/Target/Cheddar/MaxPoolCyclopsConfig.h"
+#include "lib/Utils/MaxPoolUtils.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"            // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"          // from @llvm-project
 #include "llvm/include/llvm/ADT/StringSwitch.h"         // from @llvm-project
@@ -38,63 +39,7 @@ func::FuncOp findClientSetup(ModuleOp module) {
   return found;
 }
 
-// The planner functions the pass calls. heir-opt does not link the
-// proprietary planner: the pass loads libcyclops_planner from the library
-// path when it first plans keys.
-// clang-format off
-#define CYCLOPS_PLANNER_FUNCTIONS(X) \
-  X(cyclops_free_error) \
-  X(cyclops_params_create) \
-  X(cyclops_params_set_dense_hamming_weight) \
-  X(cyclops_params_set_sparse_hamming_weight) \
-  X(cyclops_params_set_max_log_pq) \
-  X(cyclops_params_set_max_key_switch_aux) \
-  X(cyclops_params_set_level_specific_ks) \
-  X(cyclops_params_free) \
-  X(cyclops_evk_request_create) \
-  X(cyclops_evk_request_add_request) \
-  X(cyclops_evk_request_request_multiplication_key) \
-  X(cyclops_evk_request_keys) \
-  X(cyclops_evk_request_free) \
-  X(cyclops_add_linear_transform_required_keys) \
-  X(cyclops_default_mod1) \
-  X(cyclops_add_bootstrap_required_rotations) \
-  X(cyclops_mod1_depth)
-// clang-format on
-
-struct Planner {
-#define DECLARE_FUNCTION(name) decltype(&::name) name = nullptr;
-  CYCLOPS_PLANNER_FUNCTIONS(DECLARE_FUNCTION)
-#undef DECLARE_FUNCTION
-  // Why loading failed; empty once every function is found.
-  std::string error;
-};
-
-const Planner& planner() {
-  static const Planner loaded = [] {
-    Planner result;
-#ifdef __APPLE__
-    void* library =
-        dlopen("@rpath/libcyclops_planner.dylib", RTLD_NOW | RTLD_LOCAL);
-#else
-    void* library = dlopen("libcyclops_planner.so", RTLD_NOW | RTLD_LOCAL);
-#endif
-    if (!library) {
-      result.error = dlerror();
-      return result;
-    }
-#define LOAD_FUNCTION(name)                                                 \
-  result.name = reinterpret_cast<decltype(&::name)>(dlsym(library, #name)); \
-  if (!result.name) {                                                       \
-    result.error = dlerror();                                               \
-    return result;                                                          \
-  }
-    CYCLOPS_PLANNER_FUNCTIONS(LOAD_FUNCTION)
-#undef LOAD_FUNCTION
-    return result;
-  }();
-  return loaded;
-}
+using Planner = CyclopsPlanner;
 
 // The x mod 1 approximation the attribute describes, on top of Cyclops'
 // default: the same resolution the emitted BootParameter performs, so the
@@ -146,8 +91,8 @@ struct PlanEvaluationKeysPass
                      DenseI64ArrayAttr rotationKeys,
                      DenseI64ArrayAttr multiplicationKeys, ArrayAttr shapes,
                      IntegerAttr bootstrapSlots,
-                     BootstrapConfigAttr bootstrapConfig) {
-    const Planner& api = planner();
+                     BootstrapConfigAttr bootstrapConfig, ArrayAttr maxPools) {
+    const Planner& api = getCyclopsPlanner();
     if (!api.error.empty())
       return setup.emitOpError()
              << "Cyclops key planning needs libcyclops_planner on the library "
@@ -259,11 +204,13 @@ struct PlanEvaluationKeysPass
       }
     }
 
+    // The bootstrap parameters, shared by the bootstraps and the max pools.
+    int ratio = kDefaultLogMessageRatio;
+    std::optional<cyclops_mod1> mod1;
     if (bootstrapSlots) {
-      int ratio = bootstrapConfig.getLogMessageRatio().value_or(
+      ratio = bootstrapConfig.getLogMessageRatio().value_or(
           kDefaultLogMessageRatio);
-      std::optional<cyclops_mod1> mod1 =
-          toMod1(api, bootstrapConfig.getEvalMod());
+      mod1 = toMod1(api, bootstrapConfig.getEvalMod());
       int evalModLevels = 0;
       if (failed(api.cyclops_mod1_depth(mod1 ? &*mod1 : nullptr, ratio,
                                         &evalModLevels, &error) == 0))
@@ -285,6 +232,69 @@ struct PlanEvaluationKeysPass
         return failure();
     }
 
+    if (maxPools && !maxPools.empty()) {
+      if (!bootstrapSlots) {
+        return setup.emitOpError()
+               << kMaxPoolKeysAttrName
+               << " requires the bootstrap planning attributes";
+      }
+      if (!api.maxPoolError.empty()) {
+        return setup.emitOpError()
+               << "planning the keys of a max pool needs libcyclops_planner "
+                  "with the MaxPool functions: "
+               << api.maxPoolError;
+      }
+      for (auto [index, attr] : llvm::enumerate(maxPools)) {
+        auto shape = dyn_cast<DictionaryAttr>(attr);
+        auto field = [&](StringRef name) -> IntegerAttr {
+          return shape ? shape.getAs<IntegerAttr>(name) : nullptr;
+        };
+        auto ceilMode = shape ? shape.getAs<BoolAttr>("ceil_mode") : nullptr;
+        auto valueBound =
+            shape ? shape.getAs<FloatAttr>("value_bound") : nullptr;
+        if (!field("num_slots") || !field("input_length") ||
+            !field("window_size") || !field("stride") || !field("dilation") ||
+            !field("level") || !field("level_consumption") || !ceilMode ||
+            !valueBound) {
+          return setup.emitOpError()
+                 << kMaxPoolKeysAttrName << " entry " << index
+                 << " is missing a field; run cheddar-configure-crypto-context "
+                    "first";
+        }
+        std::optional<cyclops_max_pool_config> config = toCyclopsMaxPoolConfig(
+            api, {field("num_slots").getInt(), field("input_length").getInt(),
+                  field("window_size").getInt(), field("stride").getInt(),
+                  field("dilation").getInt(), ceilMode.getValue(),
+                  valueBound.getValueAsDouble()});
+        if (!config) {
+          return setup.emitOpError()
+                 << kMaxPoolKeysAttrName << " entry " << index
+                 << " does not fit a Cyclops MaxPoolConfig";
+        }
+        // HEIR plans one level drop for each pool, and the generated code pins
+        // the output level to it (getMaxPoolRequirements). Plan the keys of
+        // that pinned pool, at this program's input and bootstrap end levels.
+        int level = field("level").getInt();
+        int levelConsumption = field("level_consumption").getInt();
+        config->output_level = level - levelConsumption;
+        // The emitter hard-codes the imaginary-removing variant.
+        if (api.cyclops_add_max_pool_required_keys(
+                request.get(), params.get(), &*config, level,
+                bootstrapConfig.getNumCtsLevels(),
+                bootstrapConfig.getNumStcLevels(), ratio,
+                mod1 ? &*mod1 : nullptr,
+                CYCLOPS_BOOT_VARIANT_IMAGINARY_REMOVING,
+                CYCLOPS_KEY_MODE_INHERIT, &error) != 0) {
+          setup.emitOpError() << "cannot plan the evaluation keys of max pool "
+                              << index << " from input level " << level
+                              << " to output level " << level - levelConsumption
+                              << ": " << (error ? error : "out of memory");
+          api.cyclops_free_error(error);
+          return failure();
+        }
+      }
+    }
+
     SmallVector<cyclops_key> keys(
         api.cyclops_evk_request_keys(request.get(), nullptr, 0));
     api.cyclops_evk_request_keys(request.get(), keys.data(), keys.size());
@@ -304,9 +314,9 @@ struct PlanEvaluationKeysPass
     func::FuncOp setup = findClientSetup(module);
     if (!setup) return;
     const StringRef planningAttrs[] = {
-        kRotationKeysAttrName, kMultiplicationKeysAttrName,
+        kRotationKeysAttrName,        kMultiplicationKeysAttrName,
         kLinearTransformKeysAttrName, kBootstrapSlotsAttrName,
-        kBootstrapConfigAttrName};
+        kBootstrapConfigAttrName,     kMaxPoolKeysAttrName};
     if (llvm::none_of(planningAttrs,
                       [&](StringRef name) { return setup->hasAttr(name); }))
       return;
@@ -330,6 +340,11 @@ struct PlanEvaluationKeysPass
     if (setup->hasAttr(kLinearTransformKeysAttrName) && !shapes) {
       setup.emitOpError() << kLinearTransformKeysAttrName
                           << " must be an array";
+      return signalPassFailure();
+    }
+    auto maxPools = setup->getAttrOfType<ArrayAttr>(kMaxPoolKeysAttrName);
+    if (setup->hasAttr(kMaxPoolKeysAttrName) && !maxPools) {
+      setup.emitOpError() << kMaxPoolKeysAttrName << " must be an array";
       return signalPassFailure();
     }
     auto bootstrapSlots =
@@ -370,7 +385,7 @@ struct PlanEvaluationKeysPass
     }
 
     if (failed(plan(setup, parameterSet, rotationKeys, multiplicationKeys,
-                    shapes, bootstrapSlots, bootstrapConfig)))
+                    shapes, bootstrapSlots, bootstrapConfig, maxPools)))
       return signalPassFailure();
     for (StringRef name : planningAttrs) setup->removeAttr(name);
   }

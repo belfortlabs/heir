@@ -1,5 +1,6 @@
 #include "lib/Analysis/LevelAnalysis/BootstrapWaterlineAnalysis.h"
 
+#include <algorithm>
 #include <cassert>
 #include <functional>
 
@@ -70,9 +71,16 @@ LogicalResult BootstrapWaterlineAnalysis::visitOperation(
                          prospectiveLevel.getInt() + 1 > levelBudget;
     }
 
+    // An op may need more levels left in its input than it drops.
+    int extraInputLevels = 0;
+    if (auto reduceOp = dyn_cast<ReducesLevelOpInterface>(op))
+      extraInputLevels = std::max(
+          0, reduceOp.getRequiredInputLevels() - reduceOp.getLevelsToDrop());
+
     bool exceedsWaterline =
         lacksMulHeadroom || prospectiveLevel.isInvalid() ||
-        (prospectiveLevel.isInt() && prospectiveLevel.getInt() > waterline);
+        (prospectiveLevel.isInt() &&
+         prospectiveLevel.getInt() + extraInputLevels > waterline);
 
     resultNeedsBootstrap = exceedsWaterline;
     if (exceedsWaterline) {

@@ -48,6 +48,10 @@ The maintained AWS task `sky/cyclops_client.yaml` runs this build with HEIR's
 hermetic Clang on a CUDA-free host. Supply a `git archive` of the selected
 Cyclops revision as `/tmp/cyclops-source.tar.gz`.
 
+`max_pool/` is an end-to-end test of a max pool layer: a CPU client and a GPU
+server, built and run by `max_pool/run_max_pool_e2e.sh`. See
+`max_pool/README.md`.
+
 Medusa's `test/test_cyclops_integration.py` exercises generated key/ciphertext
 exchange, preprocessing, and debug checkpoints. On a configured GPU host, run
 `MEDUSA_CYCLOPS_INTEGRATION=1 uv run python -m unittest discover -s test -p test_cyclops_integration.py`.

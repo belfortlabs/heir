@@ -172,10 +172,11 @@ LogicalResult ModReduceBefore<Op>::matchAndRewrite(
   bool changed = false;
   for (auto operand : secretOperandValues) {
     if (auto defOp = operand.getDefiningOp()) {
-      if (isa<kernel::EvalChebyshevOp>(defOp)) {
+      // These kernels return a rescaled result.
+      if (isa<kernel::EvalChebyshevOp, kernel::MaxPoolOp>(defOp)) {
         LLVM_DEBUG(llvm::dbgs()
                    << "ModReduceBefore: skipping operand defined by "
-                      "EvalChebyshevOp\n");
+                   << defOp->getName() << "\n");
         continue;
       }
     }
@@ -466,6 +467,7 @@ template struct UseInitOpForPlaintextOperand<arith::AddFOp>;
 template struct UseInitOpForPlaintextOperand<arith::MulFOp>;
 template struct UseInitOpForPlaintextOperand<arith::SubFOp>;
 template struct ModReduceBefore<kernel::EvalChebyshevOp>;
+template struct ModReduceBefore<kernel::MaxPoolOp>;
 template struct UseInitOpForPlaintextOperand<kernel::EvalChebyshevOp>;
 
 }  // namespace heir

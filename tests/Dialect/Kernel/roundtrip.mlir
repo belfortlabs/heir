@@ -72,4 +72,24 @@ module {
     %0 = kernel.apply_linear_transform %arg0, %lt : tensor<1x!ciphertext_rlwe>, !kernel.prepared_linear_transform<level = 0, slots = 1024, log_bsgs_ratio = 0> -> tensor<1x!ciphertext_rlwe>
     return %0 : tensor<1x!ciphertext_rlwe>
   }
+  // CHECK: @test_max_pool
+  func.func @test_max_pool(%arg0: tensor<1x1024xf32>) -> tensor<1x1024xf32> {
+    // CHECK: kernel.max_pool %arg0 {input_length = 75 : i64, num_slots = 1024 : i64, stride = 2 : i64, value_bound = 5.000000e-01 : f64, window_size = 2 : i64} : tensor<1x1024xf32> -> tensor<1x1024xf32>
+    %0 = kernel.max_pool %arg0 {num_slots = 1024 : i64, input_length = 75 : i64, window_size = 2 : i64, stride = 2 : i64, value_bound = 0.5 : f64} : tensor<1x1024xf32> -> tensor<1x1024xf32>
+    return %0 : tensor<1x1024xf32>
+  }
+
+  // CHECK: @test_max_pool_all_attributes
+  func.func @test_max_pool_all_attributes(%arg0: tensor<1024xf32>) -> tensor<1024xf32> {
+    // CHECK: kernel.max_pool %arg0 {ceil_mode = true, dilation = 2 : i64, input_length = 1000 : i64, num_slots = 1024 : i64, stride = 5 : i64, value_bound = 5.000000e-01 : f64, window_size = 3 : i64} : tensor<1024xf32> -> tensor<1024xf32>
+    %0 = kernel.max_pool %arg0 {num_slots = 1024 : i64, input_length = 1000 : i64, window_size = 3 : i64, stride = 5 : i64, dilation = 2 : i64, ceil_mode = true, value_bound = 0.5 : f64} : tensor<1024xf32> -> tensor<1024xf32>
+    return %0 : tensor<1024xf32>
+  }
+
+  // CHECK: @test_max_pool_ciphertext
+  func.func @test_max_pool_ciphertext(%arg0: tensor<1x!ciphertext_rlwe>) -> tensor<1x!ciphertext_rlwe> {
+    // CHECK: kernel.max_pool %arg0 {input_length = 512 : i64, num_slots = 512 : i64, stride = 64 : i64, value_bound = 5.000000e-01 : f64, window_size = 64 : i64} : tensor<1x!ct_L0> -> tensor<1x!ct_L0>
+    %0 = kernel.max_pool %arg0 {num_slots = 512 : i64, input_length = 512 : i64, window_size = 64 : i64, stride = 64 : i64, value_bound = 0.5 : f64} : tensor<1x!ciphertext_rlwe> -> tensor<1x!ciphertext_rlwe>
+    return %0 : tensor<1x!ciphertext_rlwe>
+  }
 }

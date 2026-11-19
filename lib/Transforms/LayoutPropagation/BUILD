@@ -23,6 +23,7 @@ cc_library(
         "@heir//lib/Kernel",
         "@heir//lib/Target/CompilationTarget",
         "@heir//lib/Utils:AttributeUtils",
+        "@heir//lib/Utils:MaxPoolUtils",
         "@heir//lib/Utils/Layout:Convolution",
         "@heir//lib/Utils/Layout:Hoisting",
         "@heir//lib/Utils/Layout:InsertIntoZeros",

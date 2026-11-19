@@ -81,17 +81,13 @@ cc_library(
     srcs = ["PlanEvaluationKeys.cpp"],
     hdrs = ["PlanEvaluationKeys.h"],
     implementation_deps = ["@heir//bazel/cyclops:planner"],
-    linkopts = select({
-        "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
-        "//conditions:default": [
-            "-ldl",
-            "-Wl,-rpath,$$ORIGIN",
-        ],
-    }),
     deps = [
         ":plan_evaluation_keys_inc_gen",
         "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/Cheddar/IR:Dialect",
+        "@heir//lib/Target/Cheddar:CyclopsPlanner",
+        "@heir//lib/Target/Cheddar:MaxPoolCyclopsConfig",
+        "@heir//lib/Utils:MaxPoolUtils",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",

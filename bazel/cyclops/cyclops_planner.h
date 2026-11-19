@@ -2,8 +2,9 @@
 #define BAZEL_CYCLOPS_CYCLOPS_PLANNER_H_
 
 // The functions of Cyclops' planner/include/cyclops_planner.h (at commit
-// 838a4570419e8d8c18020e252033d4b234e8f9bd), and the constants HEIR uses, for
-// loading the planner at run time.
+// 838a4570419e8d8c18020e252033d4b234e8f9bd, plus the MaxPool functions of
+// branch mdgrs/maxpool-c-api, based on aikata/maxpool), and the constants HEIR
+// uses, for loading the planner at run time.
 // The constants keep Cyclops' values; the structs keep its layout.
 // header_check.py checks this copy against a Cyclops checkout or release.
 
@@ -115,6 +116,49 @@ int cyclops_add_mod1_required_keys(cyclops_evk_request* request,
 int cyclops_expand_parameter_set(const char* parameter_set,
                                  const char* bootstrap_profile, char** expanded,
                                  char** error);
+
+typedef struct {
+  int total_slots;
+  int input_length;
+  int window_size;
+  int stride;
+  int dilation;
+  double value_bound;
+  double pad_value;
+  int compact_output;
+  int ceil_mode;
+  int output_level;
+  int max_stage_diagonals;
+  int scaled_input;
+  int scaled_output;
+} cyclops_max_pool_config;
+
+typedef struct {
+  int league_level;
+  int league_output_level;
+  int output_level;
+  int natural_output_level;
+  int min_input_level;
+} cyclops_max_pool_levels;
+
+cyclops_max_pool_config cyclops_default_max_pool_config(int total_slots,
+                                                        int input_length,
+                                                        int window_size,
+                                                        int stride);
+int cyclops_max_pool_minimum_input_level(const cyclops_max_pool_config* config,
+                                         int bootstrap_level, int* level,
+                                         char** error);
+int cyclops_max_pool_minimum_bootstrap_end_level(
+    const cyclops_max_pool_config* config, int* level, char** error);
+int cyclops_max_pool_plan_levels(const cyclops_max_pool_config* config,
+                                 int input_level, int bootstrap_level,
+                                 int* fits, cyclops_max_pool_levels* levels,
+                                 char** error);
+int cyclops_add_max_pool_required_keys(
+    cyclops_evk_request* request, const cyclops_params* params,
+    const cyclops_max_pool_config* config, int input_level, int num_cts_levels,
+    int num_stc_levels, int log_message_ratio, const cyclops_mod1* mod1,
+    int variant, int key_mode, char** error);
 
 #ifdef __cplusplus
 }

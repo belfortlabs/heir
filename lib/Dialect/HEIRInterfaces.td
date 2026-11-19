@@ -86,6 +86,40 @@ def ReducesLevelOpInterface : OpInterface<"ReducesLevelOpInterface"> {
       /*args=*/(ins "const ::mlir::DataFlowSolver *":$solver),
       /*body=*/[{}],
       /*defaultBody=*/[{ return {&$_op->getOpOperand(0)}; }]
+    >,
+    InterfaceMethod<
+      /*desc=*/[{
+        Return the number of levels each reduced operand must have left. An op
+        that needs more levels than it drops, for example for internal
+        intermediate values, returns more than `getLevelsToDrop()`.
+      }],
+      /*retTy=*/"int",
+      /*methodName=*/"getRequiredInputLevels",
+      /*args=*/(ins ),
+      /*body=*/[{}],
+      /*defaultBody=*/[{
+        return ::llvm::cast<::mlir::heir::ReducesLevelOpInterface>(
+            $_op.getOperation()).getLevelsToDrop();
+      }]
+    >
+  ];
+}
+
+def BootstrapsInternallyOpInterface : OpInterface<"BootstrapsInternallyOpInterface"> {
+  let cppNamespace = "::mlir::heir";
+  let description = [{
+    An interface for a kernel that bootstraps intermediate values internally,
+    such as Cyclops' max pool. The program needs bootstrap parameters even if it
+    has no `mgmt.bootstrap`, and the bootstrap end level must be high enough
+    for the kernel.
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/"Return the lowest bootstrap end level that the kernel accepts.",
+      /*retTy=*/"int",
+      /*methodName=*/"getMinimumBootstrapEndLevel",
+      /*args=*/(ins )
     >
   ];
 }
