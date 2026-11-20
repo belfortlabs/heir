@@ -68,7 +68,7 @@ BGVEncryptionTechnique # encryptionTechnique
 &lt;p>&lt;em>Addition operation between ciphertexts.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `bgv.add` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands">Operands:&lt;/h4>
@@ -109,7 +109,7 @@ BGVEncryptionTechnique # encryptionTechnique
 &lt;p>&lt;em>Addition operation between ciphertext-plaintext.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `bgv.add_plain` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AllCiphertextTypesMatch&lt;/code>, &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AllCiphertextTypesMatch&lt;/code>, &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-1">Operands:&lt;/h4>
@@ -150,7 +150,7 @@ BGVEncryptionTechnique # encryptionTechnique
 &lt;p>&lt;em>Lower the modulus level of the ciphertext via dropping RNS limbs.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `bgv.level_reduce` operands prop-dict attr-dict `:` qualified(type($input)) `-&amp;gt;` qualified(type($output))
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>, &lt;code>ReducesLevelOpInterface&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="attributes">Attributes:&lt;/h4>
@@ -359,7 +359,7 @@ encrypted against. A ciphertext is canonically encrypted against key basis
 &lt;code>(1, s)&lt;/code>. After a multiplication, its size will increase and the basis will be
 &lt;code>(1, s, s^2)&lt;/code>. The array that represents the key basis is constructed by
 listing the powers of &lt;code>s&lt;/code> at each position of the array. For example, &lt;code>(1, s, s^2)&lt;/code> corresponds to &lt;code>[0, 1, 2]&lt;/code>, while &lt;code>(1, s^2)&lt;/code> corresponds to &lt;code>[0, 2]&lt;/code>.&lt;/p>
-&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="attributes-2">Attributes:&lt;/h4>
@@ -506,7 +506,7 @@ this case, the plaintext slots can be viewed as a &lt;code>2 x N/2&lt;/code> mat
 &lt;p>&lt;em>Subtraction operation between ciphertexts.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `bgv.sub` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-10">Operands:&lt;/h4>
@@ -547,7 +547,7 @@ this case, the plaintext slots can be viewed as a &lt;code>2 x N/2&lt;/code> mat
 &lt;p>&lt;em>Subtraction operation between ciphertext-plaintext.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `bgv.sub_plain` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AllCiphertextTypesMatch&lt;/code>, &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AllCiphertextTypesMatch&lt;/code>, &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-11">Operands:&lt;/h4>
@@ -4015,7 +4015,9 @@ Cheddar&amp;rsquo;s GPU kernels (ElementWise.cu, NTT.cu, ModSwitch.cu).&lt;/p>
 N = 2^log_n is the ring degree, and W in {32, 64} is the word width.&lt;/li>
 &lt;li>Limb layout is limb-major &lt;code>[limb][coeff]&lt;/code>.&lt;/li>
 &lt;li>Limb order follows Cheddar convention: &lt;code>ter[num_ter - 1 ... 0], main[0 ...], aux[0 ...]&lt;/code>.&lt;/li>
-&lt;li>Every buffer operand carries a required representation form:
+&lt;li>Every buffer operand has a representation form. Ops that accept more
+than one form carry &lt;code>*_form&lt;/code> attributes; for all other ops the forms are
+implied and documented in the op description. The forms are:
 &lt;ul>
 &lt;li>&lt;code>coeff&lt;/code>: canonical coefficient form in &lt;code>[0, q)&lt;/code>. Natural order.&lt;/li>
 &lt;li>&lt;code>coeff_centered&lt;/code>: centered coefficient form in &lt;code>[-(q-1)/2, (q-1)/2]&lt;/code>. Natural order.&lt;/li>
@@ -4059,6 +4061,29 @@ device memory execution model.&lt;/li>
 &lt;/tr>
 &lt;/tbody>
 &lt;/table>
+&lt;h3 id="hoistphasekindattr">HoistPhaseKindAttr&lt;/h3>
+&lt;p>&lt;em>Hoist phase kind (cts or stc)&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>#cheddar_gpu.hoist_phase_kind&amp;lt;
+`cts` | `stc` # value
+&amp;gt;
+&lt;/code>&lt;/pre>&lt;h4 id="parameters-1">Parameters:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Parameter&lt;/th>
+&lt;th style="text-align:center">C++ type&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">value&lt;/td>
+&lt;td style="text-align:center">&lt;code>::mlir::heir::cheddar_gpu::HoistPhaseKind&lt;/code>&lt;/td>
+&lt;td>an enum of type HoistPhaseKind&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
 &lt;h3 id="inttepilogueattr">INTTEpilogueAttr&lt;/h3>
 &lt;p>&lt;em>INTT epilogue post-processing mode&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
@@ -4071,7 +4096,7 @@ device memory execution model.&lt;/li>
 &lt;li>mult_const (&lt;code>MultConst&lt;/code>)&lt;/li>
 &lt;li>mult_const_normalize (&lt;code>MultConstNormalize&lt;/code>)&lt;/li>
 &lt;/ul>
-&lt;h4 id="parameters-1">Parameters:&lt;/h4>
+&lt;h4 id="parameters-2">Parameters:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4102,7 +4127,7 @@ uint32_t, # alpha
 uint32_t # dnum
 &amp;gt;
 &lt;/code>&lt;/pre>&lt;p>Module-level attribute encoding scheme parameters and modulus chain info.&lt;/p>
-&lt;h4 id="parameters-2">Parameters:&lt;/h4>
+&lt;h4 id="parameters-3">Parameters:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4168,7 +4193,7 @@ in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;li>Modular addition is valid in both &lt;code>coeff&lt;/code> and &lt;code>eval&lt;/code> domain.&lt;/li>
 &lt;li>Both operands must have matching form (&lt;code>lhs_form == rhs_form == out_form&lt;/code>).&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
 &lt;h4 id="attributes">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
@@ -4213,7 +4238,7 @@ prop-dict attr-dict `:` type($out_bx)
 &lt;code>kernel::Sum&amp;lt;word, 2&amp;gt;&lt;/code> in &lt;code>ElementWise.cu&lt;/code>.
 Computes &lt;code>out_bx = lhs_bx + rhs_bx mod Q&lt;/code> and &lt;code>out_ax = lhs_ax + rhs_ax mod Q&lt;/code>
 limb-wise, where the limbs of &lt;code>Q&lt;/code> are defined in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
 &lt;h4 id="attributes-1">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
@@ -4271,7 +4296,7 @@ of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;ul>
 &lt;li>Valid in both &lt;code>coeff&lt;/code> and &lt;code>eval&lt;/code> domain (&lt;code>in_form == out_form&lt;/code>).&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
 &lt;h4 id="attributes-2">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
@@ -4303,20 +4328,1027 @@ of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;/tr>
 &lt;/tbody>
 &lt;/table>
+&lt;h3 id="cheddar_gpubconv-heircheddar_gpubconvop">&lt;code>cheddar_gpu.bconv&lt;/code> (heir::cheddar_gpu::BConvOp)&lt;/h3>
+&lt;p>&lt;em>Approximate basis conversion (BConv) of polynomial buffers&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.bconv` operands prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>kernel::ModSwitchMatrixMult&lt;/code> in &lt;code>ModSwitch.cu&lt;/code>.
+Converts polynomial coefficients from a source modulus chain (&lt;code>in&lt;/code>, with &lt;code>src_len&lt;/code> limbs)
+to a destination modulus chain (&lt;code>out&lt;/code>, with &lt;code>dst_len&lt;/code> computed limbs) via the approximate HPS
+(Halevi-Polyakov-Smart) basis conversion formula:&lt;/p>
+&lt;pre>&lt;code>out[m, x] = MontReduce(sum_{s=0}^{src_len-1} in[s, x] * table[m, s])
+&lt;/code>&lt;/pre>
+&lt;p>where &lt;code>table[m, s] = Normalize((Q̂_s * R^2) mod p_m, p_m)&lt;/code> is the precomputed double-Montgomery
+projection table, with &lt;code>Q_s&lt;/code> being the &lt;code>s&lt;/code>-th limb of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
+&lt;p>Contract:&lt;/p>
+&lt;ul>
+&lt;li>Input form is &lt;code>coeff_centered&lt;/code>, which can be produced by an INTT with
+&lt;code>mult_const_normalize&lt;/code> epilogue.&lt;/li>
+&lt;li>Output form is &lt;code>coeff&lt;/code>.&lt;/li>
+&lt;li>&lt;code>table&lt;/code> is a memref of shape &lt;code>&amp;lt;DxSxiW&amp;gt;&lt;/code>, where &lt;code>D&lt;/code> is the number of computed destination limbs
+(&lt;code>dst_len&lt;/code>) and &lt;code>S&lt;/code> is the number of active source limbs (&lt;code>src_len&lt;/code>).&lt;/li>
+&lt;li>&lt;code>skip_range = [skip_start, skip_end]&lt;/code>, when specified, causes destination
+limbs &lt;code>m&lt;/code> in &lt;code>[0, dst_len)&lt;/code> to map to limb index &lt;code>(m &amp;lt; skip_start) ? m : m + (skip_end - skip_start)&lt;/code>
+in the destination buffer.&lt;/li>
+&lt;li>&lt;code>in_limb_range&lt;/code> and &lt;code>out_limb_range&lt;/code> are optional &lt;code>[offset, count]&lt;/code> ranges for slicing larger buffers.&lt;/li>
+&lt;/ul>
+&lt;p>Traits: &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-3">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>skip_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [start >= 0, end >= start]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>dst_primes&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-3">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>table&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuboot-heircheddar_gpubootop">&lt;code>cheddar_gpu.boot&lt;/code> (heir::cheddar_gpu::BootOp)&lt;/h3>
+&lt;p>&lt;em>High-level bootstrapping operation for CKKS ciphertext&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.boot` `ins` `(` $in_bx `,` $in_ax `,` $consts_slab `,` $evk_slab `:`
+type($in_bx) `,` type($in_ax) `,` type($consts_slab) `,` type($evk_slab) `)`
+`outs` `(` $out_bx `,` $out_ax `:` type($out_bx) `,` type($out_ax) `)`
+prop-dict attr-dict
+&lt;/code>&lt;/pre>&lt;p>Performs full bootstrapping on ciphertext &lt;code>(in_bx, in_ax)&lt;/code> using &lt;code>consts_slab&lt;/code>
+and &lt;code>evk_slab&lt;/code>, producing refreshed ciphertext &lt;code>(out_bx, out_ax)&lt;/code>.
+All ciphertext operands are in &lt;code>eval&lt;/code> form.&lt;/p>
+&lt;h4 id="attributes-4">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_slots&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is a power of two > 0 whose minimum value is 256 whose maximum value is 32768&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>params&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::ParamsAttr&lt;/td>&lt;td>Cheddar GPU scheme parameters&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-4">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>consts_slab&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 8-bit integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_slab&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 8-bit integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
 &lt;h3 id="cheddar_gpucopy-heircheddar_gpucopyop">&lt;code>cheddar_gpu.copy&lt;/code> (heir::cheddar_gpu::CopyOp)&lt;/h3>
 &lt;p>&lt;em>Pointwise copy of a polynomial buffer or slice&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.copy` operands prop-dict attr-dict `:` functional-type(operands, results)
 &lt;/code>&lt;/pre>&lt;p>Copies elements from &lt;code>in&lt;/code> to &lt;code>out&lt;/code>.
 Supports optional &lt;code>in_limb_range&lt;/code> and &lt;code>out_limb_range&lt;/code> [start, count].&lt;/p>
-&lt;p>Traits: &lt;code>CheddarGPU_InOutCountsMatch&lt;/code>, &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-3">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_InOutCountsMatch&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-5">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-3">Operands:&lt;/h4>
+&lt;h4 id="operands-5">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpucp_accum-heircheddar_gpucpaccumop">&lt;code>cheddar_gpu.cp_accum&lt;/code> (heir::cheddar_gpu::CPAccumOp)&lt;/h3>
+&lt;p>&lt;em>Accumulate Montgomery products: dst = sum_k (common_srcs[k] * ct_srcs[k])&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.cp_accum` $out `,` `ct_srcs` `(` $ct_srcs `)` `,` `common_srcs` `(` $common_srcs `)` prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>kernel::CPAccum&lt;/code> and &lt;code>ElementWiseHandler::CPAccumWorker&amp;lt;false/true&amp;gt;&lt;/code>
+in &lt;code>ElementWise.cu&lt;/code>.
+Computes &lt;code>out = sum_k MultMontgomery(ct_srcs[k], common_srcs[k])&lt;/code>.
+&lt;code>common_srcs&lt;/code> can be polynomial buffers (&lt;code>memref&amp;lt;LxNxiW&amp;gt;&lt;/code>) or per-limb constants (&lt;code>memref&amp;lt;LxiW&amp;gt;&lt;/code>).&lt;/p>
+&lt;p>Form contract:&lt;/p>
+&lt;ul>
+&lt;li>Montgomery pointwise multiplication requires &lt;code>eval&lt;/code> form for all operands.&lt;/li>
+&lt;/ul>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>, &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-6">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-6">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>ct_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>common_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped polynomial buffer or per-limb constant vector&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpucp_accum_2-heircheddar_gpucpaccum2op">&lt;code>cheddar_gpu.cp_accum_2&lt;/code> (heir::cheddar_gpu::CPAccum2Op)&lt;/h3>
+&lt;p>&lt;em>Accumulate Montgomery products for two polynomials: {out_bx, out_ax} = sum_k MontMul({ct_bx[k], ct_ax[k]}, common[k])&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.cp_accum_2` $out_bx `,` $out_ax `,` `ct_bx_srcs` `(` $ct_bx_srcs `)` `,`
+`ct_ax_srcs` `(` $ct_ax_srcs `)` `,` `common_srcs` `(` $common_srcs `)` prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>CPAccum&amp;lt;word,2,...&amp;gt;&lt;/code> / &lt;code>PAccum&lt;/code> in &lt;code>Context.cpp&lt;/code> / &lt;code>ElementWise.cu&lt;/code>.
+Computes &lt;code>{out_bx, out_ax} = sum_k MontMul({ct_bx[k], ct_ax[k]}, common[k])&lt;/code> over &lt;code>k &amp;lt; K&lt;/code> (K &amp;lt;= 4),
+reading each &lt;code>common[k]&lt;/code> (mod-up digit) once for both outputs.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>, &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-7">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-7">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>ct_bx_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>ct_ax_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>common_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped polynomial buffer or per-limb constant vector&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpucp_accum_add-heircheddar_gpucpaccumaddop">&lt;code>cheddar_gpu.cp_accum_add&lt;/code> (heir::cheddar_gpu::CPAccumAddOp)&lt;/h3>
+&lt;p>&lt;em>Accumulate Montgomery products with base: dst = acc + sum_k (common_srcs[k] * ct_srcs[k])&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.cp_accum_add` $out `,` `acc` `(` $acc `)` `,` `ct_srcs` `(` $ct_srcs `)` `,`
+`common_srcs` `(` $common_srcs `)` prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>kernel::CPAccumAdd&lt;/code> in &lt;code>ElementWise.cu&lt;/code>.
+Computes &lt;code>out = acc + sum_k MultMontgomery(ct_srcs[k], common_srcs[k])&lt;/code>.&lt;/p>
+&lt;p>Form contract:&lt;/p>
+&lt;ul>
+&lt;li>Montgomery pointwise multiplication requires &lt;code>eval&lt;/code> form for all operands.&lt;/li>
+&lt;/ul>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>, &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-8">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-8">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>acc&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>ct_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>common_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped polynomial buffer or per-limb constant vector&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpucp_accum_add_2-heircheddar_gpucpaccumadd2op">&lt;code>cheddar_gpu.cp_accum_add_2&lt;/code> (heir::cheddar_gpu::CPAccumAdd2Op)&lt;/h3>
+&lt;p>&lt;em>Accumulate Montgomery products with base for two polynomials: {out_bx, out_ax} = {acc_bx, acc_ax} + sum_k MontMul({ct_bx[k], ct_ax[k]}, common[k])&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.cp_accum_add_2` $out_bx `,` $out_ax `,` `acc` `(` $acc_bx `,` $acc_ax `)` `,`
+`ct_bx_srcs` `(` $ct_bx_srcs `)` `,` `ct_ax_srcs` `(` $ct_ax_srcs `)` `,`
+`common_srcs` `(` $common_srcs `)` prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>CPAccumAdd&amp;lt;L,2&amp;gt;&lt;/code> / &lt;code>CAccum&lt;/code> in &lt;code>Context.cpp&lt;/code> / &lt;code>ElementWise.cu&lt;/code>.
+Computes &lt;code>{out_bx, out_ax} = {acc_bx, acc_ax} + sum_k MontMul({ct_bx[k], ct_ax[k]}, common[k])&lt;/code>.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>, &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-9">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-9">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>acc_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>acc_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>ct_bx_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>ct_ax_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>common_srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped polynomial buffer or per-limb constant vector&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpueval_mod-heircheddar_gpuevalmodop">&lt;code>cheddar_gpu.eval_mod&lt;/code> (heir::cheddar_gpu::EvalModOp)&lt;/h3>
+&lt;p>&lt;em>Homomorphic modular reduction for CKKS bootstrapping&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.eval_mod` `ins` `(` $in_bx `,` $in_ax `,` $evk_slab `:`
+type($in_bx) `,` type($in_ax) `,` type($evk_slab) `)`
+`outs` `(` $out_bx `,` $out_ax `:` type($out_bx) `,` type($out_ax) `)`
+prop-dict attr-dict
+&lt;/code>&lt;/pre>&lt;p>Evaluates modular reduction polynomial on ciphertext &lt;code>(in_bx, in_ax)&lt;/code>.&lt;/p>
+&lt;p>The input ciphertext must be at level 21, and this op produces an output
+ciphertext at level 13. Uses multiplication key slice from &lt;code>evk_slab&lt;/code>.
+Operates in the &lt;code>eval&lt;/code> domain.&lt;/p>
+&lt;h4 id="attributes-10">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>relin_evk_byte_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative whose value is a multiple of 8&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>relin_evk_num_q&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose minimum value is 22&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>relin_evk_beta&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is positive&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>params&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::ParamsAttr&lt;/td>&lt;td>Cheddar GPU scheme parameters&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-10">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_slab&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 8-bit integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuhconj-heircheddar_gpuhconjop">&lt;code>cheddar_gpu.hconj&lt;/code> (heir::cheddar_gpu::HConjOp)&lt;/h3>
+&lt;p>&lt;em>Homomorphic complex conjugation&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.hconj` $out_bx `,` $out_ax `,` $in_bx `,` $in_ax `,`
+`evk_bx` `(` $evk_bx `)` `,` `evk_ax` `(` $evk_ax `)`
+prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Conjugates ciphertext &lt;code>(in_bx, in_ax)&lt;/code> using conjugation evaluation key &lt;code>(evk_bx, evk_ax)&lt;/code>.
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>&lt;/p>
+&lt;h4 id="attributes-11">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-11">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuhoist_bs_fused-heircheddar_gpuhoistbsfusedop">&lt;code>cheddar_gpu.hoist_bs_fused&lt;/code> (heir::cheddar_gpu::HoistBSFusedOp)&lt;/h3>
+&lt;p>&lt;em>Fused baby-step key multiplication, accumulation, and Galois automorphism&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.hoist_bs_fused` `out_bx` `(` $out_bx `)` `,` `out_ax` `(` $out_ax `)` `,` `mod_up` `(` $mod_up `)` `,`
+$evk_slab `,` $in_bx_pseudo_modup prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>BSFusedKernel&lt;/code> in &lt;code>Hoist.cu&lt;/code>.
+Computes &lt;code>R&lt;/code> rotated baby-step ciphertexts from mod-up digits and EVK slab.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>&lt;/p>
+&lt;h4 id="attributes-12">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>galois_factors&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>evk_byte_offsets&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>evk_num_q&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_q&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is positive&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-12">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>mod_up&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_slab&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 8-bit integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx_pseudo_modup&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuhoist_gs_fused-heircheddar_gpuhoistgsfusedop">&lt;code>cheddar_gpu.hoist_gs_fused&lt;/code> (heir::cheddar_gpu::HoistGSFusedOp)&lt;/h3>
+&lt;p>&lt;em>Fused giant-step plaintext multiplication and accumulation&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.hoist_gs_fused` `out_bx` `(` $out_bx `)` `,` `out_ax` `(` $out_ax `)` `,` `in_bx` `(` $in_bx `)` `,`
+`in_ax` `(` $in_ax `)` `,` $consts_slab prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>GSFusedKernel&lt;/code> in &lt;code>Hoist.cu&lt;/code>.
+Computes &lt;code>G&lt;/code> giant-step ciphertexts from &lt;code>B&lt;/code> baby-step ciphertexts and plaintext constants slab.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>&lt;/p>
+&lt;h4 id="attributes-13">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>pt_word_offsets&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute where all elements are >= -1&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_q&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is positive&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>pt_limbs&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-13">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>consts_slab&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 8-bit integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuhoist_phase-heircheddar_gpuhoistphaseop">&lt;code>cheddar_gpu.hoist_phase&lt;/code> (heir::cheddar_gpu::HoistPhaseOp)&lt;/h3>
+&lt;p>&lt;em>High-level hoisted linear transform phase for CKKS bootstrapping&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.hoist_phase` `ins` `(` $in_bx `,` $in_ax `,` $consts_slab `,` $evk_slab `:`
+type($in_bx) `,` type($in_ax) `,` type($consts_slab) `,` type($evk_slab) `)`
+`outs` `(` $out_bx `,` $out_ax `:` type($out_bx) `,` type($out_ax) `)`
+prop-dict attr-dict
+&lt;/code>&lt;/pre>&lt;p>Represents one phase of CoeffToSlot or SlotToCoeff hoisted BSGS linear transform.
+Expanded by &lt;code>--cheddar-gpu-expand-hoist&lt;/code> into fused BSGS kernels and giant-step reduction.&lt;/p>
+&lt;h4 id="attributes-14">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>kind&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::HoistPhaseKindAttr&lt;/td>&lt;td>Hoist phase kind (cts or stc)&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>phase&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_slots&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is a power of two > 0 whose minimum value is 256 whose maximum value is 32768&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>params&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::ParamsAttr&lt;/td>&lt;td>Cheddar GPU scheme parameters&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-14">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>consts_slab&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 8-bit integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_slab&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 8-bit integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuhrot-heircheddar_gpuhrotop">&lt;code>cheddar_gpu.hrot&lt;/code> (heir::cheddar_gpu::HRotOp)&lt;/h3>
+&lt;p>&lt;em>Homomorphic slot rotation&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.hrot` $out_bx `,` $out_ax `,` $in_bx `,` $in_ax `,`
+`evk_bx` `(` $evk_bx `)` `,` `evk_ax` `(` $evk_ax `)`
+prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Rotates ciphertext &lt;code>(in_bx, in_ax)&lt;/code> by &lt;code>rot_dist&lt;/code> (or corresponding &lt;code>galois&lt;/code> element) using
+rotation evaluation key &lt;code>(evk_bx, evk_ax)&lt;/code>.
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>&lt;/p>
+&lt;h4 id="attributes-15">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>rot_dist&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>galois&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-15">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuhrot_add-heircheddar_gpuhrotaddop">&lt;code>cheddar_gpu.hrot_add&lt;/code> (heir::cheddar_gpu::HRotAddOp)&lt;/h3>
+&lt;p>&lt;em>Homomorphic rotation followed by ciphertext addition&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.hrot_add` $out_bx `,` $out_ax `,` $in1_bx `,` $in1_ax `,` $in2_bx `,` $in2_ax `,`
+`evk_bx` `(` $evk_bx `)` `,` `evk_ax` `(` $evk_ax `)`
+prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Rotates ciphertext &lt;code>(in1_bx, in1_ax)&lt;/code> and adds &lt;code>(in2_bx, in2_ax)&lt;/code> into &lt;code>(out_bx, out_ax)&lt;/code>.
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>&lt;/p>
+&lt;h4 id="attributes-16">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>rot_dist&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>galois&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-16">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in1_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in1_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in2_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in2_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuintt-heircheddar_gpuinttop">&lt;code>cheddar_gpu.intt&lt;/code> (heir::cheddar_gpu::INTTOp)&lt;/h3>
+&lt;p>&lt;em>Inverse Number Theoretic Transform (INTT) with optional epilogue&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.intt` $out `,` $in ( `,` `cst` `(` $cst^ `)` )? prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>NTTHandler::INTT&lt;/code> and &lt;code>NTTHandler::INTTAndMultConst&lt;/code> in
+&lt;code>NTT.cu&lt;/code>. Computes the inverse negacyclic number theoretic transform
+limb-wise, where the limbs of &lt;code>Q&lt;/code> are defined in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.
+&lt;code>in&lt;/code> is in &lt;code>eval&lt;/code> form.&lt;/p>
+&lt;p>The &lt;code>epilogue&lt;/code> selects what is applied to the transformed result:&lt;/p>
+&lt;ul>
+&lt;li>&lt;code>none&lt;/code>: no epilogue (&lt;code>cst&lt;/code> must be absent). If &lt;code>montgomery_conversion&lt;/code> is
+set, the result is converted out of Montgomery form; otherwise it stays in
+Montgomery form. &lt;code>out&lt;/code> is in &lt;code>coeff&lt;/code> form.&lt;/li>
+&lt;li>&lt;code>mult_const&lt;/code>: the result is Montgomery-multiplied limb-wise by the per-limb
+constant &lt;code>cst&lt;/code>. &lt;code>out&lt;/code> is in &lt;code>coeff&lt;/code> form.&lt;/li>
+&lt;li>&lt;code>mult_const_normalize&lt;/code>: as &lt;code>mult_const&lt;/code>, then each residue is centered into
+&lt;code>[-(Q-1)/2, (Q-1)/2]&lt;/code>. &lt;code>out&lt;/code> is in &lt;code>coeff_centered&lt;/code> form.&lt;/li>
+&lt;/ul>
+&lt;p>&lt;code>prime_range&lt;/code> (&lt;code>[offset, count]&lt;/code>) or &lt;code>prime_indices&lt;/code> optionally select which
+limbs of &lt;code>Q&lt;/code> the active limbs are reduced by. If &lt;code>in_split = [split_count, extra_limbs]&lt;/code> is set, the first &lt;code>split_count&lt;/code> active limbs are
+read contiguously from &lt;code>in&lt;/code>, and the remaining limbs are read after skipping
+&lt;code>extra_limbs&lt;/code> limbs of &lt;code>in&lt;/code>.&lt;/p>
+&lt;p>Traits: &lt;code>CheddarGPU_NTTPrimeCounts&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-17">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>montgomery_conversion&lt;/code>&lt;/td>&lt;td>::mlir::BoolAttr&lt;/td>&lt;td>bool attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>epilogue&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::INTTEpilogueAttr&lt;/td>&lt;td>INTT epilogue post-processing mode&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_indices&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>in_split&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-17">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>cst&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpukey_switch-heircheddar_gpukeyswitchop">&lt;code>cheddar_gpu.key_switch&lt;/code> (heir::cheddar_gpu::KeySwitchOp)&lt;/h3>
+&lt;p>&lt;em>KeySwitch with ModDown&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.key_switch` $out_bx `,` $out_ax `,` $in_bx `,` $in_ax `,`
+`evk_bx` `(` $evk_bx `)` `,` `evk_ax` `(` $evk_ax `)`
+prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Performs key switching on input ciphertext &lt;code>(in_bx, in_ax)&lt;/code> using evaluation key
+&lt;code>(evk_bx, evk_ax)&lt;/code> and produces output ciphertext &lt;code>(out_bx, out_ax)&lt;/code> at the same level.
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.
+&lt;code>level = -1&lt;/code> denotes the special base-level case where &amp;lsquo;out_bx&amp;rsquo; has 1 limb.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>&lt;/p>
+&lt;h4 id="attributes-18">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-18">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpukey_switch_no_mod_down-heircheddar_gpukeyswitchnomoddownop">&lt;code>cheddar_gpu.key_switch_no_mod_down&lt;/code> (heir::cheddar_gpu::KeySwitchNoModDownOp)&lt;/h3>
+&lt;p>&lt;em>Key switch without ModDown: ModUp + CPAccum + p_prod addition&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.key_switch_no_mod_down` $out_bx `,` $out_ax `,` $in `,`
+( `in_bx` `(` $in_bx^ `)` `,` )?
+( `in_ax` `(` $in_ax^ `)` `,` )?
+`evk_bx` `(` $evk_bx `)` `,` `evk_ax` `(` $evk_ax `)` prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Computes destination-passing KeySwitch without modulus down:
+out_bx = sum_k (mod_up(in)_k * evk_bx_k) + (in_bx ? in_bx * p_prod : 0)
+out_ax = sum_k (mod_up(in)_k * evk_ax_k) + (in_ax ? in_ax * p_prod : 0)
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.
+&lt;code>level = -1&lt;/code> denotes the special base-level case where &amp;lsquo;out_bx&amp;rsquo; has 2 limbs.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>&lt;/p>
+&lt;h4 id="attributes-19">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-19">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpumod_down-heircheddar_gpumoddownop">&lt;code>cheddar_gpu.mod_down&lt;/code> (heir::cheddar_gpu::ModDownOp)&lt;/h3>
+&lt;p>&lt;em>ModDown modulus switching: drops auxiliary primes P&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.mod_down` operands prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>ModSwitchHandler::ModDown&lt;/code> in &lt;code>ModSwitch.cu&lt;/code>.
+Shrinks input &lt;code>in&lt;/code> (with &lt;code>num_q + num_aux&lt;/code> limbs) down to &lt;code>out&lt;/code> (with &lt;code>num_q&lt;/code> limbs).
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;h4 id="attributes-20">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-20">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpumod_down_epilogue-heircheddar_gpumoddownepilogueop">&lt;code>cheddar_gpu.mod_down_epilogue&lt;/code> (heir::cheddar_gpu::ModDownEpilogueOp)&lt;/h3>
+&lt;p>&lt;em>Fused epilogue for ModDown, Rescale, and ModDownAndRescale&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.mod_down_epilogue` $out `,` $ntt_bconv `,` $inv_prime_prod ( `,` `src2` `(` $src2^ `)` )?
+( `,` `src2_padding` `(` $src2_padding^ `)` )? prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>NTTPhase2ForModDown&lt;/code> fused epilogue in &lt;code>NTT.cu&lt;/code>.
+Computes:
+out[l, i] = ((src2_exists ? (src2[l - pad_start, i] * src2_padding[l - pad_start]) : 0)
+- ntt_bconv[l, i]) * inv_prime_prod[l] mod Q_l,
+where &lt;code>Q_l&lt;/code> is the &lt;code>l&lt;/code>-th limb of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>, &lt;code>CheddarGPU_PadRangeWithinDest&lt;/code>&lt;/p>
+&lt;h4 id="attributes-21">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>pad_start&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>pad_end&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-21">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>ntt_bconv&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>inv_prime_prod&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>src2&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>src2_padding&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpumod_down_rescale-heircheddar_gpumoddownrescaleop">&lt;code>cheddar_gpu.mod_down_rescale&lt;/code> (heir::cheddar_gpu::ModDownRescaleOp)&lt;/h3>
+&lt;p>&lt;em>Combined ModDown and Rescale modulus switching&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.mod_down_rescale` operands prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>ModSwitchHandler::ModDownAndRescale&lt;/code> in &lt;code>ModSwitch.cu&lt;/code>.
+Shrinks input &lt;code>in&lt;/code> (with &lt;code>num_q(level) + num_aux&lt;/code> limbs) down to &lt;code>out&lt;/code> (at &lt;code>level - 1&lt;/code>).
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;h4 id="attributes-22">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is positive&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-22">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpumod_up-heircheddar_gpumodupop">&lt;code>cheddar_gpu.mod_up&lt;/code> (heir::cheddar_gpu::ModUpOp)&lt;/h3>
+&lt;p>&lt;em>ModUp basis extension: expands polynomial across beta destination buffers&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.mod_up` `outs` `(` $outs `)` `,` $in prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>ModSwitchHandler::ModUp&lt;/code> in &lt;code>ModSwitch.cu&lt;/code>.
+Expands input &lt;code>in&lt;/code> (with &lt;code>num_q&lt;/code> limbs) into &lt;code>beta&lt;/code> destination buffers &lt;code>outs&lt;/code>
+(each having &lt;code>num_q + num_aux&lt;/code> limbs).
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.
+&lt;code>level = -1&lt;/code> denotes the special base-level case where &amp;lsquo;outs&amp;rsquo; has one more limb than &amp;lsquo;in&amp;rsquo;.&lt;/p>
+&lt;h4 id="attributes-23">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-23">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>outs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpumod_up_to_max-heircheddar_gpumoduptomaxop">&lt;code>cheddar_gpu.mod_up_to_max&lt;/code> (heir::cheddar_gpu::ModUpToMaxOp)&lt;/h3>
+&lt;p>&lt;em>Broadcast and reduce polynomial limb across primes without centering&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.mod_up_to_max` operands prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>ModUpToMax1&lt;/code> in &lt;code>ElementWise.cu&lt;/code>.
+Computes &lt;code>dst[l, x] = src[0, x] % Q_l&lt;/code> limb-wise, where &lt;code>Q_l&lt;/code> is the &lt;code>l&lt;/code>-th
+limb of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.
+Operates in coefficient (&lt;code>coeff&lt;/code>) domain.&lt;/p>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-24">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-24">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4345,21 +5377,18 @@ Computes the Montgomery form multiplication of &lt;code>lhs&lt;/code> and &lt;co
 &lt;ul>
 &lt;li>Polynomial multiplication in evaluation domain is pointwise Montgomery multiplication:
 &lt;code>(a * R) * (b * R) * R^-1 = (a * b) * R mod Q&lt;/code>.&lt;/li>
-&lt;li>Operands must be in &lt;code>eval&lt;/code> form (&lt;code>lhs_form == rhs_form == out_form == eval&lt;/code>).&lt;/li>
+&lt;li>All operands are in &lt;code>eval&lt;/code> form.&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-4">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-25">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>lhs_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>rhs_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>out_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>lhs_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>rhs_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-4">Operands:&lt;/h4>
+&lt;h4 id="operands-25">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4391,20 +5420,18 @@ Computes the Montgomery form multiplication of &lt;code>in&lt;/code> and &lt;cod
 limb-wise, where the limbs of &lt;code>Q&lt;/code> are defined in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;p>Form contract:&lt;/p>
 &lt;ul>
-&lt;li>Montgomery multiplication requires &lt;code>eval&lt;/code> form (&lt;code>in_form == out_form == eval&lt;/code>).&lt;/li>
+&lt;li>&lt;code>in&lt;/code> and &lt;code>out&lt;/code> are in &lt;code>eval&lt;/code> form.&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-5">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-26">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>in_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>out_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-5">Operands:&lt;/h4>
+&lt;h4 id="operands-26">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4436,18 +5463,16 @@ In evaluation domain, multiplying by the imaginary unit corresponds to multiplyi
 first half by &lt;code>psi^(N/2)&lt;/code> and second half by &lt;code>-psi^(N/2) = Q - psi^(N/2)&lt;/code>.&lt;/p>
 &lt;p>Form contract:&lt;/p>
 &lt;ul>
-&lt;li>Requires &lt;code>eval&lt;/code> form (&lt;code>in_form == out_form == eval&lt;/code>).&lt;/li>
+&lt;li>&lt;code>in&lt;/code> and &lt;code>out&lt;/code> are in &lt;code>eval&lt;/code> form.&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-6">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-27">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>in_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>out_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-6">Operands:&lt;/h4>
+&lt;h4 id="operands-27">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4482,8 +5507,8 @@ in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;li>Valid in both &lt;code>coeff&lt;/code> and &lt;code>eval&lt;/code> domain.&lt;/li>
 &lt;li>Preserves representation form (&lt;code>in_form == out_form&lt;/code>).&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-7">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-28">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>in_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
@@ -4492,7 +5517,7 @@ in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-7">Operands:&lt;/h4>
+&lt;h4 id="operands-28">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4521,8 +5546,8 @@ prop-dict attr-dict `:` type($out_bx)
 &lt;code>kernel::Neg&amp;lt;word, 2&amp;gt;&lt;/code> in &lt;code>ElementWise.cu&lt;/code>.
 Computes &lt;code>out_bx = -in_bx mod Q&lt;/code> and &lt;code>out_ax = -in_ax mod Q&lt;/code> limb-wise, where
 the limbs of &lt;code>Q&lt;/code> are defined in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-8">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-29">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>in_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
@@ -4531,7 +5556,7 @@ the limbs of &lt;code>Q&lt;/code> are defined in &lt;code>CheddarGPU_ParamsAttr&
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-8">Operands:&lt;/h4>
+&lt;h4 id="operands-29">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4558,6 +5583,473 @@ the limbs of &lt;code>Q&lt;/code> are defined in &lt;code>CheddarGPU_ParamsAttr&
 &lt;/tr>
 &lt;/tbody>
 &lt;/table>
+&lt;h3 id="cheddar_gpuntt-heircheddar_gpunttop">&lt;code>cheddar_gpu.ntt&lt;/code> (heir::cheddar_gpu::NTTOp)&lt;/h3>
+&lt;p>&lt;em>Forward Number Theoretic Transform (NTT)&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.ntt` $out `,` $in ( `,` `skip_copy_src` `(` $skip_copy_src^ `)` )? prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>NTTHandler::NTT&lt;/code> and &lt;code>NTTHandler::NTTForModUp&lt;/code> in &lt;code>NTT.cu&lt;/code>.
+Computes the forward negacyclic number theoretic transform limb-wise, where
+the limbs of &lt;code>Q&lt;/code> are defined in &lt;code>CheddarGPU_ParamsAttr&lt;/code>. &lt;code>in&lt;/code> is in &lt;code>coeff&lt;/code>
+form and &lt;code>out&lt;/code> is in &lt;code>eval&lt;/code> form.&lt;/p>
+&lt;ul>
+&lt;li>If &lt;code>montgomery_conversion&lt;/code> is set, &lt;code>in&lt;/code> holds standard residues, which are
+converted to Montgomery form. Otherwise, &lt;code>in&lt;/code> must already be in Montgomery
+form.&lt;/li>
+&lt;li>&lt;code>prime_range&lt;/code> (&lt;code>[offset, count]&lt;/code>) or &lt;code>prime_indices&lt;/code> optionally select which
+limbs of &lt;code>Q&lt;/code> the active limbs are reduced by.&lt;/li>
+&lt;li>If &lt;code>skip_range = [start, end]&lt;/code> is set, limbs &lt;code>[start, end)&lt;/code> of &lt;code>out&lt;/code> are not
+transformed. If &lt;code>skip_copy_src&lt;/code> is also set, those limbs are instead copied
+verbatim from &lt;code>skip_copy_src&lt;/code>, starting at its limb &lt;code>skip_copy_in_offset&lt;/code>.&lt;/li>
+&lt;/ul>
+&lt;p>Traits: &lt;code>CheddarGPU_NTTPrimeCounts&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-30">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>montgomery_conversion&lt;/code>&lt;/td>&lt;td>::mlir::BoolAttr&lt;/td>&lt;td>bool attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>skip_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [start >= 0, end >= start]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_indices&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>skip_copy_in_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-30">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>skip_copy_src&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuntt_mod_down-heircheddar_gpunttmoddownop">&lt;code>cheddar_gpu.ntt_mod_down&lt;/code> (heir::cheddar_gpu::NTTModDownOp)&lt;/h3>
+&lt;p>&lt;em>Fused Forward NTT and ModDown epilogue&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.ntt_mod_down` $out `,` $ntt_in `,` $inv_prime_prod ( `,` `src2` `(` $src2^ `)` )?
+( `,` `src2_padding` `(` $src2_padding^ `)` )? prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>NTTPhase2ForModDown&lt;/code> in &lt;code>NTT.cu&lt;/code>.
+Computes forward NTT on &lt;code>ntt_in&lt;/code> followed by fused ModDown epilogue:
+out[l, x] = MontMul(ModSub(term1, NTT(ntt_in)[l, x]), inv_prime_prod[l]) mod Q_l
+where &lt;code>Q_l&lt;/code> is the &lt;code>l&lt;/code>-th limb of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>, and
+term1 = 0 (no src2)
+| src2[l - pad_start + src2_offset, x] (src2, l in [pad_start, pad_end))
+| MontMul(src2[l - pad_start + src2_offset, x], src2_padding[l - pad_start]) (src2_pad, l in [pad_start, pad_end))
+and 0 outside [pad_start, pad_end).
+&lt;code>ntt_in&lt;/code> is in &lt;code>coeff&lt;/code> form; &lt;code>src2&lt;/code> and &lt;code>out&lt;/code> are in &lt;code>eval&lt;/code> form.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>, &lt;code>CheddarGPU_PadRangeWithinDest&lt;/code>&lt;/p>
+&lt;h4 id="attributes-31">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>pad_start&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>pad_end&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>src2_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_indices&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-31">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>ntt_in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>inv_prime_prod&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>src2&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>src2_padding&lt;/code>&lt;/td>
+&lt;td>statically shaped 1D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpupermute-heircheddar_gpupermuteop">&lt;code>cheddar_gpu.permute&lt;/code> (heir::cheddar_gpu::PermuteOp)&lt;/h3>
+&lt;p>&lt;em>Galois automorphism permutation in eval form&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.permute` $out `,` $in prop-dict attr-dict `:` type($out)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>kernel::Permute&lt;/code> and &lt;code>ElementWiseHandler::Permute&lt;/code> in &lt;code>ElementWise.cu&lt;/code>
+to compute a Galois automorphism on a polynomial.&lt;/p>
+&lt;p>Computes:&lt;/p>
+&lt;p>&lt;code>e = brev_{logN+1}(x) + 1&lt;/code>
+&lt;code>src = brev_{logN+1}(e * g - 1)&lt;/code>&lt;/p>
+&lt;p>where &lt;code>g&lt;/code> is either the Galois factor (&lt;code>galois&lt;/code> attr, &lt;code>5^k mod 2N&lt;/code>) or complex conjugation
+&lt;code>2N - 1&lt;/code> (&lt;code>conj&lt;/code> unit attr).&lt;/p>
+&lt;p>Form contract:&lt;/p>
+&lt;ul>
+&lt;li>Requires &lt;code>eval&lt;/code> form for ciphertext operands.&lt;/li>
+&lt;li>in-place permutation is not supported.&lt;/li>
+&lt;/ul>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-32">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>galois&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>conj&lt;/code>&lt;/td>&lt;td>::mlir::UnitAttr&lt;/td>&lt;td>unit attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-32">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpupermute_2-heircheddar_gpupermute2op">&lt;code>cheddar_gpu.permute_2&lt;/code> (heir::cheddar_gpu::Permute2Op)&lt;/h3>
+&lt;p>&lt;em>Galois automorphism permutation for two polynomials&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.permute_2` `ins` `(` $in_bx `,` $in_ax `)`
+`outs` `(` $out_bx `,` $out_ax `)`
+prop-dict attr-dict `:` type($out_bx)
+&lt;/code>&lt;/pre>&lt;p>Same as &lt;code>cheddar_gpu.permute&lt;/code> with two polynomials.&lt;/p>
+&lt;p>Computes eval-form Galois automorphism on both bx and ax simultaneously.&lt;/p>
+&lt;p>Note in-place permutation is not supported, so all operand buffers
+must be distinct.&lt;/p>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-33">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>galois&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>conj&lt;/code>&lt;/td>&lt;td>::mlir::UnitAttr&lt;/td>&lt;td>unit attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-33">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpupermute_accum-heircheddar_gpupermuteaccumop">&lt;code>cheddar_gpu.permute_accum&lt;/code> (heir::cheddar_gpu::PermuteAccumOp)&lt;/h3>
+&lt;p>&lt;em>Accumulate multiple Galois automorphism permutations&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.permute_accum` $out `,` (`acc` `(` $acc^ `)` `,`)? `srcs` `(` $srcs `)` prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>kernel::PermuteAccum&lt;/code> and &lt;code>kernel::PermuteAccumAdd&lt;/code> in &lt;code>ElementWise.cu&lt;/code>.
+Computes &lt;code>out = (acc +) sum_k permute(srcs[k], galois_factors[k])&lt;/code>.&lt;/p>
+&lt;p>Form contract:&lt;/p>
+&lt;ul>
+&lt;li>Requires &lt;code>eval&lt;/code> form for all operands.&lt;/li>
+&lt;/ul>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>, &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-34">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>galois_factors&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-34">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>acc&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>srcs&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpupermute_accum_2-heircheddar_gpupermuteaccum2op">&lt;code>cheddar_gpu.permute_accum_2&lt;/code> (heir::cheddar_gpu::PermuteAccum2Op)&lt;/h3>
+&lt;p>&lt;em>Accumulate multiple Galois automorphism permutations for two polynomials&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.permute_accum_2` $out_bx `,` $out_ax `,` (`acc` `(` $acc_bx^ `,` $acc_ax `)` `,`)?
+`srcs_bx` `(` $srcs_bx `)` `,` `srcs_ax` `(` $srcs_ax `)` prop-dict attr-dict
+`:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>PermuteAccum&lt;/code> for 2 polynomials in &lt;code>ElementWise.cu&lt;/code>.
+Computes &lt;code>{out_bx, out_ax} = ({acc_bx, acc_ax} +) sum_k permute({srcs_bx[k], srcs_ax[k]}, galois_factors[k])&lt;/code>.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>, &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-35">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>galois_factors&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>prime_offset&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-35">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>acc_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>acc_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>srcs_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>srcs_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpupseudo_mod_up-heircheddar_gpupseudomodupop">&lt;code>cheddar_gpu.pseudo_mod_up&lt;/code> (heir::cheddar_gpu::PseudoModUpOp)&lt;/h3>
+&lt;p>&lt;em>Scales a polynomial buffer by p_prod = prod(P) mod Q&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.pseudo_mod_up` operands prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>ModSwitchHandler::PseudoModUp&lt;/code> in &lt;code>ModSwitch.cu&lt;/code>.
+Computes &lt;code>out[l][i] = in[l][i] * p_prod[l] mod Q_l&lt;/code> limb-wise, where &lt;code>Q_l&lt;/code> is the
+&lt;code>l&lt;/code>-th limb of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;h4 id="attributes-36">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-36">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpurelinearize-heircheddar_gpurelinearizeop">&lt;code>cheddar_gpu.relinearize&lt;/code> (heir::cheddar_gpu::RelinearizeOp)&lt;/h3>
+&lt;p>&lt;em>Relinearize degree-2 ciphertext&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.relinearize` $out_bx `,` $out_ax `,` $in_bx `,` $in_ax `,` $in_rx `,`
+`evk_bx` `(` $evk_bx `)` `,` `evk_ax` `(` $evk_ax `)`
+prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Relinearizes degree-2 ciphertext &lt;code>(in_bx, in_ax, in_rx)&lt;/code> using relinearization key
+&lt;code>(evk_bx, evk_ax)&lt;/code> producing degree-1 ciphertext &lt;code>(out_bx, out_ax)&lt;/code> at the same level.
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>&lt;/p>
+&lt;h4 id="attributes-37">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-37">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_rx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpurelinearize_rescale-heircheddar_gpurelinearizerescaleop">&lt;code>cheddar_gpu.relinearize_rescale&lt;/code> (heir::cheddar_gpu::RelinearizeRescaleOp)&lt;/h3>
+&lt;p>&lt;em>Combined Relinearize and Rescale&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.relinearize_rescale` $out_bx `,` $out_ax `,` $in_bx `,` $in_ax `,` $in_rx `,`
+`evk_bx` `(` $evk_bx `)` `,` `evk_ax` `(` $evk_ax `)`
+prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Relinearizes degree-2 ciphertext &lt;code>(in_bx, in_ax, in_rx)&lt;/code> at &lt;code>level&lt;/code> and rescales down to &lt;code>level - 1&lt;/code>.
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;p>Traits: &lt;code>AttrSizedOperandSegments&lt;/code>&lt;/p>
+&lt;h4 id="attributes-38">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is positive&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-38">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_bx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in_rx&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_bx&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>evk_ax&lt;/code>&lt;/td>
+&lt;td>variadic of statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpurescale-heircheddar_gpurescaleop">&lt;code>cheddar_gpu.rescale&lt;/code> (heir::cheddar_gpu::RescaleOp)&lt;/h3>
+&lt;p>&lt;em>Rescale modulus switching: drops terminal/main prime(s) from level to level - 1&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.rescale` operands prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Mirrors Cheddar&amp;rsquo;s &lt;code>ModSwitchHandler::Rescale&lt;/code> in &lt;code>ModSwitch.cu&lt;/code>.
+Shrinks input &lt;code>in&lt;/code> (at &lt;code>level&lt;/code>) down to &lt;code>out&lt;/code> (at &lt;code>level - 1&lt;/code>).
+Operates in evaluation (&lt;code>eval&lt;/code>) domain.&lt;/p>
+&lt;h4 id="attributes-39">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>level&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is positive&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-39">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>in&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
 &lt;h3 id="cheddar_gpusub-heircheddar_gpusubop">&lt;code>cheddar_gpu.sub&lt;/code> (heir::cheddar_gpu::SubOp)&lt;/h3>
 &lt;p>&lt;em>Pointwise modular subtraction of two polynomial buffers&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
@@ -4570,8 +6062,8 @@ in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;li>Modular subtraction is valid in both &lt;code>coeff&lt;/code> and &lt;code>eval&lt;/code> domain.&lt;/li>
 &lt;li>Both operands must have matching form (&lt;code>lhs_form == rhs_form == out_form&lt;/code>).&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-9">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-40">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>lhs_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
@@ -4582,7 +6074,7 @@ in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-9">Operands:&lt;/h4>
+&lt;h4 id="operands-40">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4615,8 +6107,8 @@ prop-dict attr-dict `:` type($out_bx)
 &lt;code>kernel::Sub&amp;lt;word, 2&amp;gt;&lt;/code> in &lt;code>ElementWise.cu&lt;/code>.
 Computes &lt;code>out_bx = lhs_bx - rhs_bx mod Q&lt;/code> and &lt;code>out_ax = lhs_ax - rhs_ax mod Q&lt;/code>
 limb-wise, where the limbs of &lt;code>Q&lt;/code> are defined in &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-10">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-41">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>lhs_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
@@ -4627,7 +6119,7 @@ limb-wise, where the limbs of &lt;code>Q&lt;/code> are defined in &lt;code>Chedd
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>num_aux&lt;/code>&lt;/td>&lt;td>::mlir::IntegerAttr&lt;/td>&lt;td>64-bit signless integer attribute whose value is non-negative&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-10">Operands:&lt;/h4>
+&lt;h4 id="operands-41">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4673,8 +6165,8 @@ of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;ul>
 &lt;li>Valid in both &lt;code>coeff&lt;/code> and &lt;code>eval&lt;/code> domain (&lt;code>in_form == out_form&lt;/code>).&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-11">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-42">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>in_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
@@ -4682,7 +6174,7 @@ of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-11">Operands:&lt;/h4>
+&lt;h4 id="operands-42">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4716,8 +6208,8 @@ of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;ul>
 &lt;li>Valid in both &lt;code>coeff&lt;/code> and &lt;code>eval&lt;/code> domain (&lt;code>in_form == out_form&lt;/code>).&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-12">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>CheddarGPU_NumAuxWithinOut&lt;/code>, &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-43">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>in_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
@@ -4725,7 +6217,7 @@ of &lt;code>Q&lt;/code> from &lt;code>CheddarGPU_ParamsAttr&lt;/code>.&lt;/p>
 &lt;tr>&lt;td>&lt;code>in_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-12">Operands:&lt;/h4>
+&lt;h4 id="operands-43">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4759,18 +6251,15 @@ Multiplies two degree-1 ciphertexts (b1, a1) and (b2, a2) into a degree-2 cipher
 (b1&lt;em>b2, b1&lt;/em>a2 + a1&lt;em>b2, a1&lt;/em>a2) using Karatsuba modular multiplication.&lt;/p>
 &lt;p>Form contract:&lt;/p>
 &lt;ul>
-&lt;li>Requires &lt;code>eval&lt;/code> form for all operands.&lt;/li>
+&lt;li>All operands are in &lt;code>eval&lt;/code> form.&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-13">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-44">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>lhs_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>rhs_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>out_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-13">Operands:&lt;/h4>
+&lt;h4 id="operands-44">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4819,17 +6308,15 @@ prop-dict attr-dict `:` type($out_bx)
 Squares degree-1 ciphertext (b1, a1) into degree-2 ciphertext (b1^2, 2&lt;em>b1&lt;/em>a1, a1^2).&lt;/p>
 &lt;p>Form contract:&lt;/p>
 &lt;ul>
-&lt;li>Requires &lt;code>eval&lt;/code> form for all operands.&lt;/li>
+&lt;li>All operands are in &lt;code>eval&lt;/code> form.&lt;/li>
 &lt;/ul>
-&lt;p>Traits: &lt;code>CheddarGPU_LimbRangesWithin&lt;/code>&lt;/p>
-&lt;h4 id="attributes-14">Attributes:&lt;/h4>
+&lt;p>Traits: &lt;code>LimbRangesWithin&lt;/code>&lt;/p>
+&lt;h4 id="attributes-45">Attributes:&lt;/h4>
 &lt;table>
 &lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>in_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
-&lt;tr>&lt;td>&lt;code>out_form&lt;/code>&lt;/td>&lt;td>::mlir::heir::cheddar_gpu::FormAttr&lt;/td>&lt;td>Cheddar polynomial representation form&lt;/td>&lt;/tr>
 &lt;tr>&lt;td>&lt;code>out_limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [offset >= 0, count > 0]&lt;/td>&lt;/tr>
 &lt;/table>
-&lt;h4 id="operands-14">Operands:&lt;/h4>
+&lt;h4 id="operands-45">Operands:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4856,6 +6343,31 @@ Squares degree-1 ciphertext (b1, a1) into degree-2 ciphertext (b1^2, 2&lt;em>b1&
 &lt;/tr>
 &lt;tr>
 &lt;td style="text-align:center">&lt;code>src_ax&lt;/code>&lt;/td>
+&lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
+&lt;h3 id="cheddar_gpuzero_pad-heircheddar_gpuzeropadop">&lt;code>cheddar_gpu.zero_pad&lt;/code> (heir::cheddar_gpu::ZeroPadOp)&lt;/h3>
+&lt;p>&lt;em>Zero-fill limb range [start, end) of a buffer&lt;/em>&lt;/p>
+&lt;p>Syntax:&lt;/p>
+&lt;pre tabindex="0">&lt;code>operation ::= `cheddar_gpu.zero_pad` operands prop-dict attr-dict `:` functional-type(operands, results)
+&lt;/code>&lt;/pre>&lt;p>Zero-fills limbs in &lt;code>[start, end)&lt;/code> of the destination buffer.&lt;/p>
+&lt;h4 id="attributes-46">Attributes:&lt;/h4>
+&lt;table>
+&lt;tr>&lt;th>Attribute&lt;/th>&lt;th>MLIR Type&lt;/th>&lt;th>Description&lt;/th>&lt;/tr>
+&lt;tr>&lt;td>&lt;code>limb_range&lt;/code>&lt;/td>&lt;td>::mlir::DenseI64ArrayAttr&lt;/td>&lt;td>i64 dense array attribute with exactly 2 elements of the form [start >= 0, end >= start]&lt;/td>&lt;/tr>
+&lt;/table>
+&lt;h4 id="operands-46">Operands:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Operand&lt;/th>
+&lt;th>Description&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">&lt;code>out&lt;/code>&lt;/td>
 &lt;td>statically shaped 2D memref of 32-bit signless integer or 64-bit signless integer values&lt;/td>
 &lt;/tr>
 &lt;/tbody>
@@ -4891,9 +6403,33 @@ Squares degree-1 ciphertext (b1, a1) into degree-2 ciphertext (b1^2, 2&lt;em>b1&
 &lt;/tr>
 &lt;/tbody>
 &lt;/table>
+&lt;h3 id="hoistphasekind">HoistPhaseKind&lt;/h3>
+&lt;p>&lt;em>Hoist phase kind (cts or stc)&lt;/em>&lt;/p>
+&lt;h4 id="cases-1">Cases:&lt;/h4>
+&lt;table>
+&lt;thead>
+&lt;tr>
+&lt;th style="text-align:center">Symbol&lt;/th>
+&lt;th style="text-align:center">Value&lt;/th>
+&lt;th>String&lt;/th>
+&lt;/tr>
+&lt;/thead>
+&lt;tbody>
+&lt;tr>
+&lt;td style="text-align:center">CTS&lt;/td>
+&lt;td style="text-align:center">&lt;code>0&lt;/code>&lt;/td>
+&lt;td>cts&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">STC&lt;/td>
+&lt;td style="text-align:center">&lt;code>1&lt;/code>&lt;/td>
+&lt;td>stc&lt;/td>
+&lt;/tr>
+&lt;/tbody>
+&lt;/table>
 &lt;h3 id="inttepilogue">INTTEpilogue&lt;/h3>
 &lt;p>&lt;em>INTT epilogue post-processing mode&lt;/em>&lt;/p>
-&lt;h4 id="cases-1">Cases:&lt;/h4>
+&lt;h4 id="cases-2">Cases:&lt;/h4>
 &lt;table>
 &lt;thead>
 &lt;tr>
@@ -4994,7 +6530,7 @@ rescaling to achieve intermediate widths of rescaling.&lt;/p>
 &lt;p>&lt;em>Addition operation between ciphertexts.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `ckks.add` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands">Operands:&lt;/h4>
@@ -5035,7 +6571,7 @@ rescaling to achieve intermediate widths of rescaling.&lt;/p>
 &lt;p>&lt;em>Addition operation between ciphertext-plaintext.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `ckks.add_plain` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AllCiphertextTypesMatch&lt;/code>, &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AllCiphertextTypesMatch&lt;/code>, &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-1">Operands:&lt;/h4>
@@ -5120,7 +6656,7 @@ and refresh its parameters, allowing for further computations on the ciphertext.
 &lt;p>&lt;em>Lower the modulus level of the ciphertext via dropping RNS limbs.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `ckks.level_reduce` operands prop-dict attr-dict `:` qualified(type($input)) `-&amp;gt;` qualified(type($output))
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>, &lt;code>ReducesLevelOpInterface&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="attributes-1">Attributes:&lt;/h4>
@@ -5422,7 +6958,7 @@ listing the powers of &lt;code>s&lt;/code> at each position of the array. For ex
 &lt;p>&lt;em>Subtraction operation between ciphertexts.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `ckks.sub` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-10">Operands:&lt;/h4>
@@ -5463,7 +6999,7 @@ listing the powers of &lt;code>s&lt;/code> at each position of the array. For ex
 &lt;p>&lt;em>Subtraction operation between ciphertext-plaintext.&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `ckks.sub_plain` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AllCiphertextTypesMatch&lt;/code>, &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AllCiphertextTypesMatch&lt;/code>, &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-11">Operands:&lt;/h4>
@@ -11984,14 +13520,18 @@ of the polynomials contain the integers, with the same semantics as
 &lt;p>&lt;em>An encoding of a scalar in the constant coefficient&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>#lwe.constant_coefficient_encoding&amp;lt;
-int64_t # scaling_factor
+int64_t, # scaling_factor
+unsigned # plaintext_bits
 &amp;gt;
 &lt;/code>&lt;/pre>&lt;p>An encoding of a single scalar into the constant coefficient of the plaintext.&lt;/p>
 &lt;p>All other coefficients of the plaintext are set to be zero. This encoding is
 used to encode scalar LWE ciphertexts where the plaintext space is viewed
 as a polynomial ring modulo &lt;code>x&lt;/code>.&lt;/p>
+&lt;p>For scalar LWE (CGGI) ciphertexts, &lt;code>plaintext_bits&lt;/code> optionally records the
+plaintext bit width (with &lt;code>0&lt;/code> meaning unset).&lt;/p>
 &lt;p>Example:&lt;/p>
 &lt;pre tabindex="0">&lt;code>#coeff_encoding = #lwe.constant_coefficient_encoding&amp;lt;scaling_factor=10000&amp;gt;
+#cggi_encoding = #lwe.constant_coefficient_encoding&amp;lt;scaling_factor=268435456, plaintext_bits=4&amp;gt;
 &lt;/code>&lt;/pre>&lt;h4 id="parameters-2">Parameters:&lt;/h4>
 &lt;table>
 &lt;thead>
@@ -12006,6 +13546,11 @@ as a polynomial ring modulo &lt;code>x&lt;/code>.&lt;/p>
 &lt;td style="text-align:center">scaling_factor&lt;/td>
 &lt;td style="text-align:center">&lt;code>int64_t&lt;/code>&lt;/td>
 &lt;td>The factor by which each cleartext scalar is multiplied before being rounded to the nearest integer and encoded.&lt;/td>
+&lt;/tr>
+&lt;tr>
+&lt;td style="text-align:center">plaintext_bits&lt;/td>
+&lt;td style="text-align:center">&lt;code>unsigned&lt;/code>&lt;/td>
+&lt;td>plaintext bit width for scalar LWE (CGGI); 0 = unset&lt;/td>
 &lt;/tr>
 &lt;/tbody>
 &lt;/table>
@@ -12187,21 +13732,18 @@ will never overflow beyond the message type.&lt;/p>
 ::mlir::heir::polynomial::RingAttr, # ring
 Attribute # encoding
 &amp;gt;
-&lt;/code>&lt;/pre>&lt;p>An attribute describing the plaintext space and the transformation from
-application data to plaintext space of an FHE scheme.&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>An attribute describing the plaintext space and encoding of an
+&lt;code>!lwe.lwe_plaintext&lt;/code> value.&lt;/p>
 &lt;p>The plaintext space information is the ring structure, which contains the
 plaintext modulus $t$, which may be a power of two in the case of CGGI
-ciphertexts, or a prime power for RLWE. LWE ciphertexts use the
-ideal polynomial of degree 1 $x$. The plaintext modulus used in LWE-based
+plaintexts, or a prime power for RLWE. Scalar LWE plaintexts use the
+ideal polynomial of degree 1, $x$. The plaintext modulus used in LWE-based
 CGGI plaintexts describes the full message space $\mathbb{Z}_p$ including
 the padding bits.&lt;/p>
-&lt;p>For RLWE schemes, this will include the type of encoding of application data
-integers to a plaintext space &lt;code>Z_p[X]/X^N + 1&lt;/code>. This may be a constant
-coefficient encoding, CRT-based packing for SIMD semantics, or other slot
-packing. When using full CRT packing, the ring must split into linear
-factors. The CKKS scheme will also include attributes describing the complex
-encoding, including the scaling factor, which will change after
-multiplication and rescaling.&lt;/p>
+&lt;p>For RLWE schemes, this includes the encoding of application data to a
+plaintext space &lt;code>Z_p[X]/X^N + 1&lt;/code>, such as constant coefficient encoding,
+CRT-based packing for SIMD semantics, or CKKS inverse canonical encoding.
+When using full CRT packing, the ring must split into linear factors.&lt;/p>
 &lt;h4 id="parameters-7">Parameters:&lt;/h4>
 &lt;table>
 &lt;thead>
@@ -12235,15 +13777,15 @@ may overflow beyond the message type.&lt;/p>
 &lt;p>&lt;em>A ciphertext type&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>!lwe.lwe_ciphertext&amp;lt;
-PlaintextSpaceAttr, # plaintext_space
+Attribute, # encoding
 CiphertextSpaceAttr, # ciphertext_space
 KeyAttr, # key
 ModulusChainAttr # modulus_chain
 &amp;gt;
-&lt;/code>&lt;/pre>&lt;p>An LWE ciphertext will always contain the plaintext space, ciphertext space,
-and key information.&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>An LWE ciphertext will always contain the plaintext encoding, ciphertext
+space, and key information.&lt;/p>
 &lt;p>A modulus chain is optionally specified for parameter choices in RLWE
-schemes that use more than one of modulus. When no modulus chain is
+schemes that use more than one modulus. When no modulus chain is
 specified, the ciphertext modulus is always the ciphertext ring&amp;rsquo;s
 coefficient modulus.&lt;/p>
 &lt;h4 id="parameters-8">Parameters:&lt;/h4>
@@ -12257,9 +13799,9 @@ coefficient modulus.&lt;/p>
 &lt;/thead>
 &lt;tbody>
 &lt;tr>
-&lt;td style="text-align:center">plaintext_space&lt;/td>
-&lt;td style="text-align:center">&lt;code>PlaintextSpaceAttr&lt;/code>&lt;/td>
-&lt;td>&lt;/td>
+&lt;td style="text-align:center">encoding&lt;/td>
+&lt;td style="text-align:center">&lt;code>Attribute&lt;/code>&lt;/td>
+&lt;td>An encoding of a scalar in the constant coefficient or An encoding of cleartexts directly as coefficients. or An encoding of cleartexts via the inverse canonical embedding. or An encoding of cleartexts via CRT slots.&lt;/td>
 &lt;/tr>
 &lt;tr>
 &lt;td style="text-align:center">ciphertext_space&lt;/td>
@@ -12851,7 +14393,7 @@ an encryption of round(Q&amp;rsquo; / Q * x).&lt;/p>
 &lt;p>&lt;em>Add two RLWE ciphertexts&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `lwe.radd` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-10">Operands:&lt;/h4>
@@ -12892,7 +14434,7 @@ an encryption of round(Q&amp;rsquo; / Q * x).&lt;/p>
 &lt;p>&lt;em>Addition between RLWE ciphertext-plaintext&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `lwe.radd_plain` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Commutative&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-11">Operands:&lt;/h4>
@@ -13239,7 +14781,7 @@ back to the top level of the modulus chain.&lt;/p>
 &lt;p>&lt;em>Subtract two RLWE ciphertexts&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `lwe.rsub` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>SameOperandsAndResultRings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-19">Operands:&lt;/h4>
@@ -13280,7 +14822,7 @@ back to the top level of the modulus chain.&lt;/p>
 &lt;p>&lt;em>Subtraction between RLWE ciphertext-plaintext&lt;/em>&lt;/p>
 &lt;p>Syntax:&lt;/p>
 &lt;pre tabindex="0">&lt;code>operation ::= `lwe.rsub_plain` operands attr-dict `:` functional-type(operands, results)
-&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultPlaintextTypes&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
+&lt;/code>&lt;/pre>&lt;p>Traits: &lt;code>AlwaysSpeculatableImplTrait&lt;/code>, &lt;code>Elementwise&lt;/code>, &lt;code>InferTypeOpAdaptor&lt;/code>, &lt;code>IsCiphertextPlaintextOp&lt;/code>, &lt;code>SameOperandsAndResultEncodings&lt;/code>, &lt;code>Scalarizable&lt;/code>, &lt;code>Tensorizable&lt;/code>, &lt;code>Vectorizable&lt;/code>&lt;/p>
 &lt;p>Interfaces: &lt;code>ConditionallySpeculatable&lt;/code>, &lt;code>InferTypeOpInterface&lt;/code>, &lt;code>NoMemoryEffect (MemoryEffectOpInterface)&lt;/code>&lt;/p>
 &lt;p>Effects: &lt;code>MemoryEffects::Effect{}&lt;/code>&lt;/p>
 &lt;h4 id="operands-20">Operands:&lt;/h4>
