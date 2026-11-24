@@ -495,14 +495,20 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
   auto* ctx = builder.getContext();
   SmallVector<Type> inputs{
       OpaqueType::get(ctx, "const std::shared_ptr<Context>&")};
-  if (split) inputs.push_back(OpaqueType::get(ctx, kSecretSeedType));
+  if (split) {
+    inputs.push_back(OpaqueType::get(ctx, kSecretSeedType));
+    // false leaves out the rotation keys, which the server then derives from
+    // the client's Galois key upload (heir::cyclops::writeGaloisKeys).
+    inputs.push_back(OpaqueType::get(ctx, "bool"));
+  }
   auto function = createEmitCFunction(builder, loc, "KeyGen", inputs,
                                       {OpaqueType::get(ctx, "KeyPair")}, false);
   builder.setInsertionPointToStart(&function.getBody().front());
   Value keyPair = createLocal(builder, loc, "KeyPair");
   Value storage = MemberOp::create(
       builder, loc, LValueType::get(keyStorageType), "storage", keyPair);
-  SmallVector<Value> keygenOperands(function.getArguments());
+  SmallVector<Value> keygenOperands(function.getArguments().take_front(
+      split ? 2 : function.getNumArguments()));
   keygenOperands.push_back(storage);
   callInternal(builder, loc, functions.keygen, keygenOperands);
   Type uiPointer =
@@ -511,10 +517,12 @@ LogicalResult addKeygenDefinition(OpBuilder& builder, Location loc,
                                   "heir::getPointer", storage)
                  .getResult(0);
   if (split)
-    VerbatimOp::create(builder, loc,
-                       "{}.storage->PrepareRotationKey(GetKeyRequest(), "
-                       "{}->NativeSecretId());",
-                       ValueRange{keyPair, function.getArgument(0)});
+    VerbatimOp::create(
+        builder, loc,
+        "{}.storage->PrepareRotationKey({} ? GetKeyRequest() : "
+        "::heir::cyclops::withoutRotationKeys(GetKeyRequest()), "
+        "{}->NativeSecretId());",
+        ValueRange{keyPair, function.getArgument(2), function.getArgument(0)});
   for (StringRef field : {"secret_key", "public_key"}) {
     if (split && field == "public_key") continue;
     Type aliasType =
@@ -821,14 +829,16 @@ LogicalResult verifyKeyPlanningMetadata(func::FuncOp setup) {
 }
 
 // Emits the planned evaluation keys as a static table and a loop over it.
+// `setup` is the client's setup function, which carries the planned keys on
+// both sides.
 void addKeyRequestDefinition(OpBuilder& builder, Location loc,
-                             const EntryFunctions& functions) {
+                             func::FuncOp setup) {
   OpBuilder::InsertionGuard guard(builder);
   auto* ctx = builder.getContext();
   Type request = OpaqueType::get(ctx, "EvaluationKeyRequest");
 
-  auto keys = functions.setup->getAttrOfType<DenseI64ArrayAttr>(
-      cheddar::kEvaluationKeysAttrName);
+  auto keys =
+      setup->getAttrOfType<DenseI64ArrayAttr>(cheddar::kEvaluationKeysAttrName);
   ArrayRef<int64_t> values = keys ? keys.asArrayRef() : ArrayRef<int64_t>{};
   size_t count = values.size() / kKeyRequestFields;
 
@@ -916,6 +926,7 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   bool split = side != InterfaceSide::Combined;
   bool client = side != InterfaceSide::Server;
   bool server = side != InterfaceSide::Client;
+  func::FuncOp clientSetup = functions.setup;
   if (side == InterfaceSide::Server) functions.setup = functions.serverSetup;
 
   if (!functions.facadeEvaluate ||
@@ -1114,7 +1125,8 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
   emitVerbatim(builder, loc, "namespace " + namespaceName + " {");
 
   if (failed(addSetupDefinition(builder, loc, functions))) return failure();
-  if (split && client) addKeyRequestDefinition(builder, loc, functions);
+  // The server re-plans the client's Galois key upload from the same request.
+  if (split) addKeyRequestDefinition(builder, loc, clientSetup);
   if (client && (failed(addKeygenDefinition(builder, loc, functions,
                                             keygenDestinations.front(),
                                             serverNeedsSecret, split)) ||
@@ -1135,12 +1147,18 @@ LogicalResult buildInterface(ModuleOp module, EntryFunctions functions,
     auto declaration = cast<FuncOp>(builder.clone(*wrapper));
     declaration.getBody().dropAllReferences();
     declaration.getBody().getBlocks().clear();
-    // Two emitc.funcs cannot share a symbol, so the unseeded overload is
-    // verbatim.
-    if (split && declaration.getSymName() == "KeyGen")
+    // Two emitc.funcs cannot share a symbol, so the overloads that generate
+    // every planned key are verbatim.
+    if (split && declaration.getSymName() == "KeyGen") {
       emitVerbatim(builder, loc,
                    "inline KeyPair KeyGen(const std::shared_ptr<Context>& "
-                   "ctx) { return KeyGen(ctx, std::nullopt); }");
+                   "ctx, " +
+                       std::string(kSecretSeedType) +
+                       " seed) { return KeyGen(ctx, seed, true); }");
+      emitVerbatim(builder, loc,
+                   "inline KeyPair KeyGen(const std::shared_ptr<Context>& "
+                   "ctx) { return KeyGen(ctx, std::nullopt, true); }");
+    }
   }
 
   builder.setInsertionPointToStart(&source.getBodyRegion().front());
