@@ -242,7 +242,7 @@ LogicalResult ScaleAnalysis<ScaleModelT>::visitOperation(
 
         // propagate scale to result
         int64_t result;
-        if (assumeTargetScaleForMul) {
+        if (assumeScaleAdjustments) {
           int64_t targetScale =
               ScaleModelT::evalMulTargetScale(getLocalParam(mulOp.getResult()));
           if (scaleLhs + scaleRhs < targetScale) {
@@ -273,8 +273,13 @@ LogicalResult ScaleAnalysis<ScaleModelT>::visitOperation(
         // propagate scale to result
         auto scale = scales[0];
         // get level of the operand.
-        auto newScale = ScaleModelT::evalModReduceScale(
-            getLocalParam(modReduceOp.getInput()), scale);
+        auto inputParam = getLocalParam(modReduceOp.getInput());
+        if (assumeScaleAdjustments) {
+          // An input whose scale is too small to be mod reduced is raised to
+          // the target scale first.
+          scale = std::max(scale, ScaleModelT::evalMulTargetScale(inputParam));
+        }
+        auto newScale = ScaleModelT::evalModReduceScale(inputParam, scale);
 
         propagate(modReduceOp.getResult(), ScaleState<ScaleModelT>(newScale));
       })

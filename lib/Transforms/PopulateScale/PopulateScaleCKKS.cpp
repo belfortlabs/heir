@@ -61,7 +61,7 @@ LogicalResult createAndRunDataflow(Operation* op, DataFlowSolver& solver,
                                    int64_t logDefaultScale,
                                    ckks::SchemeParamAttr ckksSchemeParamAttr,
                                    bool beforeMulIncludeFirstMul,
-                                   bool assumeTargetScaleForMul = false) {
+                                   bool assumeScaleAdjustments = false) {
   dataflow::loadBaselineAnalyses(solver);
   solver.load<SecretnessAnalysis>();
   auto inputScale = logDefaultScale;
@@ -72,7 +72,7 @@ LogicalResult createAndRunDataflow(Operation* op, DataFlowSolver& solver,
   auto param = ckks::getSchemeParamFromAttr(ckksSchemeParamAttr);
   solver.load<ScaleAnalysis<CKKSScaleModel>>(param,
                                              /*inputScale*/ inputScale,
-                                             assumeTargetScaleForMul);
+                                             assumeScaleAdjustments);
 
   return solver.initializeAndRun(op);
 }
@@ -141,12 +141,14 @@ struct PopulateScaleCKKS : impl::PopulateScaleCKKSBase<PopulateScaleCKKS> {
     auto logDefaultScale = ckksSchemeParamAttr.getLogDefaultScale();
     auto param = ckks::getSchemeParamFromAttr(ckksSchemeParamAttr);
 
-    // Step 1: Run Solver 1 (Forward Analysis only)
+    // Step 1: Run Solver 1 (Forward Analysis only). It computes the scales the
+    // values have once step 2 has inserted its adjustments, so that every
+    // adjustment is decided with the scales its operands will actually have.
     DataFlowSolver solver;
     if (failed(createAndRunDataflow(getOperation(), solver, logDefaultScale,
                                     ckksSchemeParamAttr,
                                     beforeMulIncludeFirstMul,
-                                    /*assumeTargetScaleForMul*/ true))) {
+                                    /*assumeScaleAdjustments*/ true))) {
       signalPassFailure();
       return;
     }

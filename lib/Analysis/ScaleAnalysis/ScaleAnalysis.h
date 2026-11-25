@@ -144,12 +144,12 @@ class ScaleAnalysis
   using LocalParamType = typename ScaleModelT::LocalParam;
 
   ScaleAnalysis(DataFlowSolver& solver, const SchemeParamType& schemeParam,
-                int64_t inputScale, bool assumeTargetScaleForMul = false)
+                int64_t inputScale, bool assumeScaleAdjustments = false)
       : dataflow::SparseForwardDataFlowAnalysis<ScaleLattice<ScaleModelT>>(
             solver),
         schemeParam(schemeParam),
         inputScale(inputScale),
-        assumeTargetScaleForMul(assumeTargetScaleForMul) {}
+        assumeScaleAdjustments(assumeScaleAdjustments) {}
 
   void setToEntryState(ScaleLattice<ScaleModelT>* lattice) override {
     if (isa<secret::SecretType>(lattice->getAnchor().getType())) {
@@ -172,7 +172,7 @@ class ScaleAnalysis
  private:
   const SchemeParamType schemeParam;
   int64_t inputScale;
-  bool assumeTargetScaleForMul;
+  bool assumeScaleAdjustments;
 };
 
 template <typename ScaleModelT>
