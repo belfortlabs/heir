@@ -156,6 +156,7 @@ cc_binary(
         "@heir//lib/Transforms/LinalgFuseLinearOps",
         "@heir//lib/Transforms/LinearKernel:CountOps",
         "@heir//lib/Transforms/LinearKernel:DecomposeMaxPool",
+        "@heir//lib/Transforms/LinearKernel:ReluNormalization",
         "@heir//lib/Transforms/LinearKernel:StridedLayoutPropagation",
         "@heir//lib/Transforms/LowerPolynomialEval",
         "@heir//lib/Transforms/LowerUnpack",

@@ -671,12 +671,22 @@ constexpr double kCompositeSignPoly2[] = {
 struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
   // benefit 2 > the generic ConvertBinaryConstOp benefit (1) so this wins
   // for the ReLU shape when the option is enabled.
-  ReluViaCompositeSign(mlir::MLIRContext* context, DataFlowSolver* solver)
+  ReluViaCompositeSign(mlir::MLIRContext* context, DataFlowSolver* solver,
+                       bool enabledByDefault)
       : OpRewritePattern<arith::MaximumFOp>(context, /*benefit=*/2),
-        solver(solver) {}
+        solver(solver),
+        enabledByDefault(enabledByDefault) {}
 
   LogicalResult matchAndRewrite(arith::MaximumFOp op,
                                 PatternRewriter& rewriter) const override {
+    // A `relu_method` attribute on the op chooses the method for that op and
+    // overrides the pass option in both directions.
+    bool enabled = enabledByDefault;
+    if (auto method = op->getAttrOfType<StringAttr>("relu_method"))
+      enabled = method.getValue() == "composite";
+    if (!enabled) {
+      return rewriter.notifyMatchFailure(op, "composite ReLU not selected");
+    }
     // Identify the ReLU shape: one operand is a constant equal to 0.
     auto lhsConst = getSingleValueOrSplat(op.getLhs());
     auto rhsConst = getSingleValueOrSplat(op.getRhs());
@@ -738,6 +748,7 @@ struct ReluViaCompositeSign : public OpRewritePattern<arith::MaximumFOp> {
 
  private:
   DataFlowSolver* solver;
+  bool enabledByDefault;
 };
 
 // Use a square and multiply algorithm for x^n where n is a constant.
@@ -805,9 +816,7 @@ struct PolynomialApproximation
     }
     patterns.add<GoldschmidtApproximation>(context, &solver);
     patterns.add<SquareAndMultiplyForPowOp>(context);
-    if (useCompositeRelu) {
-      patterns.add<ReluViaCompositeSign>(context, &solver);
-    }
+    patterns.add<ReluViaCompositeSign>(context, &solver, useCompositeRelu);
 
     // Math unary ops
     patterns.add<ConvertUnaryOp<math::AbsFOp>>(context, &solver, absf);

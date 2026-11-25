@@ -129,6 +129,7 @@
 #include "lib/Transforms/LinalgFuseLinearOps/LinalgFuseLinearOps.h"
 #include "lib/Transforms/LinearKernel/CountOps.h"
 #include "lib/Transforms/LinearKernel/DecomposeMaxPool.h"
+#include "lib/Transforms/LinearKernel/ReluNormalization.h"
 #include "lib/Transforms/LinearKernel/StridedLayoutPropagation.h"
 #include "lib/Transforms/LowerPolynomialEval/LowerPolynomialEval.h"
 #include "lib/Transforms/LowerUnpack/LowerUnpack.h"
@@ -454,6 +455,7 @@ int main(int argc, char** argv) {
   registerLayoutPropagationPasses();
   registerCountOpsPasses();
   registerDecomposeMaxPoolPasses();
+  registerReluNormalizationPasses();
   registerStridedLayoutPropagationPasses();
   registerLayoutOptimizationPasses();
   registerLinalgCanonicalizationsPasses();

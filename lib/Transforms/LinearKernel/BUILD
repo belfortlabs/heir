@@ -79,6 +79,28 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "ReluNormalization",
+    srcs = ["ReluNormalization.cpp"],
+    hdrs = ["ReluNormalization.h"],
+    deps = [
+        ":relu_normalization_inc_gen",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LinalgDialect",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:TensorDialect",
+    ],
+)
+
+add_heir_transforms(
+    generated_target_name = "relu_normalization_inc_gen",
+    pass_name = "ReluNormalization",
+    td_file = "ReluNormalization.td",
+)
+
 add_heir_transforms(
     generated_target_name = "count_ops_inc_gen",
     pass_name = "CountOps",

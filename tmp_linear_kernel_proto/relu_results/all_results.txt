@@ -1,0 +1,415 @@
+#### AResNet18_32/results.txt
+== AResNet18_32 N=32 M=20 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.4904 over 20 inputs
+A0  maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+A1  maxerr=0.279    meanrel=0.45    argmax=13/20    nonfinite=0
+A15 maxerr=0.0821   meanrel=0.129   argmax=16/20    nonfinite=0
+B   maxerr=0.326    meanrel=0.581   argmax=17/20    nonfinite=0
+B15 maxerr=9.75e+32 meanrel=1.54e+32    argmax=2/20 nonfinite=14
+B31 maxerr=63.7 meanrel=8.37    argmax=0/20 nonfinite=19
+C30 maxerr=0.317    meanrel=0.51    argmax=15/20    nonfinite=2
+C10 maxerr=0.0651   meanrel=0.065   argmax=9/20 nonfinite=9
+C03 maxerr=2.67e+16 meanrel=3.31e+15    argmax=0/20 nonfinite=17
+D   maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+D0  maxerr=0.000662 meanrel=0.000922    argmax=20/20    nonfinite=0
+A1 rungs:      25 deg5  r(min/med/max): 0.0867/0.129/0.192
+A15 rungs:      25 deg15  r(min/med/max): 0.0867/0.129/0.192
+B rungs:      25 deg5  r(min/med/max): 0.115/0.268/0.495
+B15 rungs:      25 deg15  r(min/med/max): 0.115/0.268/0.495
+B31 rungs:      25 deg31  r(min/med/max): 0.115/0.268/0.495
+C30 rungs:       3 deg15      22 deg5  r(min/med/max): 0.115/0.268/0.495
+C10 rungs:      19 deg15       2 deg31       4 deg5  r(min/med/max): 0.115/0.268/0.495
+C03 rungs:       7 composite       4 deg15      11 deg31       3 deg63  r(min/med/max): 0.115/0.268/0.495
+D rungs:      25 composite  r(min/med/max): 0.115/0.268/0.495
+D0 rungs:      25 composite  r(min/med/max): 0.0867/0.129/0.192
+#### AResNet18_32/results_m2.0.txt
+== AResNet18_32 N=32 M=20 margin=2.0 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.4904 over 20 inputs
+A0  maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+A1  maxerr=0.278    meanrel=0.414   argmax=13/20    nonfinite=0
+A15 maxerr=0.139    meanrel=0.251   argmax=19/20    nonfinite=0
+B   maxerr=0.301    meanrel=0.541   argmax=13/20    nonfinite=0
+B15 maxerr=1.03e+09 meanrel=1.28e+08    argmax=17/20    nonfinite=0
+B31 maxerr=2.5e+18  meanrel=2.71e+17    argmax=14/20    nonfinite=1
+C30 maxerr=0.302    meanrel=0.539   argmax=13/20    nonfinite=0
+C10 maxerr=4.52 meanrel=0.723   argmax=16/20    nonfinite=0
+C03 maxerr=6.54e+15 meanrel=7.06e+14    argmax=16/20    nonfinite=0
+D   maxerr=0.000366 meanrel=0.000398    argmax=17/20    nonfinite=3
+D0  maxerr=0.00138  meanrel=0.00196 argmax=20/20    nonfinite=0
+A1 rungs:      25 deg5  r(min/med/max): 0.0542/0.0807/0.12
+A15 rungs:      25 deg15  r(min/med/max): 0.0542/0.0807/0.12
+B rungs:      25 deg5  r(min/med/max): 0.0717/0.168/0.309
+B15 rungs:      25 deg15  r(min/med/max): 0.0717/0.168/0.309
+B31 rungs:      25 deg31  r(min/med/max): 0.0717/0.168/0.309
+C30 rungs:       8 deg15      17 deg5  r(min/med/max): 0.0717/0.168/0.309
+C10 rungs:      17 deg15       7 deg31       1 deg63  r(min/med/max): 0.0717/0.168/0.309
+C03 rungs:      11 composite       4 deg31      10 deg63  r(min/med/max): 0.0717/0.168/0.309
+D rungs:      25 composite  r(min/med/max): 0.0717/0.168/0.309
+D0 rungs:      25 composite  r(min/med/max): 0.0542/0.0807/0.12
+#### BLeNet5/results.txt
+== BLeNet5 N=32 M=20 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.1141 over 20 inputs
+A0  maxerr=0.0287   meanrel=0.239   argmax=9/20 nonfinite=0
+A1  maxerr=0.0062   meanrel=0.0447  argmax=18/20    nonfinite=0
+A15 maxerr=0.00133  meanrel=0.00911 argmax=19/20    nonfinite=0
+B   maxerr=0.00615  meanrel=0.0447  argmax=17/20    nonfinite=0
+B15 maxerr=0.00146  meanrel=0.00866 argmax=19/20    nonfinite=0
+B31 maxerr=0.000748 meanrel=0.00415 argmax=20/20    nonfinite=0
+C30 maxerr=0.00615  meanrel=0.0447  argmax=17/20    nonfinite=0
+C10 maxerr=0.00146  meanrel=0.00866 argmax=19/20    nonfinite=0
+C03 maxerr=0.000654 meanrel=0.00381 argmax=19/20    nonfinite=1
+D   maxerr=5.5e-06  meanrel=1.66e-05    argmax=19/20    nonfinite=1
+D0  maxerr=6.59e-06 meanrel=2.51e-05    argmax=20/20    nonfinite=0
+A1 rungs:       4 deg5  r(min/med/max): 0.144/0.147/0.315
+A15 rungs:       4 deg15  r(min/med/max): 0.144/0.147/0.315
+B rungs:       4 deg5  r(min/med/max): 0.154/0.232/0.315
+B15 rungs:       4 deg15  r(min/med/max): 0.154/0.232/0.315
+B31 rungs:       4 deg31  r(min/med/max): 0.154/0.232/0.315
+C30 rungs:       4 deg5  r(min/med/max): 0.154/0.232/0.315
+C10 rungs:       4 deg15  r(min/med/max): 0.154/0.232/0.315
+C03 rungs:       1 composite       2 deg31       1 deg63  r(min/med/max): 0.154/0.232/0.315
+D rungs:       4 composite  r(min/med/max): 0.154/0.232/0.315
+D0 rungs:       4 composite  r(min/med/max): 0.144/0.147/0.315
+#### BLeNet5/results_m2.0.txt
+== BLeNet5 N=32 M=20 margin=2.0 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.1141 over 20 inputs
+A0  maxerr=0.0287   meanrel=0.239   argmax=9/20 nonfinite=0
+A1  maxerr=0.00953  meanrel=0.0691  argmax=12/20    nonfinite=0
+A15 maxerr=0.00218  meanrel=0.0154  argmax=18/20    nonfinite=0
+B   maxerr=0.00949  meanrel=0.0706  argmax=12/20    nonfinite=0
+B15 maxerr=0.00228  meanrel=0.0145  argmax=19/20    nonfinite=0
+B31 maxerr=0.00086  meanrel=0.00511 argmax=17/20    nonfinite=0
+C30 maxerr=0.00995  meanrel=0.0724  argmax=13/20    nonfinite=0
+C10 maxerr=0.00245  meanrel=0.0153  argmax=18/20    nonfinite=0
+C03 maxerr=0.000366 meanrel=0.00206 argmax=20/20    nonfinite=0
+D   maxerr=7.95e-06 meanrel=3.33e-05    argmax=20/20    nonfinite=0
+D0  maxerr=1.06e-05 meanrel=5.11e-05    argmax=20/20    nonfinite=0
+A1 rungs:       4 deg5  r(min/med/max): 0.0901/0.0917/0.197
+A15 rungs:       4 deg15  r(min/med/max): 0.0901/0.0917/0.197
+B rungs:       4 deg5  r(min/med/max): 0.0962/0.145/0.197
+B15 rungs:       4 deg15  r(min/med/max): 0.0962/0.145/0.197
+B31 rungs:       4 deg31  r(min/med/max): 0.0962/0.145/0.197
+C30 rungs:       1 deg15       3 deg5  r(min/med/max): 0.0962/0.145/0.197
+C10 rungs:       3 deg15       1 deg31  r(min/med/max): 0.0962/0.145/0.197
+C03 rungs:       2 composite       2 deg63  r(min/med/max): 0.0962/0.145/0.197
+D rungs:       4 composite  r(min/med/max): 0.0962/0.145/0.197
+D0 rungs:       4 composite  r(min/med/max): 0.0901/0.0917/0.197
+#### BMobileNetV1_025/results.txt
+== BMobileNetV1_025 N=32 M=20 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.0581 over 20 inputs
+A0  maxerr=0.00628  meanrel=0.108   argmax=20/20    nonfinite=0
+A1  maxerr=0    meanrel=0   argmax=20/20    nonfinite=0
+A15 maxerr=0    meanrel=0   argmax=20/20    nonfinite=0
+B   maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+B15 maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+B31 maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+C30 maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+C10 maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+C03 maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+D   maxerr=0    meanrel=0   argmax=1/20 nonfinite=19
+D0  maxerr=0    meanrel=0   argmax=20/20    nonfinite=0
+A1 rungs:      27 deg5  r(min/med/max): 0.0458/0.0898/0.158
+A15 rungs:      27 deg15  r(min/med/max): 0.0458/0.0898/0.158
+B rungs:      27 deg5  r(min/med/max): 0.119/0.163/0.292
+B15 rungs:      27 deg15  r(min/med/max): 0.119/0.163/0.292
+B31 rungs:      27 deg31  r(min/med/max): 0.119/0.163/0.292
+C30 rungs:       3 deg15      24 deg5  r(min/med/max): 0.119/0.163/0.292
+C10 rungs:      25 deg15       2 deg31  r(min/med/max): 0.119/0.163/0.292
+C03 rungs:      13 composite       8 deg31       6 deg63  r(min/med/max): 0.119/0.163/0.292
+D rungs:      27 composite  r(min/med/max): 0.119/0.163/0.292
+D0 rungs:      27 composite  r(min/med/max): 0.0458/0.0898/0.158
+#### BResNet32/results.txt
+== BResNet32 N=32 M=20 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.1755 over 20 inputs
+A0  maxerr=0.0664   meanrel=0.363   argmax=20/20    nonfinite=0
+A1  maxerr=0.134    meanrel=0.77    argmax=16/20    nonfinite=0
+A15 maxerr=0.029    meanrel=0.138   argmax=20/20    nonfinite=0
+B   maxerr=0.0449   meanrel=0.215   argmax=20/20    nonfinite=0
+B15 maxerr=2.61e+26 meanrel=7.54e+25    argmax=12/20    nonfinite=5
+B31 maxerr=0.0034   meanrel=0.00885 argmax=11/20    nonfinite=9
+C30 maxerr=0.0424   meanrel=0.198   argmax=20/20    nonfinite=0
+C10 maxerr=6.22e+21 meanrel=1.92e+21    argmax=15/20    nonfinite=2
+C03 maxerr=0.000405 meanrel=0.000772    argmax=9/20 nonfinite=11
+D   maxerr=0.000189 meanrel=0.000185    argmax=9/20 nonfinite=11
+D0  maxerr=0.000229 meanrel=0.00119 argmax=20/20    nonfinite=0
+A1 rungs:      31 deg5  r(min/med/max): 0.0387/0.112/0.152
+A15 rungs:      31 deg15  r(min/med/max): 0.0387/0.112/0.152
+B rungs:      31 deg5  r(min/med/max): 0.0902/0.16/0.191
+B15 rungs:      31 deg15  r(min/med/max): 0.0902/0.16/0.191
+B31 rungs:      31 deg31  r(min/med/max): 0.0902/0.16/0.191
+C30 rungs:       7 deg15      24 deg5  r(min/med/max): 0.0902/0.16/0.191
+C10 rungs:      24 deg15       7 deg31  r(min/med/max): 0.0902/0.16/0.191
+C03 rungs:      17 composite      14 deg63  r(min/med/max): 0.0902/0.16/0.191
+D rungs:      31 composite  r(min/med/max): 0.0902/0.16/0.191
+D0 rungs:      31 composite  r(min/med/max): 0.0387/0.112/0.152
+#### BResNet32/results_m2.0.txt
+== BResNet32 N=32 M=20 margin=2.0 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.1755 over 20 inputs
+A0  maxerr=0.0664   meanrel=0.363   argmax=20/20    nonfinite=0
+A1  maxerr=0.227    meanrel=1.32    argmax=0/20 nonfinite=0
+A15 maxerr=0.0643   meanrel=0.341   argmax=20/20    nonfinite=0
+B   maxerr=0.0367   meanrel=0.172   argmax=20/20    nonfinite=0
+B15 maxerr=0.0389   meanrel=0.161   argmax=20/20    nonfinite=0
+B31 maxerr=0.0109   meanrel=0.0366  argmax=20/20    nonfinite=0
+C30 maxerr=0.0389   meanrel=0.161   argmax=20/20    nonfinite=0
+C10 maxerr=0.00609  meanrel=0.0262  argmax=20/20    nonfinite=0
+C03 maxerr=0.000179 meanrel=0.000845    argmax=20/20    nonfinite=0
+D   maxerr=0.000179 meanrel=0.000845    argmax=20/20    nonfinite=0
+D0  maxerr=0.000595 meanrel=0.00309 argmax=20/20    nonfinite=0
+A1 rungs:      31 deg5  r(min/med/max): 0.0242/0.0701/0.0948
+A15 rungs:      31 deg15  r(min/med/max): 0.0242/0.0701/0.0948
+B rungs:      31 deg5  r(min/med/max): 0.0564/0.1/0.12
+B15 rungs:      31 deg15  r(min/med/max): 0.0564/0.1/0.12
+B31 rungs:      31 deg31  r(min/med/max): 0.0564/0.1/0.12
+C30 rungs:      31 deg15  r(min/med/max): 0.0564/0.1/0.12
+C10 rungs:      26 deg31       5 deg63  r(min/med/max): 0.0564/0.1/0.12
+C03 rungs:      31 composite  r(min/med/max): 0.0564/0.1/0.12
+D rungs:      31 composite  r(min/med/max): 0.0564/0.1/0.12
+D0 rungs:      31 composite  r(min/med/max): 0.0242/0.0701/0.0948
+#### BResNet8/results.txt
+== BResNet8 N=32 M=20 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.162 over 20 inputs
+A0  maxerr=0.0222   meanrel=0.132   argmax=20/20    nonfinite=0
+A1  maxerr=0.0192   meanrel=0.107   argmax=20/20    nonfinite=0
+A15 maxerr=0.00253  meanrel=0.0098  argmax=20/20    nonfinite=0
+B   maxerr=0.0117   meanrel=0.0675  argmax=20/20    nonfinite=0
+B15 maxerr=0.00141  meanrel=0.0059  argmax=20/20    nonfinite=0
+B31 maxerr=0.00983  meanrel=0.00691 argmax=20/20    nonfinite=0
+C30 maxerr=0.0118   meanrel=0.0685  argmax=20/20    nonfinite=0
+C10 maxerr=0.00101  meanrel=0.00487 argmax=20/20    nonfinite=0
+C03 maxerr=0.00533  meanrel=0.00379 argmax=19/20    nonfinite=1
+D   maxerr=8.11e-06 meanrel=2.67e-05    argmax=17/20    nonfinite=3
+D0  maxerr=1.46e-05 meanrel=6.36e-05    argmax=20/20    nonfinite=0
+A1 rungs:       7 deg5  r(min/med/max): 0.0888/0.148/0.16
+A15 rungs:       7 deg15  r(min/med/max): 0.0888/0.148/0.16
+B rungs:       7 deg5  r(min/med/max): 0.109/0.188/0.305
+B15 rungs:       7 deg15  r(min/med/max): 0.109/0.188/0.305
+B31 rungs:       7 deg31  r(min/med/max): 0.109/0.188/0.305
+C30 rungs:       1 deg15       6 deg5  r(min/med/max): 0.109/0.188/0.305
+C10 rungs:       6 deg15       1 deg31  r(min/med/max): 0.109/0.188/0.305
+C03 rungs:       2 composite       1 deg31       4 deg63  r(min/med/max): 0.109/0.188/0.305
+D rungs:       7 composite  r(min/med/max): 0.109/0.188/0.305
+D0 rungs:       7 composite  r(min/med/max): 0.0888/0.148/0.16
+#### BResNet8/results_m2.0.txt
+== BResNet8 N=32 M=20 margin=2.0 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.162 over 20 inputs
+A0  maxerr=0.0222   meanrel=0.132   argmax=20/20    nonfinite=0
+A1  maxerr=0.0331   meanrel=0.196   argmax=20/20    nonfinite=0
+A15 maxerr=0.00577  meanrel=0.03    argmax=20/20    nonfinite=0
+B   maxerr=0.0221   meanrel=0.128   argmax=20/20    nonfinite=0
+B15 maxerr=0.00389  meanrel=0.0189  argmax=20/20    nonfinite=0
+B31 maxerr=0.000874 meanrel=0.00329 argmax=20/20    nonfinite=0
+C30 maxerr=0.0237   meanrel=0.142   argmax=20/20    nonfinite=0
+C10 maxerr=0.00379  meanrel=0.0195  argmax=20/20    nonfinite=0
+C03 maxerr=9.07e-05 meanrel=0.000378    argmax=20/20    nonfinite=0
+D   maxerr=1.77e-05 meanrel=7.8e-05 argmax=20/20    nonfinite=0
+D0  maxerr=4.05e-05 meanrel=0.000161    argmax=20/20    nonfinite=0
+A1 rungs:       7 deg5  r(min/med/max): 0.0555/0.0927/0.1
+A15 rungs:       7 deg15  r(min/med/max): 0.0555/0.0927/0.1
+B rungs:       7 deg5  r(min/med/max): 0.0683/0.117/0.191
+B15 rungs:       7 deg15  r(min/med/max): 0.0683/0.117/0.191
+B31 rungs:       7 deg31  r(min/med/max): 0.0683/0.117/0.191
+C30 rungs:       4 deg15       3 deg5  r(min/med/max): 0.0683/0.117/0.191
+C10 rungs:       3 deg15       3 deg31       1 deg63  r(min/med/max): 0.0683/0.117/0.191
+C03 rungs:       6 composite       1 deg63  r(min/med/max): 0.0683/0.117/0.191
+D rungs:       7 composite  r(min/med/max): 0.0683/0.117/0.191
+D0 rungs:       7 composite  r(min/med/max): 0.0555/0.0927/0.1
+#### BWRN16_1/results.txt
+== BWRN16_1 N=32 M=20 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.139 over 20 inputs
+A0  maxerr=0.0246   meanrel=0.172   argmax=20/20    nonfinite=0
+A1  maxerr=0.0123   meanrel=0.0777  argmax=20/20    nonfinite=0
+A15 maxerr=0.00177  meanrel=0.00863 argmax=20/20    nonfinite=0
+B   maxerr=0.0109   meanrel=0.0693  argmax=20/20    nonfinite=0
+B15 maxerr=0.00085  meanrel=0.004   argmax=20/20    nonfinite=0
+B31 maxerr=0.618    meanrel=0.234   argmax=17/20    nonfinite=2
+C30 maxerr=0.0109   meanrel=0.0693  argmax=20/20    nonfinite=0
+C10 maxerr=0.00085  meanrel=0.004   argmax=20/20    nonfinite=0
+C03 maxerr=1.79e+05 meanrel=6.71e+04    argmax=13/20    nonfinite=6
+D   maxerr=0.000279 meanrel=0.000113    argmax=13/20    nonfinite=7
+D0  maxerr=6.59e-06 meanrel=3.62e-05    argmax=20/20    nonfinite=0
+A1 rungs:      13 deg5  r(min/med/max): 0.114/0.132/0.153
+A15 rungs:      13 deg15  r(min/med/max): 0.114/0.132/0.153
+B rungs:      13 deg5  r(min/med/max): 0.156/0.165/0.224
+B15 rungs:      13 deg15  r(min/med/max): 0.156/0.165/0.224
+B31 rungs:      13 deg31  r(min/med/max): 0.156/0.165/0.224
+C30 rungs:      13 deg5  r(min/med/max): 0.156/0.165/0.224
+C10 rungs:      13 deg15  r(min/med/max): 0.156/0.165/0.224
+C03 rungs:       4 composite       9 deg63  r(min/med/max): 0.156/0.165/0.224
+D rungs:      13 composite  r(min/med/max): 0.156/0.165/0.224
+D0 rungs:      13 composite  r(min/med/max): 0.114/0.132/0.153
+#### BWRN16_1/results_m2.0.txt
+== BWRN16_1 N=32 M=20 margin=2.0 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.139 over 20 inputs
+A0  maxerr=0.0246   meanrel=0.172   argmax=20/20    nonfinite=0
+A1  maxerr=0.0186   meanrel=0.126   argmax=20/20    nonfinite=0
+A15 maxerr=0.00508  meanrel=0.0309  argmax=20/20    nonfinite=0
+B   maxerr=0.0114   meanrel=0.0716  argmax=20/20    nonfinite=0
+B15 maxerr=0.00213  meanrel=0.0103  argmax=20/20    nonfinite=0
+B31 maxerr=0.000396 meanrel=0.00194 argmax=20/20    nonfinite=0
+C30 maxerr=0.0115   meanrel=0.0775  argmax=20/20    nonfinite=0
+C10 maxerr=0.00217  meanrel=0.0126  argmax=20/20    nonfinite=0
+C03 maxerr=7.2e-06  meanrel=4.06e-05    argmax=20/20    nonfinite=0
+D   maxerr=7.2e-06  meanrel=4.06e-05    argmax=20/20    nonfinite=0
+D0  maxerr=1.47e-05 meanrel=7.84e-05    argmax=20/20    nonfinite=0
+A1 rungs:      13 deg5  r(min/med/max): 0.0714/0.0822/0.0955
+A15 rungs:      13 deg15  r(min/med/max): 0.0714/0.0822/0.0955
+B rungs:      13 deg5  r(min/med/max): 0.0975/0.103/0.14
+B15 rungs:      13 deg15  r(min/med/max): 0.0975/0.103/0.14
+B31 rungs:      13 deg31  r(min/med/max): 0.0975/0.103/0.14
+C30 rungs:      11 deg15       2 deg5  r(min/med/max): 0.0975/0.103/0.14
+C10 rungs:       2 deg15      11 deg31  r(min/med/max): 0.0975/0.103/0.14
+C03 rungs:      13 composite  r(min/med/max): 0.0975/0.103/0.14
+D rungs:      13 composite  r(min/med/max): 0.0975/0.103/0.14
+D0 rungs:      13 composite  r(min/med/max): 0.0714/0.0822/0.0955
+#### CLeNetRelu44K/results.txt
+== CLeNetRelu44K N=32 M=20 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.1093 over 20 inputs
+A0  maxerr=0.0244   meanrel=0.185   argmax=20/20    nonfinite=0
+A1  maxerr=0.00707  meanrel=0.049   argmax=20/20    nonfinite=0
+A15 maxerr=0.00232  meanrel=0.0164  argmax=20/20    nonfinite=0
+B   maxerr=0.00663  meanrel=0.0464  argmax=20/20    nonfinite=0
+B15 maxerr=0.00226  meanrel=0.0163  argmax=20/20    nonfinite=0
+B31 maxerr=0.000751 meanrel=0.00464 argmax=20/20    nonfinite=0
+C30 maxerr=0.00663  meanrel=0.0464  argmax=20/20    nonfinite=0
+C10 maxerr=0.00226  meanrel=0.0163  argmax=20/20    nonfinite=0
+C03 maxerr=0.000643 meanrel=0.00432 argmax=20/20    nonfinite=0
+D   maxerr=9.28e-06 meanrel=5.02e-05    argmax=20/20    nonfinite=0
+D0  maxerr=9.02e-06 meanrel=5.13e-05    argmax=20/20    nonfinite=0
+A1 rungs:       4 deg5  r(min/med/max): 0.132/0.18/0.267
+A15 rungs:       4 deg15  r(min/med/max): 0.132/0.18/0.267
+B rungs:       4 deg5  r(min/med/max): 0.163/0.223/0.267
+B15 rungs:       4 deg15  r(min/med/max): 0.163/0.223/0.267
+B31 rungs:       4 deg31  r(min/med/max): 0.163/0.223/0.267
+C30 rungs:       4 deg5  r(min/med/max): 0.163/0.223/0.267
+C10 rungs:       4 deg15  r(min/med/max): 0.163/0.223/0.267
+C03 rungs:       1 deg31       3 deg63  r(min/med/max): 0.163/0.223/0.267
+D rungs:       4 composite  r(min/med/max): 0.163/0.223/0.267
+D0 rungs:       4 composite  r(min/med/max): 0.132/0.18/0.267
+#### CLeNetRelu44K/results_m2.0.txt
+== CLeNetRelu44K N=32 M=20 margin=2.0 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.1093 over 20 inputs
+A0  maxerr=0.0244   meanrel=0.185   argmax=20/20    nonfinite=0
+A1  maxerr=0.00977  meanrel=0.0704  argmax=20/20    nonfinite=0
+A15 maxerr=0.00347  meanrel=0.0232  argmax=20/20    nonfinite=0
+B   maxerr=0.00904  meanrel=0.0659  argmax=20/20    nonfinite=0
+B15 maxerr=0.00332  meanrel=0.0228  argmax=20/20    nonfinite=0
+B31 maxerr=0.00116  meanrel=0.00717 argmax=20/20    nonfinite=0
+C30 maxerr=0.00936  meanrel=0.067   argmax=20/20    nonfinite=0
+C10 maxerr=0.00343  meanrel=0.0213  argmax=20/20    nonfinite=0
+C03 maxerr=0.000392 meanrel=0.00246 argmax=20/20    nonfinite=0
+D   maxerr=1.85e-05 meanrel=0.000109    argmax=20/20    nonfinite=0
+D0  maxerr=2.05e-05 meanrel=0.000115    argmax=20/20    nonfinite=0
+A1 rungs:       4 deg5  r(min/med/max): 0.0825/0.113/0.167
+A15 rungs:       4 deg15  r(min/med/max): 0.0825/0.113/0.167
+B rungs:       4 deg5  r(min/med/max): 0.102/0.139/0.167
+B15 rungs:       4 deg15  r(min/med/max): 0.102/0.139/0.167
+B31 rungs:       4 deg31  r(min/med/max): 0.102/0.139/0.167
+C30 rungs:       1 deg15       3 deg5  r(min/med/max): 0.102/0.139/0.167
+C10 rungs:       3 deg15       1 deg31  r(min/med/max): 0.102/0.139/0.167
+C03 rungs:       3 composite       1 deg63  r(min/med/max): 0.102/0.139/0.167
+D rungs:       4 composite  r(min/med/max): 0.102/0.139/0.167
+D0 rungs:       4 composite  r(min/med/max): 0.0825/0.113/0.167
+#### CResNet18Cifar/results.txt
+== CResNet18Cifar N=32 M=20 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=2.087 over 20 inputs
+A0  maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+A1  maxerr=0.487    meanrel=0.189   argmax=1/20 nonfinite=0
+A15 maxerr=0.114    meanrel=0.0291  argmax=20/20    nonfinite=0
+B   maxerr=1.3  meanrel=0.608   argmax=19/20    nonfinite=0
+B15 maxerr=2.16e+18 meanrel=5.19e+16    argmax=11/20    nonfinite=3
+B31 maxerr=1.5e+27  meanrel=3.93e+25    argmax=6/20 nonfinite=12
+C30 maxerr=1.3  meanrel=0.608   argmax=19/20    nonfinite=0
+C10 maxerr=2.16e+18 meanrel=5.19e+16    argmax=11/20    nonfinite=3
+C03 maxerr=1.04e+13 meanrel=2.71e+11    argmax=4/20 nonfinite=14
+D   maxerr=0.000123 meanrel=3.05e-06    argmax=1/20 nonfinite=19
+D0  maxerr=0.000641 meanrel=0.000216    argmax=20/20    nonfinite=0
+A1 rungs:      17 deg5  r(min/med/max): 0.0969/0.125/0.15
+A15 rungs:      17 deg15  r(min/med/max): 0.0969/0.125/0.15
+B rungs:      17 deg5  r(min/med/max): 0.142/0.209/0.267
+B15 rungs:      17 deg15  r(min/med/max): 0.142/0.209/0.267
+B31 rungs:      17 deg31  r(min/med/max): 0.142/0.209/0.267
+C30 rungs:      17 deg5  r(min/med/max): 0.142/0.209/0.267
+C10 rungs:      17 deg15  r(min/med/max): 0.142/0.209/0.267
+C03 rungs:       3 composite       4 deg31      10 deg63  r(min/med/max): 0.142/0.209/0.267
+D rungs:      17 composite  r(min/med/max): 0.142/0.209/0.267
+D0 rungs:      17 composite  r(min/med/max): 0.0969/0.125/0.15
+#### CResNet18Cifar/results_m2.0.txt
+== CResNet18Cifar N=32 M=20 margin=2.0 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=2.087 over 20 inputs
+A0  maxerr=0    meanrel=0   argmax=0/20 nonfinite=20
+A1  maxerr=0.61 meanrel=0.275   argmax=1/20 nonfinite=0
+A15 maxerr=0.681    meanrel=0.308   argmax=18/20    nonfinite=0
+B   maxerr=0.963    meanrel=0.431   argmax=19/20    nonfinite=0
+B15 maxerr=0.0949   meanrel=0.0327  argmax=20/20    nonfinite=0
+B31 maxerr=0.0385   meanrel=0.0118  argmax=20/20    nonfinite=0
+C30 maxerr=0.838    meanrel=0.377   argmax=19/20    nonfinite=0
+C10 maxerr=0.124    meanrel=0.0541  argmax=20/20    nonfinite=0
+C03 maxerr=0.00237  meanrel=0.000806    argmax=20/20    nonfinite=0
+D   maxerr=0.000461 meanrel=0.000154    argmax=20/20    nonfinite=0
+D0  maxerr=0.00159  meanrel=0.000544    argmax=20/20    nonfinite=0
+A1 rungs:      17 deg5  r(min/med/max): 0.0606/0.0784/0.0935
+A15 rungs:      17 deg15  r(min/med/max): 0.0606/0.0784/0.0935
+B rungs:      17 deg5  r(min/med/max): 0.0888/0.131/0.167
+B15 rungs:      17 deg15  r(min/med/max): 0.0888/0.131/0.167
+B31 rungs:      17 deg31  r(min/med/max): 0.0888/0.131/0.167
+C30 rungs:       8 deg15       9 deg5  r(min/med/max): 0.0888/0.131/0.167
+C10 rungs:      10 deg15       7 deg31  r(min/med/max): 0.0888/0.131/0.167
+C03 rungs:      15 composite       2 deg63  r(min/med/max): 0.0888/0.131/0.167
+D rungs:      17 composite  r(min/med/max): 0.0888/0.131/0.167
+D0 rungs:      17 composite  r(min/med/max): 0.0606/0.0784/0.0935
+#### CResNet20/results.txt
+== CResNet20 N=32 M=20 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.156 over 20 inputs
+A0  maxerr=0.0847   meanrel=0.55    argmax=20/20    nonfinite=0
+A1  maxerr=0.0137   meanrel=0.0797  argmax=20/20    nonfinite=0
+A15 maxerr=0.00374  meanrel=0.0157  argmax=20/20    nonfinite=0
+B   maxerr=0.0213   meanrel=0.121   argmax=20/20    nonfinite=0
+B15 maxerr=4.55e+13 meanrel=1.53e+13    argmax=14/20    nonfinite=3
+B31 maxerr=2.71e+09 meanrel=8.94e+08    argmax=13/20    nonfinite=6
+C30 maxerr=0.0164   meanrel=0.0942  argmax=20/20    nonfinite=0
+C10 maxerr=2.51e+04 meanrel=8.37e+03    argmax=15/20    nonfinite=3
+C03 maxerr=5.07e-05 meanrel=0.000113    argmax=10/20    nonfinite=10
+D   maxerr=9.38e-05 meanrel=5.92e-05    argmax=10/20    nonfinite=10
+D0  maxerr=2.85e-05 meanrel=0.000142    argmax=20/20    nonfinite=0
+A1 rungs:      19 deg5  r(min/med/max): 0.0599/0.11/0.134
+A15 rungs:      19 deg15  r(min/med/max): 0.0599/0.11/0.134
+B rungs:      19 deg5  r(min/med/max): 0.089/0.155/0.194
+B15 rungs:      19 deg15  r(min/med/max): 0.089/0.155/0.194
+B31 rungs:      19 deg31  r(min/med/max): 0.089/0.155/0.194
+C30 rungs:       5 deg15      14 deg5  r(min/med/max): 0.089/0.155/0.194
+C10 rungs:      14 deg15       5 deg31  r(min/med/max): 0.089/0.155/0.194
+C03 rungs:      12 composite       7 deg63  r(min/med/max): 0.089/0.155/0.194
+D rungs:      19 composite  r(min/med/max): 0.089/0.155/0.194
+D0 rungs:      19 composite  r(min/med/max): 0.0599/0.11/0.134
+#### CResNet20/results_m2.0.txt
+== CResNet20 N=32 M=20 margin=2.0 variants: A0 A1 A15 B B15 B31 C30 C10 C03 D D0
+max|exact|=0.156 over 20 inputs
+A0  maxerr=0.0847   meanrel=0.55    argmax=20/20    nonfinite=0
+A1  maxerr=0.0382   meanrel=0.241   argmax=20/20    nonfinite=0
+A15 maxerr=0.012    meanrel=0.0655  argmax=20/20    nonfinite=0
+B   maxerr=0.00828  meanrel=0.0388  argmax=20/20    nonfinite=0
+B15 maxerr=0.00691  meanrel=0.0315  argmax=20/20    nonfinite=0
+B31 maxerr=0.00176  meanrel=0.008   argmax=20/20    nonfinite=0
+C30 maxerr=0.00691  meanrel=0.0315  argmax=20/20    nonfinite=0
+C10 maxerr=0.00112  meanrel=0.00452 argmax=20/20    nonfinite=0
+C03 maxerr=2.94e-05 meanrel=0.000154    argmax=20/20    nonfinite=0
+D   maxerr=2.94e-05 meanrel=0.000154    argmax=20/20    nonfinite=0
+D0  maxerr=6.78e-05 meanrel=0.000343    argmax=20/20    nonfinite=0
+A1 rungs:      19 deg5  r(min/med/max): 0.0375/0.0686/0.0839
+A15 rungs:      19 deg15  r(min/med/max): 0.0375/0.0686/0.0839
+B rungs:      19 deg5  r(min/med/max): 0.0556/0.0966/0.121
+B15 rungs:      19 deg15  r(min/med/max): 0.0556/0.0966/0.121
+B31 rungs:      19 deg31  r(min/med/max): 0.0556/0.0966/0.121
+C30 rungs:      19 deg15  r(min/med/max): 0.0556/0.0966/0.121
+C10 rungs:      14 deg31       5 deg63  r(min/med/max): 0.0556/0.0966/0.121
+C03 rungs:      19 composite  r(min/med/max): 0.0556/0.0966/0.121
+D rungs:      19 composite  r(min/med/max): 0.0556/0.0966/0.121
+D0 rungs:      19 composite  r(min/med/max): 0.0375/0.0686/0.0839
+#### rungs/rungs.txt
+deg5    maxerr[-1.00,1.00]=0.03831  maxerr[-1.10,1.10]=0.1191   maxerr[-1.25,1.25]=0.3586
+deg15   maxerr[-1.00,1.00]=0.01246  maxerr[-1.10,1.10]=2.342    maxerr[-1.25,1.25]=80.14
+deg31   maxerr[-1.00,1.00]=0.007325 maxerr[-1.10,1.10]=1083 maxerr[-1.25,1.25]=1.972e+06
+deg63   maxerr[-1.00,1.00]=0.004836 maxerr[-1.10,1.10]=4.345e+08    maxerr[-1.25,1.25]=2.312e+15
+composite   maxerr[-1.00,1.00]=0.0003606    maxerr[-1.10,1.10]=inf  maxerr[-1.25,1.25]=inf
+RUNG_ERRORS=0.03831:0.01246:0.007325:0.004836:0.0003606
