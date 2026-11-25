@@ -127,6 +127,7 @@
 #include "lib/Transforms/LayoutPropagation/LayoutPropagation.h"
 #include "lib/Transforms/LinalgCanonicalizations/LinalgCanonicalizations.h"
 #include "lib/Transforms/LinalgFuseLinearOps/LinalgFuseLinearOps.h"
+#include "lib/Transforms/LinearKernel/CountOps.h"
 #include "lib/Transforms/LinearKernel/DecomposeMaxPool.h"
 #include "lib/Transforms/LinearKernel/StridedLayoutPropagation.h"
 #include "lib/Transforms/LowerPolynomialEval/LowerPolynomialEval.h"
@@ -451,6 +452,7 @@ int main(int argc, char** argv) {
   registerPolynomialApproximationPasses();
   registerPropagateAnnotationPasses();
   registerLayoutPropagationPasses();
+  registerCountOpsPasses();
   registerDecomposeMaxPoolPasses();
   registerStridedLayoutPropagationPasses();
   registerLayoutOptimizationPasses();

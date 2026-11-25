@@ -61,6 +61,30 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "CountOps",
+    srcs = ["CountOps.cpp"],
+    hdrs = ["CountOps.h"],
+    deps = [
+        ":count_ops_inc_gen",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AffineAnalysis",
+        "@llvm-project//mlir:AffineDialect",
+        "@llvm-project//mlir:DialectUtils",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LinalgDialect",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SCFDialect",
+    ],
+)
+
+add_heir_transforms(
+    generated_target_name = "count_ops_inc_gen",
+    pass_name = "CountOps",
+    td_file = "CountOps.td",
+)
+
 add_heir_transforms(
     generated_target_name = "decompose_max_pool_inc_gen",
     pass_name = "DecomposeMaxPool",

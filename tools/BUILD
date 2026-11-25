@@ -154,6 +154,7 @@ cc_binary(
         "@heir//lib/Transforms/LayoutPropagation:InterfaceImpl",
         "@heir//lib/Transforms/LinalgCanonicalizations",
         "@heir//lib/Transforms/LinalgFuseLinearOps",
+        "@heir//lib/Transforms/LinearKernel:CountOps",
         "@heir//lib/Transforms/LinearKernel:DecomposeMaxPool",
         "@heir//lib/Transforms/LinearKernel:StridedLayoutPropagation",
         "@heir//lib/Transforms/LowerPolynomialEval",
