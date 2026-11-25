@@ -195,7 +195,8 @@ void implementShiftNetworkPipelineBuilder(OpPassManager& pm) {
 }
 
 void mlirToSecretArithmeticPipelineBuilder(
-    OpPassManager& pm, const MlirToRLWEPipelineOptions& options) {
+    OpPassManager& pm, const MlirToRLWEPipelineOptions& options,
+    bool unrollLinearTransforms) {
   pm.addPass(debug::createDebugValidateNames());
   pm.addPass(createWrapGeneric());
   convertToDataObliviousPipelineBuilder(pm);
@@ -209,19 +210,20 @@ void mlirToSecretArithmeticPipelineBuilder(
   hecoSIMDVectorizerPipelineBuilder(pm, !options.unrollFheKernelLoops);
   mathToPolynomialApproximationBuilder(pm, options.useCompositeRelu);
 
-  // Layout assignment and optimization
-  if (options.linearKernel) {
-    StridedLayoutPropagationOptions stridedLayoutPropagationOptions;
-    stridedLayoutPropagationOptions.minSlotCount = options.minSlotCount;
-    pm.addPass(createStridedLayoutPropagation(stridedLayoutPropagationOptions));
-  } else {
-    LayoutPropagationOptions layoutPropagationOptions;
-    layoutPropagationOptions.minSlotCount = options.minSlotCount;
-    pm.addPass(createLayoutPropagation(layoutPropagationOptions));
-    LayoutOptimizationOptions layoutOptimizationOptions;
-    layoutOptimizationOptions.minSlotCount = options.minSlotCount;
-    pm.addPass(createLayoutOptimization(layoutOptimizationOptions));
-  }
+  // Layout assignment and optimization. Programs made of operations that are
+  // linear in one secret tensor and of elementwise operations get strided
+  // layouts; the relation-based passes handle every other program and do
+  // nothing on a module that has strided layouts.
+  StridedLayoutPropagationOptions stridedLayoutPropagationOptions;
+  stridedLayoutPropagationOptions.minSlotCount = options.minSlotCount;
+  stridedLayoutPropagationOptions.skipUnsupported = true;
+  pm.addPass(createStridedLayoutPropagation(stridedLayoutPropagationOptions));
+  LayoutPropagationOptions layoutPropagationOptions;
+  layoutPropagationOptions.minSlotCount = options.minSlotCount;
+  pm.addPass(createLayoutPropagation(layoutPropagationOptions));
+  LayoutOptimizationOptions layoutOptimizationOptions;
+  layoutOptimizationOptions.minSlotCount = options.minSlotCount;
+  pm.addPass(createLayoutOptimization(layoutOptimizationOptions));
   // Layout conversions may be repeated, so run CSE
   pm.addPass(createCSEPass());
 
@@ -233,8 +235,6 @@ void mlirToSecretArithmeticPipelineBuilder(
   // Linalg kernel implementation
   ConvertToCiphertextSemanticsOptions convertToCiphertextSemanticsOptions;
   convertToCiphertextSemanticsOptions.minSlotCount = options.minSlotCount;
-  convertToCiphertextSemanticsOptions.unrollKernels =
-      options.unrollFheKernelLoops;
   convertToCiphertextSemanticsOptions.codegenStrategy = options.codegenStrategy;
   pm.addPass(
       createConvertToCiphertextSemantics(convertToCiphertextSemanticsOptions));
@@ -243,7 +243,7 @@ void mlirToSecretArithmeticPipelineBuilder(
   pm.addPass(createCanonicalizerPass());
   pm.addPass(tensor_ext::createImplementRotateAndReduce());
   kernel::ImplementLinearTransformsOptions implementLinearTransformsOptions;
-  implementLinearTransformsOptions.unroll = options.unrollFheKernelLoops;
+  implementLinearTransformsOptions.unroll = unrollLinearTransforms;
   pm.addPass(kernel::createImplementLinearTransforms(
       implementLinearTransformsOptions));
 
@@ -264,14 +264,15 @@ void mlirToSecretArithmeticPipelineBuilder(
 void mlirToPlaintextPipelineBuilder(OpPassManager& pm,
                                     const PlaintextBackendOptions& options) {
   pm.addPass(debug::createDebugValidateNames());
-  linalgPreprocessingBuilder(pm, options.linearKernel);
+  linalgPreprocessingBuilder(pm);
 
   // Convert to secret arithmetic
   MlirToRLWEPipelineOptions mlirToRLWEPipelineOptions;
   mlirToRLWEPipelineOptions.minSlotCount = options.plaintextSize;
   mlirToRLWEPipelineOptions.unrollFheKernelLoops = options.unrollFheKernelLoops;
-  mlirToRLWEPipelineOptions.linearKernel = options.linearKernel;
-  mlirToSecretArithmeticPipelineBuilder(pm, mlirToRLWEPipelineOptions);
+  mlirToSecretArithmeticPipelineBuilder(
+      pm, mlirToRLWEPipelineOptions,
+      /*unrollLinearTransforms=*/options.unrollFheKernelLoops);
 
   // Insert debug handler calls and/or lower debug.validate
   pm.addPass(secret::createSecretAddDebugPort(secret::SecretAddDebugPortOptions{
@@ -722,18 +723,14 @@ BackendPipelineBuilder toLattigoPipelineBuilder() {
   };
 }
 
-void linalgPreprocessingBuilder(OpPassManager& manager, bool linearKernel) {
-  // The linear kernel reads dilations and pooling windows from the operation,
-  // so it keeps them instead of dense filters with zeros.
-  LinalgCanonicalizationsOptions canonicalizationOptions;
-  canonicalizationOptions.densifyConvolutions = !linearKernel;
+void linalgPreprocessingBuilder(OpPassManager& manager) {
   // Before the pooling operation is generalized. No layout handles a max
   // pool directly; the taps and maxima this leaves are linear operations and
   // ReLUs.
   manager.addPass(createDecomposeMaxPool());
   manager.addPass(createInlineActivations());
   manager.addPass(createActivationCanonicalizations());
-  manager.addPass(createLinalgCanonicalizations(canonicalizationOptions));
+  manager.addPass(createLinalgCanonicalizations());
   manager.addPass(createLinalgFuseLinearOpsPass());
   manager.addPass(createDropUnitDims());
   manager.addPass(createFoldConstantTensors());
@@ -741,7 +738,7 @@ void linalgPreprocessingBuilder(OpPassManager& manager, bool linearKernel) {
   manager.addPass(createSymbolDCEPass());
   manager.addPass(createSCCPPass());
   manager.addPass(createCSEPass());
-  manager.addPass(createLinalgCanonicalizations(canonicalizationOptions));
+  manager.addPass(createLinalgCanonicalizations());
   manager.addPass(createReductionCanonicalizations());
   manager.addPass(createSoftmaxCanonicalizations());
 }
@@ -749,7 +746,7 @@ void linalgPreprocessingBuilder(OpPassManager& manager, bool linearKernel) {
 void torchLinalgToCkksBuilder(OpPassManager& manager,
                               const MlirToRLWEPipelineOptions& options) {
   manager.addPass(debug::createDebugValidateNames());
-  linalgPreprocessingBuilder(manager, options.linearKernel);
+  linalgPreprocessingBuilder(manager);
   MlirToRLWEPipelineOptions suboptions;
 
   suboptions.enableArithmetization = true;

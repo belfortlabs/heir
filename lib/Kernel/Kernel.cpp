@@ -24,14 +24,6 @@ std::string kernelNameAsStr(const KernelName& kernelName) {
   switch (kernelName) {
     case KernelName::Trivial:
       return "Trivial";
-    case KernelName::MatvecNaive:
-      return "MatvecNaive";
-    case KernelName::MatvecDiagonal:
-      return "MatvecDiagonal";
-    case KernelName::MatmulDiagonal:
-      return "MatmulDiagonal";
-    case KernelName::VecmatDiagonal:
-      return "VecmatDiagonal";
     case KernelName::MatmulBicyclic:
       return "MatmulBicyclic";
     case KernelName::MatmulBicyclicDiagonal:

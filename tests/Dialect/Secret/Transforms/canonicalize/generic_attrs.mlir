@@ -2,7 +2,7 @@
 
 // This is a regression test specifically testing that the result attrs of the assign_layout that is hoisted out is preserved.
 
-#kernel = #secret.kernel<name = "MatvecDiagonal", force = false>
+#kernel = #secret.kernel<name = "MatmulBicyclic", force = false>
 #layout = #tensor_ext.layout<"{ [i0, i1, i2, i3] -> [ct, slot] : i0 = 0 and ct = 0 and (-25i1 - 5i2 - i3 + slot) mod 128 = 0 and 0 <= i1 <= 3 and 0 <= i2 <= 4 and 0 <= i3 <= 1023 - 25i1 - 5i2 and i3 <= 4 and 0 <= slot <= 1023 and 1024*floor((-128 + 25i1 + 5i2 + i3)/1024) <= -1024 + 25i1 + 5i2 + i3 }">
 #layout1 = #tensor_ext.layout<"{ [i0, i1, i2, i3] -> [ct, slot] : i0 = 0 and i1 = 0 and ct = 0 and (-10i2 - i3 + slot) mod 128 = 0 and 0 <= i2 <= 9 and 0 <= i3 <= 9 and 0 <= slot <= 1023 }">
 #layout2 = #tensor_ext.layout<"{ [i0, i1, i2, i3] -> [ct, slot] : exists (e0, e1, e2, e3, e4, e6: i1 = 0 and 128e6 = -10i2 - i3 + ct + slot - 20e0 - 2e1 and 0 <= i0 <= 3 and 0 <= i2 <= 1 and 0 <= i3 <= 1 and 0 <= ct <= 15 and 0 <= slot <= 1023 and 0 <= e0 <= 4 and 0 <= e1 <= 35 - 5i2 - 10e0 and e1 <= 4 and 0 <= e2 <= 1 and 16*floor((slot)/16) >= slot - 2e3 and slot - 4e2 - 2e3 + 2e4 <= 16*floor((slot)/16) <= 1 + slot - 4e2 - 2e3 + 2e4 and 16*floor((slot)/16) <= 3 + slot - 2e3 and -1 + 25i0 + 4slot + 5e0 + e1 - 2e2 - 8e3 <= 64*floor((slot)/16) <= 25i0 + 4slot + 5e0 + e1 - 2e2 - 8e3 and 50i0 + 7slot + 10e0 + 2e1 - 4e2 - 16e3 + 4e4 <= 112*floor((slot)/16) <= 1 + 50i0 + 7slot + 10e0 + 2e1 - 4e2 - 16e3 + 4e4) }">

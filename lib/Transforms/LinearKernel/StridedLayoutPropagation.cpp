@@ -13,8 +13,7 @@
 #include "lib/Utils/AttributeUtils.h"
 #include "lib/Utils/Layout/LinearSpec.h"
 #include "lib/Utils/Layout/StridedLayout.h"
-#include "llvm/include/llvm/ADT/DenseMap.h"              // from @llvm-project
-#include "llvm/include/llvm/ADT/DenseSet.h"              // from @llvm-project
+#include "llvm/include/llvm/ADT/MapVector.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"           // from @llvm-project
 #include "llvm/include/llvm/Support/Debug.h"             // from @llvm-project
@@ -24,6 +23,7 @@
 #include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Utils/ReshapeOpsUtils.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"       // from @llvm-project
+#include "mlir/include/mlir/IR/Diagnostics.h"    // from @llvm-project
 #include "mlir/include/mlir/IR/Matchers.h"       // from @llvm-project
 #include "mlir/include/mlir/IR/TypeUtilities.h"  // from @llvm-project
 #include "mlir/include/mlir/IR/Visitors.h"       // from @llvm-project
@@ -60,7 +60,8 @@ struct StridedLayoutPropagation
   // Rewrites `x / c` with a cleartext `c` to `x * (1 / c)`. The cleartext
   // operand of a slotwise operation is packed with zeros in the slots that
   // hold no element, and a division by those zeros would leave infinities
-  // there.
+  // there. The layout and the pending conversions of each division move to
+  // the multiplication that replaces it.
   void rewriteCleartextDivisions() {
     // The divisions with the operation that the reciprocal is placed before:
     // the secret region, if the divisor is defined outside of it.
@@ -91,38 +92,100 @@ struct StridedLayoutPropagation
       Value reciprocal =
           builder.createOrFold<arith::DivFOp>(div.getLoc(), one, divisor);
       builder.setInsertionPoint(div);
-      Value product = arith::MulFOp::create(builder, div.getLoc(), div.getLhs(),
-                                            reciprocal);
-      div.replaceAllUsesWith(product);
+      auto product = arith::MulFOp::create(builder, div.getLoc(), div.getLhs(),
+                                           reciprocal);
+      for (Conversion& conversion : conversions) {
+        if (conversion.op == div.getOperation()) {
+          conversion.op = product.getOperation();
+        }
+      }
+      if (auto it = layouts.find(div.getResult()); it != layouts.end()) {
+        StridedLayout layout = it->second;
+        layouts.erase(it);
+        layouts.insert({product.getResult(), layout});
+      }
+      div.replaceAllUsesWith(product.getResult());
       div.erase();
     }
   }
 
   void runOnOperation() override {
+    // The module is analysed completely before it is changed, so that a
+    // module with an unsupported operation can be left as it was.
+    if (failed(analyze())) {
+      if (!skipUnsupported) signalPassFailure();
+      return;
+    }
     rewriteCleartextDivisions();
+    apply();
+  }
+
+ private:
+  // A pending replacement of an operand by a copy of it in another layout.
+  struct Conversion {
+    Operation* op;
+    unsigned operandNumber;
+    StridedLayout layout;
+  };
+
+  // The layouts of the secret values, in the order they were assigned.
+  llvm::MapVector<Value, StridedLayout> layouts;
+  std::vector<Conversion> conversions;
+
+  LogicalResult analyze() {
+    // With `skipUnsupported`, the diagnostics of a failed analysis are not
+    // errors of the compilation.
+    ScopedDiagnosticHandler handler(&getContext(), [&](Diagnostic& diag) {
+      if (!skipUnsupported) return failure();
+      LLVM_DEBUG(llvm::dbgs()
+                 << "strided layouts do not apply: " << diag.str() << "\n");
+      return success();
+    });
     WalkResult result =
         getOperation()->walk<WalkOrder::PreOrder>([&](Operation* op) {
           return failed(visit(op)) ? WalkResult::interrupt()
                                    : WalkResult::advance();
         });
-    if (result.wasInterrupted()) signalPassFailure();
+    return result.wasInterrupted() ? failure() : success();
   }
 
- private:
-  // Layouts of secret values, and of cleartext values that were packed for a
-  // slotwise operation.
-  llvm::DenseMap<Value, StridedLayout> layouts;
-  llvm::DenseSet<Value> cleartexts;
-
-  bool isSecret(Value value) const {
-    return layouts.contains(value) && !cleartexts.contains(value);
+  void apply() {
+    for (const Conversion& conversion : conversions) {
+      Operation* op = conversion.op;
+      OpOperand& operand = op->getOpOperand(conversion.operandNumber);
+      OpBuilder builder(op);
+      Value value = operand.get();
+      StridedLayoutAttr to = attrOf(conversion.layout);
+      Value replacement;
+      if (auto it = layouts.find(value); it != layouts.end()) {
+        replacement = ConvertLayoutOp::create(builder, op->getLoc(), value,
+                                              attrOf(it->second), to)
+                          .getResult();
+      } else {
+        replacement = AssignLayoutOp::create(builder, op->getLoc(), value, to)
+                          .getResult();
+      }
+      setAttributeAssociatedWith(replacement, kLayoutAttrName, to);
+      operand.set(replacement);
+    }
+    for (const auto& [value, layout] : layouts) {
+      setAttributeAssociatedWith(value, kLayoutAttrName, attrOf(layout));
+    }
+    getOperation()->walk([&](func::ReturnOp ret) {
+      auto func = cast<func::FuncOp>(ret->getParentOp());
+      for (OpOperand& operand : ret->getOpOperands()) {
+        auto it = layouts.find(operand.get());
+        if (it == layouts.end()) continue;
+        func.setResultAttr(operand.getOperandNumber(), kLayoutAttrName,
+                           attrOf(it->second));
+      }
+    });
   }
+
+  bool isSecret(Value value) const { return layouts.contains(value); }
 
   void setLayout(Value value, const StridedLayout& layout) {
     layouts[value] = layout;
-    setAttributeAssociatedWith(
-        value, kLayoutAttrName,
-        StridedLayoutAttr::getFromStridedLayout(&getContext(), layout));
   }
 
   StridedLayoutAttr attrOf(const StridedLayout& layout) {
@@ -138,26 +201,13 @@ struct StridedLayoutPropagation
            ArrayRef<int64_t>(it->second.shape) != *shape;
   }
 
-  // Replaces operand `operand` of `op` by a copy of it in `layout`.
+  // Records that operand `operand` of `op` is to be replaced by a copy of it
+  // in `layout`.
   void convertOperand(Operation* op, OpOperand& operand,
                       const StridedLayout& layout) {
-    OpBuilder builder(op);
-    Value value = operand.get();
-    Value replacement;
-    if (isSecret(value)) {
-      if (layouts[value] == layout) return;
-      replacement =
-          ConvertLayoutOp::create(builder, op->getLoc(), value,
-                                  attrOf(layouts[value]), attrOf(layout))
-              .getResult();
-    } else {
-      replacement =
-          AssignLayoutOp::create(builder, op->getLoc(), value, attrOf(layout))
-              .getResult();
-      cleartexts.insert(replacement);
-    }
-    setLayout(replacement, layout);
-    operand.set(replacement);
+    auto it = layouts.find(operand.get());
+    if (it != layouts.end() && it->second == layout) return;
+    conversions.push_back({op, operand.getOperandNumber(), layout});
   }
 
   LogicalResult visit(Operation* op) {
@@ -183,16 +233,7 @@ struct StridedLayoutPropagation
       }
       return success();
     }
-    if (auto ret = dyn_cast<func::ReturnOp>(op)) {
-      auto func = cast<func::FuncOp>(ret->getParentOp());
-      for (OpOperand& operand : ret->getOpOperands()) {
-        auto it = layouts.find(operand.get());
-        if (it == layouts.end()) continue;
-        func.setResultAttr(operand.getOperandNumber(), kLayoutAttrName,
-                           attrOf(it->second));
-      }
-      return success();
-    }
+    if (isa<func::ReturnOp>(op)) return success();
 
     // Everything else is handled only directly inside a secret region, and
     // only if it touches a secret value.
@@ -248,9 +289,7 @@ struct StridedLayoutPropagation
                << "argument " << arg.getArgNumber()
                << " must be a secret tensor of static shape and nonzero rank";
       }
-      StridedLayout layout = StridedLayout::aligned(*shape, minSlotCount);
-      layouts[arg] = layout;
-      func.setArgAttr(arg.getArgNumber(), kLayoutAttrName, attrOf(layout));
+      setLayout(arg, StridedLayout::aligned(*shape, minSlotCount));
     }
     return success();
   }
@@ -384,7 +423,8 @@ struct StridedLayoutPropagation
   }
 
   LogicalResult visitSlotwise(Operation* op) {
-    if (op->getNumRegions() != 0 || op->getNumResults() != 1) {
+    if (!op->hasTrait<OpTrait::Elementwise>() || op->getNumRegions() != 0 ||
+        op->getNumResults() != 1) {
       return op->emitOpError() << "is not supported on secret tensors";
     }
     auto shape = staticShape(op->getResult(0).getType());

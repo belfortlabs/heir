@@ -24,14 +24,6 @@ struct FoldLayoutConversions
                                 PatternRewriter& rewriter) const override;
 };
 
-struct FoldMatvecInputConversionIntoPlaintext
-    : public OpRewritePattern<linalg::MatvecOp> {
-  using OpRewritePattern<linalg::MatvecOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(linalg::MatvecOp op,
-                                PatternRewriter& rewriter) const override;
-};
-
 struct HoistArgLayouts : public OpRewritePattern<func::FuncOp> {
   using OpRewritePattern<func::FuncOp>::OpRewritePattern;
 

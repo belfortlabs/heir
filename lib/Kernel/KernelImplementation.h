@@ -42,32 +42,6 @@ using DagExtractorDynamic = std::function<std::shared_ptr<ArithmeticDagNode<T>>(
     std::shared_ptr<ArithmeticDagNode<T>>,
     std::shared_ptr<ArithmeticDagNode<T>>)>;
 
-// Returns an arithmetic DAG that implements a matvec kernel. Ensure this is
-// only generated for T a subclass of AbstractValue.
-template <typename T>
-std::enable_if_t<std::is_base_of<AbstractValue, T>::value,
-                 std::shared_ptr<ArithmeticDagNode<T>>>
-implementMatvec(KernelName kernelName, const T& matrix, const T& vector) {
-  using NodeTy = ArithmeticDagNode<T>;
-  assert(kernelName == KernelName::MatvecDiagonal);
-  auto matrixDag = NodeTy::leaf(matrix);
-  auto vectorDag = NodeTy::leaf(vector);
-
-  int numRows = matrix.getShape()[0];
-  assert(numRows > 0);
-
-  auto firstTerm = NodeTy::mul(NodeTy::leftRotate(vectorDag, 0),
-                               NodeTy::extract(matrixDag, 0));
-
-  auto accumulatedSum = firstTerm;
-  for (int i = 1; i < numRows; ++i) {
-    auto term = NodeTy::mul(NodeTy::leftRotate(vectorDag, i),
-                            NodeTy::extract(matrixDag, i));
-    accumulatedSum = NodeTy::add(accumulatedSum, term);
-  }
-  return accumulatedSum;
-}
-
 // Returns an arithmetic DAG that implements a logarithmic rotate-and-reduce
 // accumulation of an input ciphertext.
 //

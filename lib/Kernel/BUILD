@@ -167,8 +167,6 @@ cc_test(
         "@googletest//:gtest_main",
         "@heir//lib/Utils:RotationUtils",
         "@heir//lib/Utils/Layout:Codegen",
-        "@heir//lib/Utils/Layout:Convolution",
-        "@heir//lib/Utils/Layout:ConvolutionTestUtil",
         "@heir//lib/Utils/Layout:Evaluate",
         "@heir//lib/Utils/Layout:Utils",
         "@llvm-project//llvm:Support",

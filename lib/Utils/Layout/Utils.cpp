@@ -430,46 +430,6 @@ presburger::IntegerRelation getPeriodicReplicationRelation(
   return result;
 }
 
-presburger::IntegerRelation getPerRowLayoutRelation(RankedTensorType matrixType,
-                                                    int64_t minSlotCount) {
-  auto domainSize = matrixType.getRank();
-  assert(domainSize == 2 && "expected 2-D matrix");
-  assert(matrixType.getDimSize(1) <= minSlotCount &&
-         "expected minSlotCount >= matrixType.getDimSize(1)");
-
-  IntegerRelation result(PresburgerSpace::getRelationSpace(
-      domainSize, /*numRange=*/2, /*numSymbol=*/0, /*numLocals=*/0));
-
-  // Add bounds for the matrix dimensions.
-  for (int i = 0; i < matrixType.getRank(); ++i) {
-    addBounds(result, i, 0, matrixType.getDimSize(i) - 1);
-  }
-  // Number of ciphertexts is the number of rows.
-  auto rangeOffset = result.getVarKindOffset(VarKind::Range);
-  addBounds(result, rangeOffset, 0, matrixType.getDimSize(0) - 1);
-  addBounds(result, rangeOffset + 1, 0, minSlotCount - 1);
-
-  // 0 = -rows + ct
-  addConstraint(result,
-                {{result.getVarKindOffset(VarKind::Domain), -1},
-                 {result.getVarKindOffset(VarKind::Range), 1}},
-                /*equality=*/true);
-
-  // The slotMod = slot % llvm::PowerOf2Ceil(cols)
-  auto paddedCols = llvm::PowerOf2Ceil(matrixType.getDimSize(1));
-  SmallVector<int64_t> slotCoeffs(result.getNumCols(), 0);
-  slotCoeffs[result.getVarKindOffset(VarKind::Range) + 1] = 1;
-  auto slotMod = addModConstraint(result, slotCoeffs, paddedCols);
-
-  // slotMod - col = 0
-  addConstraint(
-      result,
-      {{slotMod, 1}, {result.getVarKindOffset(VarKind::Domain) + 1, -1}},
-      /*equality=*/true);
-
-  return result;
-}
-
 presburger::IntegerRelation getTricyclicDiagonalRelation(
     RankedTensorType weightType, int64_t contractionDim, int64_t ctStride,
     int64_t numSlots) {
@@ -522,45 +482,11 @@ presburger::IntegerRelation getTricyclicDiagonalRelation(
   return result;
 }
 
-bool isRelationSquatDiagonal(RankedTensorType matrixType, int64_t minSlotCount,
-                             const presburger::IntegerRelation& relation) {
-  IntegerRelation diagonalRelation =
-      getDiagonalLayoutRelation(matrixType, minSlotCount);
-  return isRelationEqual(relation, diagonalRelation);
-}
-
 bool isRelationRowMajor(RankedTensorType vectorType, int64_t numSlots,
                         const presburger::IntegerRelation& relation) {
   IntegerRelation rowMajorRelation =
       getRowMajorLayoutRelation(vectorType, numSlots);
   return isRelationEqual(relation, rowMajorRelation);
-}
-
-bool isOneToOneSingleCiphertextPacking(
-    const presburger::IntegerRelation& relation) {
-  if (relation.getNumDomainVars() != 1 || relation.getNumRangeVars() != 2)
-    return false;
-
-  isl_ctx* ctx = isl_ctx_alloc();
-  isl_basic_map* map = convertRelationToBasicMap(relation, ctx);
-  if (!map) {
-    isl_ctx_free(ctx);
-    return false;
-  }
-
-  isl_val* ct =
-      isl_basic_map_plain_get_val_if_fixed(map, isl_dim_out, /*pos=*/0);
-  bool singleCiphertext = ct && isl_val_is_zero(ct) == isl_bool_true;
-  isl_val_free(ct);
-
-  isl_basic_map* slots = isl_basic_map_project_out(
-      isl_basic_map_copy(map), isl_dim_out, /*first=*/0, /*n=*/1);
-  isl_map* slotMap = isl_map_from_basic_map(slots);
-  isl_bool oneToOne = isl_map_is_bijective(slotMap);
-  isl_map_free(slotMap);
-  isl_basic_map_free(map);
-  isl_ctx_free(ctx);
-  return singleCiphertext && oneToOne == isl_bool_true;
 }
 
 void prependPassthroughDim(IntegerRelation& relation, std::optional<int64_t> lb,
@@ -579,37 +505,6 @@ void prependPassthroughDim(IntegerRelation& relation, std::optional<int64_t> lb,
     relation.addBound(BoundType::UB, domainDim, ub.value());
     relation.addBound(BoundType::UB, rangeDim, ub.value());
   }
-}
-
-IntegerRelation foldVectorPermutationIntoMatrixLayout(
-    const IntegerRelation& vectorPermutation,
-    const IntegerRelation& matrixLayout) {
-  // vectorPermutation maps a vector index [col] -> [ct, slot] as a
-  // single-ciphertext permutation (ct is fixed to zero). Drop the constant ct
-  // output, leaving the pure index-to-slot permutation [col] -> [slot].
-  IntegerRelation result(vectorPermutation);
-  result.projectOut(result.getVarKindOffset(VarKind::Range), 1);
-
-  // Lift the permutation to a matrix domain by prepending a passthrough row
-  // dimension to both sides (row_in == row_out), giving
-  // [row, col] -> [row, slot].
-  prependPassthroughDim(result);
-
-  // Compose with the matrix layout (result;matrixLayout): the permutation's
-  // [row, slot] output feeds the matrix layout's [row, col] input, so the
-  // vector permutation is absorbed into the matrix's column indexing, yielding
-  // the folded matrix layout [row, col] -> [ct, slot].
-  result.compose(matrixLayout);
-  result.removeRedundantConstraints();
-  result.simplify();
-  return result;
-}
-
-bool isRelationPerRow(RankedTensorType matrixType, int64_t minSlotCount,
-                      presburger::IntegerRelation relation) {
-  IntegerRelation perRowRelation =
-      getPerRowLayoutRelation(matrixType, minSlotCount);
-  return isRelationEqual(relation, perRowRelation);
 }
 
 bool isRelationCyclic(RankedTensorType type, int64_t numSlots,

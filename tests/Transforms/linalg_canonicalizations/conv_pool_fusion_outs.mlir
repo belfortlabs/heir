@@ -7,9 +7,8 @@ module {
   // CHECK-DAG: %[[FUSED_FILTER:.*]] = arith.constant dense<{{.*}}> : tensor<1x1x4x4xf32>
   // CHECK-DAG: %[[CONV_INIT:.*]] = arith.constant dense<1.000000e+00> : tensor<1x1x3x3xf32>
   // CHECK-DAG: %[[POOL_INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<1x1x2x2xf32>
-  // CHECK-DAG: %[[POOL_KERNEL:.*]] = arith.constant dense<1.000000e+00> : tensor<1x1x2x2xf32>
-  // CHECK: %[[POOLED_INIT:.*]] = linalg.conv_2d_nchw_fchw
-  // CHECK-SAME: ins(%[[CONV_INIT]], %[[POOL_KERNEL]] : tensor<1x1x3x3xf32>, tensor<1x1x2x2xf32>)
+  // CHECK: %[[POOLED_INIT:.*]] = linalg.pooling_nchw_sum
+  // CHECK-SAME: ins(%[[CONV_INIT]], %{{.*}} : tensor<1x1x3x3xf32>, tensor<2x2xf32>)
   // CHECK-SAME: outs(%[[POOL_INIT]] : tensor<1x1x2x2xf32>)
   // CHECK: %[[RES:.*]] = linalg.conv_2d_nchw_fchw
   // CHECK-SAME: dilations = dense<1> : tensor<2xi64>
@@ -54,9 +53,8 @@ module {
   // CHECK-SAME: (%[[INPUT:.*]]: tensor<1x1x6x6xf32>, %[[CONV_INIT:.*]]: tensor<1x1x3x3xf32>)
   // CHECK-DAG: %[[FUSED_FILTER:.*]] = arith.constant dense<{{.*}}> : tensor<1x1x4x4xf32>
   // CHECK-DAG: %[[POOL_INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<1x1x2x2xf32>
-  // CHECK-DAG: %[[POOL_KERNEL:.*]] = arith.constant dense<1.000000e+00> : tensor<1x1x2x2xf32>
-  // CHECK: %[[POOLED_INIT:.*]] = linalg.conv_2d_nchw_fchw
-  // CHECK-SAME: ins(%[[CONV_INIT]], %[[POOL_KERNEL]] : tensor<1x1x3x3xf32>, tensor<1x1x2x2xf32>)
+  // CHECK: %[[POOLED_INIT:.*]] = linalg.pooling_nchw_sum
+  // CHECK-SAME: ins(%[[CONV_INIT]], %{{.*}} : tensor<1x1x3x3xf32>, tensor<2x2xf32>)
   // CHECK-SAME: outs(%[[POOL_INIT]] : tensor<1x1x2x2xf32>)
   // CHECK: %[[RES:.*]] = linalg.conv_2d_nchw_fchw
   // CHECK-SAME: dilations = dense<1> : tensor<2xi64>
@@ -102,15 +100,15 @@ module {
   // CHECK-DAG: %[[FUSED_FILTER:.*]] = arith.constant dense<{{.*}}> : tensor<1x1x4x4xf32>
   // CHECK-DAG: %[[CONV_INIT:.*]] = arith.constant dense<1.000000e+00> : tensor<1x1x3x3xf32>
   // CHECK-DAG: %[[POOL_INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<1x1x2x2xf32>
-  // CHECK-DAG: %[[POOL_KERNEL:.*]] = arith.constant dense<2.500000e-01> : tensor<1x1x2x2xf32>
-  // CHECK: %[[POOLED_INIT:.*]] = linalg.conv_2d_nchw_fchw
-  // CHECK-SAME: ins(%[[CONV_INIT]], %[[POOL_KERNEL]] : tensor<1x1x3x3xf32>, tensor<1x1x2x2xf32>)
+  // CHECK: %[[POOLED_INIT:.*]] = linalg.pooling_nchw_sum
+  // CHECK-SAME: ins(%[[CONV_INIT]], %{{.*}} : tensor<1x1x3x3xf32>, tensor<2x2xf32>)
   // CHECK-SAME: outs(%[[POOL_INIT]] : tensor<1x1x2x2xf32>)
+  // CHECK: %[[AVG_INIT:.*]] = arith.divf %[[POOLED_INIT]]
   // CHECK: %[[RES:.*]] = linalg.conv_2d_nchw_fchw
   // CHECK-SAME: dilations = dense<1> : tensor<2xi64>
   // CHECK-SAME: strides = dense<2> : tensor<2xi64>
   // CHECK-SAME: ins(%[[INPUT]], %[[FUSED_FILTER]] : tensor<1x1x6x6xf32>, tensor<1x1x4x4xf32>)
-  // CHECK-SAME: outs(%[[POOLED_INIT]] : tensor<1x1x2x2xf32>)
+  // CHECK-SAME: outs(%[[AVG_INIT]] : tensor<1x1x2x2xf32>)
   // CHECK: return %[[RES]]
   func.func @conv_avg_pool_const_outs(%input: tensor<1x1x6x6xf32>) -> tensor<1x1x2x2xf32> {
     %cst_0 = arith.constant 0.000000e+00 : f32

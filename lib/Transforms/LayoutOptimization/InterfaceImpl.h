@@ -12,14 +12,6 @@ namespace heir {
 /// any kernel change or difference in the output layout.
 Hoister createTrivialHoister(Operation* op);
 
-/// Construct a hoister that pre-composes the slot dimension of the Matvec op's
-/// matrix with the incremental transformation required to go from vecFromLayout
-/// to vecToLayout, while keeping the kernel the same.
-Hoister createPrecomposingMatvecHoister(linalg::MatvecOp op);
-
-Hoister createPrecomposingConv1dHoister(linalg::Conv1DOp op);
-/// Construct a hoister that hoists a layout conversion through a trivial
-/// rank-reducing collapse_shape operation.
 Hoister createCollapseShapeHoister(tensor::CollapseShapeOp op);
 Hoister createPadHoister(tensor::PadOp op);
 

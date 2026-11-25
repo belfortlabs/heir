@@ -112,11 +112,6 @@ presburger::IntegerRelation getBicyclicDiagonalRelation(
 presburger::IntegerRelation getPeriodicReplicationRelation(
     int64_t numCiphertexts, int64_t numSlots, int64_t period);
 
-// Returns an IntegerRelation that represents a per-row layout for a matrix
-// such that each row of the matrix is in a separate ciphertext.
-presburger::IntegerRelation getPerRowLayoutRelation(RankedTensorType matrixType,
-                                                    int64_t minSlotCount);
-
 // Returns the diagonal packing relation for the rank-3 plaintext operand
 // of the batch ciphertext-plaintext matmul:
 //   BatchDiag'(B, c)_k =
@@ -126,34 +121,10 @@ presburger::IntegerRelation getTricyclicDiagonalRelation(
     RankedTensorType weightType, int64_t contractionDim, int64_t ctStride,
     int64_t numSlots);
 
-// Returns true if the given relation is a squat diagonal layout for the given
-// matrix type and ciphertext semantic shape.
-bool isRelationSquatDiagonal(RankedTensorType matrixType, int64_t minSlotCount,
-                             const presburger::IntegerRelation& relation);
-
 // Returns true if the given relation is a row-major layout for the given
 // vector type and slot size.
 bool isRelationRowMajor(RankedTensorType vectorType, int64_t numSlots,
                         const presburger::IntegerRelation& relation);
-
-// Returns true if the relation packs a vector into ciphertext zero with each
-// vector element occupying exactly one distinct slot.
-bool isOneToOneSingleCiphertextPacking(
-    const presburger::IntegerRelation& relation);
-
-// Folds a single-ciphertext vector permutation (as accepted by
-// isOneToOneSingleCiphertextPacking) into a matrix layout, returning the matrix
-// layout that lets a diagonal matvec consume the un-permuted vector directly.
-// `vectorPermutation` maps [col] -> [ct, slot]; `matrixLayout` maps
-// [row, col] -> [ct, slot].
-presburger::IntegerRelation foldVectorPermutationIntoMatrixLayout(
-    const presburger::IntegerRelation& vectorPermutation,
-    const presburger::IntegerRelation& matrixLayout);
-
-// Returns true if the given relation is a per-row layout
-// for the given matrix type and ciphertext semantic shape.
-bool isRelationPerRow(RankedTensorType matrixType, int64_t minSlotCount,
-                      presburger::IntegerRelation relation);
 
 // Returns true if the relation corresponds to the canonical cyclic (CRT) layout
 // for the tensor type and ciphertext slot count. Requires rank >= 1 and all

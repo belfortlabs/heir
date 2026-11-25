@@ -7,6 +7,7 @@
 #include <string>
 #include <tuple>
 
+#include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
 #include "lib/Utils/Layout/IslConversion.h"
 #include "lib/Utils/Layout/StridedLayout.h"
 #include "llvm/include/llvm/ADT/SmallVector.h"  // from @llvm-project
@@ -19,7 +20,9 @@
 #include "mlir/include/mlir/IR/IntegerSet.h"         // from @llvm-project
 #include "mlir/include/mlir/IR/MLIRContext.h"        // from @llvm-project
 #include "mlir/include/mlir/IR/OpImplementation.h"   // from @llvm-project
-#include "mlir/include/mlir/Support/LLVM.h"          // from @llvm-project
+#include "mlir/include/mlir/IR/Visitors.h"           // from @llvm-project
+#include "mlir/include/mlir/Interfaces/FunctionInterfaces.h"  // from @llvm-project
+#include "mlir/include/mlir/Support/LLVM.h"  // from @llvm-project
 
 // ISL
 #include "include/isl/ctx.h"         // from @isl
@@ -240,6 +243,23 @@ std::optional<IntegerRelation> getLayoutRelation(Attribute attr) {
     return strided.getIntegerRelation();
   }
   return std::nullopt;
+}
+
+bool usesStridedLayouts(Operation* module) {
+  bool found = false;
+  module->walk([&](Operation* op) {
+    if (found) return WalkResult::interrupt();
+    auto func = dyn_cast<FunctionOpInterface>(op);
+    if (!func) return WalkResult::advance();
+    for (unsigned i = 0; i < func.getNumArguments(); ++i) {
+      if (isa_and_nonnull<StridedLayoutAttr>(
+              func.getArgAttr(i, TensorExtDialect::kLayoutAttrName))) {
+        found = true;
+      }
+    }
+    return WalkResult::advance();
+  });
+  return found;
 }
 
 }  // namespace tensor_ext

@@ -30,7 +30,6 @@ cc_test(
     srcs = ["CodegenTest.cpp"],
     deps = [
         ":Codegen",
-        ":Convolution",
         ":IslConversion",
         "@googletest//:gtest_main",
         "@heir//lib/Dialect/TensorExt/IR:Dialect",  # build_cleaner: keep
@@ -125,35 +124,6 @@ cc_library(
 )
 
 cc_library(
-    name = "Convolution",
-    srcs = ["Convolution.cpp"],
-    hdrs = ["Convolution.h"],
-    deps = [
-        ":IslConversion",
-        ":Utils",
-        "@heir//lib/Utils:MathUtils",
-        "@llvm-project//llvm:Support",
-        "@llvm-project//mlir:Analysis",
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:Support",
-    ],
-)
-
-cc_library(
-    name = "ConvolutionTestUtil",
-    testonly = 1,
-    srcs = ["ConvolutionTestUtil.cpp"],
-    hdrs = ["ConvolutionTestUtil.h"],
-    deps = [
-        ":Convolution",
-        ":Utils",
-        "@llvm-project//mlir:Analysis",
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:Support",
-    ],
-)
-
-cc_library(
     name = "Evaluate",
     srcs = ["Evaluate.cpp"],
     hdrs = ["Evaluate.h"],
@@ -169,8 +139,6 @@ cc_test(
     name = "EvaluateTest",
     srcs = ["EvaluateTest.cpp"],
     deps = [
-        ":Convolution",
-        ":ConvolutionTestUtil",
         ":Evaluate",
         ":IslConversion",
         ":Utils",
@@ -194,23 +162,6 @@ cc_test(
         "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:ArithUtils",
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:Support",
-    ],
-)
-
-cc_test(
-    name = "ConvolutionTest",
-    srcs = ["ConvolutionTest.cpp"],
-    deps = [
-        ":Convolution",
-        ":ConvolutionTestUtil",
-        ":Evaluate",
-        ":Utils",
-        "@googletest//:gtest_main",
-        "@heir//lib/Utils:MathUtils",
-        "@llvm-project//llvm:Support",
-        "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
     ],
@@ -283,14 +234,4 @@ cc_binary(
 cc_binary(
     name = "debug_packing_2d",
     srcs = ["debug_packing_2d.cpp"],
-)
-
-cc_binary(
-    name = "debug_packing_4d",
-    srcs = ["debug_packing_4d.cpp"],
-)
-
-cc_binary(
-    name = "debug_packing_4d_pooling",
-    srcs = ["debug_packing_4d_pooling.cpp"],
 )

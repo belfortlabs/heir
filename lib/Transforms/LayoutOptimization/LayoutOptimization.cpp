@@ -106,16 +106,12 @@ struct LayoutOptimization : impl::LayoutOptimizationBase<LayoutOptimization> {
 };
 
 void LayoutOptimization::runOnOperation() {
+  // Strided layouts are chosen with their conversion costs in
+  // `strided-layout-propagation`.
+  if (tensor_ext::usesStridedLayouts(getOperation())) return;
+
   auto* ctx = &getContext();
   IRRewriter builder(ctx);
-
-  RewritePatternSet preprocessingPatterns(ctx);
-  preprocessingPatterns.add<FoldMatvecInputConversionIntoPlaintext>(ctx);
-  if (failed(applyPatternsGreedily(getOperation(),
-                                   std::move(preprocessingPatterns)))) {
-    signalPassFailure();
-    return;
-  }
 
   DataFlowSolver solver;
   dataflow::loadBaselineAnalyses(solver);
@@ -419,43 +415,6 @@ static FailureOr<Cost> computeKernelCostFromDAG(KernelName kernel,
   switch (kernel) {
     case KernelName::Trivial:
       return 0;
-
-    case KernelName::MatvecDiagonal: {
-      auto matrixType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
-      if (!matrixType) return failure();
-      auto shape = matrixType.getShape();
-      auto dagType = kernel::mlirTypeToDagType(matrixType);
-
-      SymbolicValue symbolicVector({shape[1]},
-                                   /*isSecret=*/true);
-      SymbolicValue symbolicMatrix({shape[0], shape[1]},
-                                   /*isSecret=*/false);
-      auto kernelDag = kernel::implementHaleviShoup(
-          symbolicVector, symbolicMatrix, shape.vec(), dagType);
-
-      if (!kernelDag) return failure();
-      return costModel.process(kernelDag);
-    }
-
-    case KernelName::MatvecNaive:
-      // TODO(#1589): implement MatvecNaive kernel cost model
-      return failure();
-
-    case KernelName::VecmatDiagonal: {
-      auto matrixType = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
-      if (!matrixType) return failure();
-      auto shape = matrixType.getShape();
-      auto dagType = kernel::mlirTypeToDagType(matrixType);
-
-      SymbolicValue symbolicVector({shape[0]}, /*isSecret=*/true);
-      SymbolicValue symbolicMatrix({shape[0], shape[1]},
-                                   /*isSecret=*/false);
-      auto kernelDag = kernel::implementHaleviShoup(
-          symbolicVector, symbolicMatrix, shape.vec(), dagType);
-
-      if (!kernelDag) return failure();
-      return costModel.process(kernelDag);
-    }
 
     case KernelName::MatmulBicyclic: {
       // TODO(#2386): ensure this reflects required zero-padding of inputs

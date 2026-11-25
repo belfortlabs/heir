@@ -2,9 +2,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "lib/Dialect/Kernel/IR/KernelOps.h"
+#include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtAttributes.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
@@ -18,8 +20,10 @@
 #include "lib/Utils/Layout/StridedLayout.h"
 #include "lib/Utils/Utils.h"
 #include "llvm/include/llvm/ADT/STLExtras.h"             // from @llvm-project
+#include "llvm/include/llvm/ADT/SetVector.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"           // from @llvm-project
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"    // from @llvm-project
+#include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"   // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/SCF/IR/SCF.h"        // from @llvm-project
 #include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
@@ -27,6 +31,8 @@
 #include "mlir/include/mlir/IR/BuiltinOps.h"             // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinTypes.h"           // from @llvm-project
 #include "mlir/include/mlir/IR/PatternMatch.h"           // from @llvm-project
+#include "mlir/include/mlir/IR/SymbolTable.h"            // from @llvm-project
+#include "mlir/include/mlir/Transforms/RegionUtils.h"    // from @llvm-project
 
 namespace mlir {
 namespace heir {
@@ -143,19 +149,19 @@ FailureOr<Value> emitDiagonals(OpBuilder& b, Location loc,
     Value slots = indexConstant(b, loc, numSlots);
     Value shift = emitFloorMod(
         b, loc, arith::SubIOp::create(b, loc, inPos, outPos), rule.modulus);
-    Value ctIn = arith::DivUIOp::create(b, loc, inPos, slots);
+    Value ctIn = arith::DivSIOp::create(b, loc, inPos, slots);
     Value block = ctIn;
     Value slot;
     if (rule.writeFollowsInput) {
       slot = emitFloorMod(b, loc, arith::SubIOp::create(b, loc, inPos, shift),
                           numSlots);
     } else {
-      Value ctOut = arith::DivUIOp::create(b, loc, outPos, slots);
+      Value ctOut = arith::DivSIOp::create(b, loc, outPos, slots);
       block = arith::AddIOp::create(
           b, loc,
           arith::MulIOp::create(b, loc, ctOut, indexConstant(b, loc, numIn)),
           ctIn);
-      slot = arith::RemUIOp::create(b, loc, outPos, slots);
+      slot = arith::RemSIOp::create(b, loc, outPos, slots);
     }
     Value tableIndex = arith::AddIOp::create(
         b, loc,
@@ -224,6 +230,77 @@ FailureOr<Value> emitDiagonals(OpBuilder& b, Location loc,
         return {ifOp.getResult(0)};
       });
   return nest.results.front();
+}
+
+// Emits the diagonals of a transform in a private helper function and returns
+// the result of a call to it. The call reads cleartext values only. Like the
+// helpers that implement `tensor_ext.assign_layout`, it has the packing role,
+// so that it is hoisted out of the secret region and can be moved to the
+// preprocessing function.
+FailureOr<Value> emitDiagonalsCall(
+    OpBuilder& b, Location loc, const LinearOp& linear, const StridedLayout& in,
+    const StridedLayout& out, ArrayRef<DiagonalKey> keys, Type elementType) {
+  Operation* parent = b.getInsertionBlock()->getParentOp();
+  auto module = parent->getParentOfType<ModuleOp>();
+  auto entryFunc = dyn_cast<func::FuncOp>(parent);
+  if (!entryFunc) entryFunc = parent->getParentOfType<func::FuncOp>();
+  if (!module || !entryFunc) {
+    return emitDiagonals(b, loc, linear, in, out, keys, elementType);
+  }
+
+  std::string name;
+  for (int64_t suffix = 0;; ++suffix) {
+    name = (entryFunc.getSymName() + "__pack_diagonals_" + Twine(suffix)).str();
+    if (!SymbolTable::lookupSymbolIn(module, name)) break;
+  }
+  auto diagonalsType = RankedTensorType::get(
+      {static_cast<int64_t>(keys.size()), out.numSlots}, elementType);
+  OpBuilder moduleBuilder(module.getBody(), module.getBody()->begin());
+  auto func = func::FuncOp::create(
+      moduleBuilder, loc, name,
+      FunctionType::get(b.getContext(), {}, {diagonalsType}));
+  func.setPrivate();
+  setInterfaceRole(
+      func, kClientPackRole,
+      b.getDictionaryAttr({b.getNamedAttr(
+          kClientHelperFuncName, b.getStringAttr(entryFunc.getSymName()))}));
+
+  Block* entry = func.addEntryBlock();
+  OpBuilder body(entry, entry->end());
+  FailureOr<Value> diagonals =
+      emitDiagonals(body, loc, linear, in, out, keys, elementType);
+  if (failed(diagonals)) {
+    func.erase();
+    return failure();
+  }
+  func::ReturnOp::create(body, loc, *diagonals);
+
+  // The cleartext values the coefficients are read from become arguments.
+  // A value the conversion is about to replace, such as an argument of the
+  // function being converted, is defined in a block that is no longer part of
+  // the IR.
+  llvm::SetVector<Value> captures;
+  func->walk([&](Operation* op) {
+    for (Value operand : op->getOperands()) {
+      Block* block = operand.getParentBlock();
+      if (!block || !block->getParent() ||
+          !func.getBody().isAncestor(block->getParent())) {
+        captures.insert(operand);
+      }
+    }
+  });
+  SmallVector<Type> argTypes;
+  for (Value capture : captures) {
+    argTypes.push_back(capture.getType());
+    replaceAllUsesInRegionWith(
+        capture, entry->addArgument(capture.getType(), loc), func.getBody());
+  }
+  func.setFunctionType(
+      FunctionType::get(b.getContext(), argTypes, {diagonalsType}));
+  func->walk([](Operation* op) { markStridedConverted(op); });
+
+  return func::CallOp::create(b, loc, func, captures.getArrayRef())
+      .getResult(0);
 }
 
 // Emits the sum of `count` left rotations of every ciphertext of `value` by
@@ -312,7 +389,7 @@ FailureOr<Value> emitLinearTransform(OpBuilder& b, Location loc,
   }
 
   FailureOr<Value> diagonals =
-      emitDiagonals(b, loc, linear, in, out, keys, elementType);
+      emitDiagonalsCall(b, loc, linear, in, out, keys, elementType);
   if (failed(diagonals)) return failure();
 
   SmallVector<int64_t> outputCiphertexts, inputCiphertexts, shifts;
@@ -556,23 +633,6 @@ struct ConvertStridedConvertLayout : public StridedPattern {
 void markStridedConverted(Operation* op) {
   op->setAttr("tensor_ext.layout_materialized",
               UnitAttr::get(op->getContext()));
-}
-
-bool usesStridedLayouts(Operation* module) {
-  bool found = false;
-  module->walk([&](Operation* op) {
-    if (found) return WalkResult::interrupt();
-    auto func = dyn_cast<FunctionOpInterface>(op);
-    if (!func) return WalkResult::advance();
-    for (unsigned i = 0; i < func.getNumArguments(); ++i) {
-      if (isa_and_nonnull<StridedLayoutAttr>(
-              func.getArgAttr(i, kLayoutAttrName))) {
-        found = true;
-      }
-    }
-    return WalkResult::advance();
-  });
-  return found;
 }
 
 void populateStridedLayoutPatterns(RewritePatternSet& patterns,

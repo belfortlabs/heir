@@ -61,10 +61,10 @@ Value emitStridedPosition(OpBuilder& builder, Location loc,
   for (const StridedDigit& digit : layout.digits) {
     Value term = indices[digit.axis];
     if (digit.div != 1) {
-      term = arith::DivUIOp::create(builder, loc, term, constant(digit.div));
+      term = arith::DivSIOp::create(builder, loc, term, constant(digit.div));
     }
     if (digit.mod != 0) {
-      term = arith::RemUIOp::create(builder, loc, term, constant(digit.mod));
+      term = arith::RemSIOp::create(builder, loc, term, constant(digit.mod));
     }
     if (digit.stride != 1) {
       term = arith::MulIOp::create(builder, loc, term, constant(digit.stride));
@@ -100,8 +100,8 @@ static Value emitStridedLoopNest(
         Value position = emitStridedPosition(b, loc, layout, ivs);
         Value numSlots =
             arith::ConstantIndexOp::create(b, loc, layout.numSlots);
-        Value ct = arith::DivUIOp::create(b, loc, position, numSlots);
-        Value slot = arith::RemUIOp::create(b, loc, position, numSlots);
+        Value ct = arith::DivSIOp::create(b, loc, position, numSlots);
+        Value slot = arith::RemSIOp::create(b, loc, position, numSlots);
         return {body(b, loc, ivs, ct, slot, args[0])};
       });
   createdOpCallback(nest.loops.front());

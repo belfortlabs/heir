@@ -6,8 +6,10 @@ include "mlir/Pass/PassBase.td"
 def StridedLayoutPropagation : Pass<"strided-layout-propagation"> {
   let summary = "Assign strided ciphertext layouts to secret tensors";
   let description = [{
-  This pass is an alternative to `layout-propagation` that assigns
-  `#tensor_ext.strided_layout` attributes instead of relation-based layouts.
+  This pass assigns `#tensor_ext.strided_layout` attributes to programs made
+  of operations that are linear in one secret tensor and of elementwise
+  operations. Other programs are handled by `layout-propagation`, which
+  assigns relation-based layouts.
 
   Each secret tensor argument of a function is laid out in row-major order.
   Layouts are then propagated forward:
@@ -34,7 +36,12 @@ def StridedLayoutPropagation : Pass<"strided-layout-propagation"> {
     fewest diagonals in total, and cleartext tensor operands get a
     `tensor_ext.assign_layout`.
 
-  Operations outside this set are reported as errors.
+  Operations outside this set are reported as errors. With `skip-unsupported`
+  the pass instead leaves a module that contains such an operation unchanged,
+  so that `layout-propagation` can handle it; that pass and
+  `layout-optimization` do nothing on a module that has strided layouts.
+
+  (* example filepath=tests/Transforms/strided_layout_propagation/doctest.mlir *)
   }];
   let options = [
     Option<
@@ -43,6 +50,13 @@ def StridedLayoutPropagation : Pass<"strided-layout-propagation"> {
       "int",
       /*default=*/"1024",
       "Number of slots of a ciphertext."
+    >,
+    Option<
+      "skipUnsupported",
+      "skip-unsupported",
+      "bool",
+      /*default=*/"false",
+      "Leave a module with an unsupported operation unchanged, without an error."
     >
   ];
 

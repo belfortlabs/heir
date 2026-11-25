@@ -10,7 +10,7 @@ module {
   // CHECK-SAME: (%[[INPUT:.*]]: tensor<1x1x6x6xf32>)
   // CHECK-DAG: %[[FUSED_FILTER:.*]] = arith.constant dense<{{.*}}1.000000e+00, 2.000000e+00, 1.000000e+00, 2.000000e+00{{.*}}3.000000e+00, 4.000000e+00, 3.000000e+00, 4.000000e+00{{.*}}1.000000e+00, 2.000000e+00, 1.000000e+00, 2.000000e+00{{.*}}3.000000e+00, 4.000000e+00, 3.000000e+00, 4.000000e+00{{.*}}> : tensor<1x1x4x4xf32>
   // CHECK-DAG: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<1x1x2x2xf32>
-  // CHECK: %[[POOLED_INIT:.*]] = linalg.conv_2d_nchw_fchw
+  // CHECK: %[[POOLED_INIT:.*]] = linalg.pooling_nchw_sum
   // CHECK-SAME: strides = dense<1> : vector<2xi64>
   // CHECK: %[[RES:.*]] = linalg.conv_2d_nchw_fchw
   // CHECK-SAME: dilations = dense<1> : tensor<2xi64>
@@ -64,13 +64,14 @@ module {
   // CHECK-SAME: (%[[INPUT:.*]]: tensor<1x1x6x6xf32>)
   // CHECK-DAG: %[[FUSED_FILTER:.*]] = arith.constant dense<{{.*}}2.500000e-01, 5.000000e-01, 2.500000e-01, 5.000000e-01{{.*}}7.500000e-01, 1.000000e+00, 7.500000e-01, 1.000000e+00{{.*}}2.500000e-01, 5.000000e-01, 2.500000e-01, 5.000000e-01{{.*}}7.500000e-01, 1.000000e+00, 7.500000e-01, 1.000000e+00{{.*}}> : tensor<1x1x4x4xf32>
   // CHECK-DAG: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<1x1x2x2xf32>
-  // CHECK: %[[POOLED_INIT:.*]] = linalg.conv_2d_nchw_fchw
+  // CHECK: %[[POOLED_INIT:.*]] = linalg.pooling_nchw_sum
   // CHECK-SAME: strides = dense<1> : vector<2xi64>
+  // CHECK: %[[AVG_INIT:.*]] = arith.divf %[[POOLED_INIT]]
   // CHECK: %[[RES:.*]] = linalg.conv_2d_nchw_fchw
   // CHECK-SAME: dilations = dense<1> : tensor<2xi64>
   // CHECK-SAME: strides = dense<2> : tensor<2xi64>
   // CHECK-SAME: ins(%[[INPUT]], %[[FUSED_FILTER]] : tensor<1x1x6x6xf32>, tensor<1x1x4x4xf32>)
-  // CHECK-SAME: outs(%[[POOLED_INIT]] : tensor<1x1x2x2xf32>)
+  // CHECK-SAME: outs(%[[AVG_INIT]] : tensor<1x1x2x2xf32>)
   // CHECK: return %[[RES]]
   func.func @conv_avg_pool(%input: tensor<1x1x6x6xf32>) -> tensor<1x1x2x2xf32> {
     %cst_0 = arith.constant 0.000000e+00 : f32
@@ -125,7 +126,7 @@ module {
   // CHECK-DAG: %[[PAD:.*]] = tensor.pad %[[INPUT]]
   // CHECK-DAG: %[[FUSED_FILTER:.*]] = arith.constant dense<{{.*}}> : tensor<1x1x4x4xf32>
   // CHECK-DAG: %[[INIT:.*]] = arith.constant dense<0.000000e+00> : tensor<1x1x2x2xf32>
-  // CHECK: %[[POOLED_INIT:.*]] = linalg.conv_2d_nchw_fchw
+  // CHECK: %[[POOLED_INIT:.*]] = linalg.pooling_nchw_sum
   // CHECK-SAME: strides = dense<1> : vector<2xi64>
   // CHECK: %[[RES:.*]] = linalg.conv_2d_nchw_fchw
   // CHECK-SAME: ins(%[[PAD]], %[[FUSED_FILTER]] : tensor<1x1x6x6xf32>, tensor<1x1x4x4xf32>)
@@ -178,7 +179,7 @@ module {
   // CHECK: func.func @no_fuse_activation
   // CHECK: linalg.conv_2d_nchw_fchw
   // CHECK: math.tanh
-  // CHECK: linalg.conv_2d_nchw_fchw
+  // CHECK: linalg.pooling_nchw_sum
   func.func @no_fuse_activation(%input: tensor<1x1x6x6xf32>) -> tensor<1x1x2x2xf32> {
     %cst_0 = arith.constant 0.000000e+00 : f32
 
@@ -223,7 +224,7 @@ module {
   // CHECK: func.func @no_fuse_padded_pool
   // CHECK: linalg.conv_2d_nchw_fchw
   // CHECK: tensor.pad
-  // CHECK: linalg.conv_2d_nchw_fchw
+  // CHECK: linalg.pooling_nchw_sum
   func.func @no_fuse_padded_pool(%input: tensor<1x1x6x6xf32>) -> tensor<1x1x3x3xf32> {
     %cst_0 = arith.constant 0.000000e+00 : f32
 

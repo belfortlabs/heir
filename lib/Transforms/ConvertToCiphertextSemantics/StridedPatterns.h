@@ -11,11 +11,6 @@
 namespace mlir {
 namespace heir {
 
-/// True if a function argument in the module carries a
-/// `#tensor_ext.strided_layout`, which is how `strided-layout-propagation`
-/// marks its output.
-bool usesStridedLayouts(Operation* module);
-
 /// Marks an operation as already being in ciphertext semantics.
 void markStridedConverted(Operation* op);
 

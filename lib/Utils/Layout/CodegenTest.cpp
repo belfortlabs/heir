@@ -7,7 +7,6 @@
 #include "lib/Dialect/TensorExt/IR/TensorExtAttributes.h"
 #include "lib/Dialect/TensorExt/IR/TensorExtDialect.h"
 #include "lib/Utils/Layout/Codegen.h"
-#include "lib/Utils/Layout/Convolution.h"
 #include "lib/Utils/Layout/IslConversion.h"
 #include "mlir/include/mlir/Analysis/Presburger/IntegerRelation.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Affine/Analysis/AffineStructures.h"  // from @llvm-project
@@ -171,54 +170,6 @@ for (int c0 = 0; c0 <= 3; c0 += 1)
   ASSERT_THAT(actual, Eq(expected));
 }
 
-TEST(CodegenTest, ConvFilterRelationGenerated) {
-  // This is a layout produced for a convolution kernel with 3x3 filter and
-  // padding = strides = 1.
-  MLIRContext context;
-  RankedTensorType filterType =
-      RankedTensorType::get({3, 3}, IndexType::get(&context));
-  RankedTensorType dataType =
-      RankedTensorType::get({3, 3}, IndexType::get(&context));
-  int64_t padding = 1;
-  SmallVector<int64_t> strides = {1, 1};
-  auto relation =
-      get2dConvFilterRelation(filterType, dataType, strides, padding);
-
-  auto result = generateLoopNestAsCStr(relation);
-  ASSERT_TRUE(succeeded(result));
-  std::string actual = result.value();
-  std::string expected = R"(
-for (int c0 = 0; c0 <= 8; c0 += 1)
-  for (int c1 = max(max(max(-1, c0 - 4), -(c0 % 3) + c0 - 3), -(c0 % 3)); c1 <= min(min(min(9, c0 + 4), -(c0 % 3) + c0 + 5), -(c0 % 3) + 10); c1 += 1)
-    if (c1 + 1 >= (-c0 + c1 + 4) % 3 && ((-c0 + c1 + 4) % 3) + 7 >= c1 && ((-c0 + c1 + 4) % 3) + (c0 % 3) >= 1 && ((-c0 + c1 + 4) % 3) + (c0 % 3) <= 3)
-      S((-c0 + c1 + 4) / 3, (-c0 + c1 + 4) % 3, c0, c1);
-)";
-  ASSERT_THAT(actual, Eq(expected));
-}
-
-TEST(CodegenTest, ConvFilterRelationNoPadding) {
-  // This is a layout produced for a convolution kernel with 3x3 filter and
-  // padding = 0
-  MLIRContext context;
-  RankedTensorType filterType =
-      RankedTensorType::get({3, 3}, IndexType::get(&context));
-  RankedTensorType dataType =
-      RankedTensorType::get({3, 3}, IndexType::get(&context));
-  int64_t padding = 0;
-  SmallVector<int64_t> strides = {1, 1};
-  auto relation =
-      get2dConvFilterRelation(filterType, dataType, strides, padding);
-
-  auto result = generateLoopNestAsCStr(relation);
-  ASSERT_TRUE(succeeded(result));
-  std::string actual = result.value();
-  std::string expected = R"(
-for (int c1 = 0; c1 <= 8; c1 += 1)
-  S(c1 / 3, c1 % 3, 0, c1);
-)";
-  ASSERT_THAT(actual, Eq(expected));
-}
-
 TEST(CodegenTest, VariadicOpTest) {
   // This exercises variadic operations in the generated ISL.
   MLIRContext context;
@@ -376,52 +327,6 @@ TEST(CodegenTest, BooleanExprsStayI1) {
   });
 
   moduleOp.erase();
-}
-
-TEST(CodegenTest, Conv2dChwFchwAsSequenceTest) {
-  MLIRContext context;
-  RankedTensorType filterType =
-      RankedTensorType::get({4, 4, 2, 2}, IndexType::get(&context));
-  RankedTensorType dataType =
-      RankedTensorType::get({1, 4, 28, 28}, IndexType::get(&context));
-  SmallVector<int64_t> strides = {2, 2};
-  int64_t padding = 0;
-  int64_t minSlotCount = 4096;
-
-  auto maybeRels = get2dConvChwFchwFilterAsSequence(
-      filterType, dataType, strides, padding, minSlotCount, true);
-  ASSERT_TRUE(succeeded(maybeRels));
-  auto rels = maybeRels.value();
-
-  // Scheduling f, c, h, w as outer loops to improve performance.
-  for (const auto& rel : rels) {
-    auto result = generateLoopNestAsCStr(rel, {});
-    ASSERT_TRUE(succeeded(result));
-  }
-}
-
-TEST(CodegenTest, Conv2dChwFchwAsSequenceNoInterchangeTest) {
-  MLIRContext context;
-  RankedTensorType filterType =
-      RankedTensorType::get({4, 4, 2, 2}, IndexType::get(&context));
-  RankedTensorType dataType =
-      RankedTensorType::get({1, 4, 28, 28}, IndexType::get(&context));
-  SmallVector<int64_t> strides = {2, 2};
-  int64_t padding = 0;
-  int64_t minSlotCount = 4096;
-
-  auto maybeRels = get2dConvChwFchwFilterAsSequence(
-      filterType, dataType, strides, padding, minSlotCount, false);
-  ASSERT_TRUE(succeeded(maybeRels));
-  auto rels = maybeRels.value();
-
-  EXPECT_EQ(rels.size(),
-            4);  // 4 steps when interchange is false (skips step 2)
-
-  for (size_t i = 0; i < rels.size(); ++i) {
-    auto result = generateLoopNestAsCStr(rels[i]);
-    EXPECT_TRUE(succeeded(result)) << "Failed at relation " << i;
-  }
 }
 
 }  // namespace

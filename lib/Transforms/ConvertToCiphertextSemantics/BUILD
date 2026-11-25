@@ -27,7 +27,6 @@ cc_library(
         "@heir//lib/Kernel:IRMaterializingVisitor",
         "@heir//lib/Kernel:KernelImplementation",
         "@heir//lib/Kernel:Utils",
-        "@heir//lib/Target/CompilationTarget",
         "@heir//lib/Transforms/DropUnitDims",
         "@heir//lib/Transforms/LayoutPropagation:Utils",
         "@heir//lib/Utils",
@@ -37,7 +36,6 @@ cc_library(
         "@heir//lib/Utils:ContextAwareTypeConversion",
         "@heir//lib/Utils:MathUtils",
         "@heir//lib/Utils/Layout:Codegen",
-        "@heir//lib/Utils/Layout:Convolution",
         "@heir//lib/Utils/Layout:Utils",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Analysis",
@@ -98,6 +96,7 @@ cc_library(
     deps = [
         ":AssignLayout",
         ":TypeConversion",
+        "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/Kernel/IR:Dialect",
         "@heir//lib/Dialect/TensorExt/IR:Dialect",
         "@heir//lib/Transforms/LinearKernel:LinearOp",
@@ -109,10 +108,12 @@ cc_library(
         "@heir//lib/Utils/Layout:StridedLayout",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:LinalgDialect",
         "@llvm-project//mlir:SCFDialect",
         "@llvm-project//mlir:TensorDialect",
+        "@llvm-project//mlir:TransformUtils",
     ],
 )
 

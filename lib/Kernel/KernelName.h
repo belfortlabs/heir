@@ -14,20 +14,6 @@ enum KernelName : int {
   // (e.g., an elementwise addition).
   Trivial = 0,
 
-  // TODO(#1589): implement MatvecNaive kernel
-  MatvecNaive,
-
-  // Plaintext-ciphertext matvec using the Halevi-Shoup diagonal method.
-  MatvecDiagonal,
-
-  // Ciphertext-plaintext vecmat using the Halevi-Shoup diagonal method
-  // (transpose of MatvecDiagonal).
-  VecmatDiagonal,
-
-  // LHS matrix is secret, RHS is a plaintext matrix. This expands the matmul
-  // into a single matvec using the diagonal matrix vector kernel.
-  MatmulDiagonal,
-
   // Ciphertext-ciphertext matmul using the bicyclic packing method.
   MatmulBicyclic,
 

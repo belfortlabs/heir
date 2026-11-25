@@ -24,10 +24,6 @@ struct FieldParser<heir::KernelName> {
     if (parser.parseString(&kernelName)) return failure();
 
     if (kernelName == "Trivial") return heir::KernelName::Trivial;
-    if (kernelName == "MatvecNaive") return heir::KernelName::MatvecNaive;
-    if (kernelName == "MatvecDiagonal") return heir::KernelName::MatvecDiagonal;
-    if (kernelName == "VecmatDiagonal") return heir::KernelName::VecmatDiagonal;
-    if (kernelName == "MatmulDiagonal") return heir::KernelName::MatmulDiagonal;
     if (kernelName == "MatmulBicyclic") return heir::KernelName::MatmulBicyclic;
     if (kernelName == "MatmulBicyclicDiagonal")
       return heir::KernelName::MatmulBicyclicDiagonal;

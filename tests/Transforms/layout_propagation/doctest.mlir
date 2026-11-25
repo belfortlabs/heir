@@ -1,29 +1,19 @@
-// RUN: heir-opt --layout-propagation %s | FileCheck %s
+// RUN: heir-opt --layout-propagation=min-slot-count=16 %s | FileCheck %s
 
-// An MNIST-like two-layer neural network with cleartext weights and biases
-// and a secret input.
+// A product of two secret matrices. The dimensions are pairwise coprime, so
+// the bicyclic kernel applies, and both operands get a bicyclic layout.
 
-// CHECK: @main
-func.func @main(
-    %arg0: tensor<512x784xf32>,
-    %arg1: tensor<512xf32>,
-    %arg2: tensor<10x512xf32>,
-    %arg3: tensor<10xf32>,
-    %arg4: !secret.secret<tensor<784xf32>>) -> !secret.secret<tensor<10xf32>> {
-  %cst = arith.constant dense<0.000000e+00> : tensor<512xf32>
-  %cst_0 = arith.constant dense<0.000000e+00> : tensor<10xf32>
-  %0 = tensor.empty() : tensor<784x512xf32>
-  %1 = tensor.empty() : tensor<512x10xf32>
-  %2 = secret.generic(%arg4: !secret.secret<tensor<784xf32>>) {
-  ^body(%input0: tensor<784xf32>):
-    %transposed = linalg.transpose ins(%arg0 : tensor<512x784xf32>) outs(%0 : tensor<784x512xf32>) permutation = [1, 0]
-    %3 = linalg.vecmat ins(%input0, %transposed : tensor<784xf32>, tensor<784x512xf32>) outs(%cst : tensor<512xf32>) -> tensor<512xf32>
-    %4 = arith.addf %arg1, %3 : tensor<512xf32>
-    %5 = arith.maximumf %4, %cst : tensor<512xf32>
-    %transposed_1 = linalg.transpose ins(%arg2 : tensor<10x512xf32>) outs(%1 : tensor<512x10xf32>) permutation = [1, 0]
-    %6 = linalg.vecmat ins(%5, %transposed_1 : tensor<512xf32>, tensor<512x10xf32>) outs(%cst_0 : tensor<10xf32>) -> tensor<10xf32>
-    %7 = arith.addf %arg3, %6 : tensor<10xf32>
-    secret.yield %7 : tensor<10xf32>
-  } -> !secret.secret<tensor<10xf32>>
-  return %2 : !secret.secret<tensor<10xf32>>
+// CHECK: #secret.kernel<name = "MatmulBicyclic"
+// CHECK: @matmul
+// CHECK: linalg.matmul
+func.func @matmul(
+    %arg0: !secret.secret<tensor<3x5xf32>>,
+    %arg1: !secret.secret<tensor<5x2xf32>>) -> !secret.secret<tensor<3x2xf32>> {
+  %cst = arith.constant dense<0.000000e+00> : tensor<3x2xf32>
+  %0 = secret.generic(%arg0: !secret.secret<tensor<3x5xf32>>, %arg1: !secret.secret<tensor<5x2xf32>>) {
+  ^body(%input0: tensor<3x5xf32>, %input1: tensor<5x2xf32>):
+    %1 = linalg.matmul ins(%input0, %input1 : tensor<3x5xf32>, tensor<5x2xf32>) outs(%cst : tensor<3x2xf32>) -> tensor<3x2xf32>
+    secret.yield %1 : tensor<3x2xf32>
+  } -> !secret.secret<tensor<3x2xf32>>
+  return %0 : !secret.secret<tensor<3x2xf32>>
 }

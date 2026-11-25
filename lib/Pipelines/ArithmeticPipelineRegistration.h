@@ -31,12 +31,6 @@ void hecoSIMDVectorizerPipelineBuilder(OpPassManager& manager,
                                        bool disableLoopUnroll);
 
 struct MlirToRLWEPipelineOptions : public LoopOptions {
-  PassOptions::Option<bool> linearKernel{
-      *this, "linear-kernel",
-      llvm::cl::desc("Use strided layouts and one linear-transform kernel for "
-                     "every operation that is linear in a secret tensor "
-                     "(default to false)"),
-      llvm::cl::init(false)};
   PassOptions::Option<bool> enableArithmetization{
       *this, "enable-arithmetization",
       llvm::cl::desc(
@@ -207,12 +201,6 @@ struct PlaintextBackendOptions
       *this, "unroll-fhe-kernel-loops",
       llvm::cl::desc("Unroll FHE kernel loops (default to false)"),
       llvm::cl::init(false)};
-  PassOptions::Option<bool> linearKernel{
-      *this, "linear-kernel",
-      llvm::cl::desc("Use strided layouts and one linear-transform kernel for "
-                     "every operation that is linear in a secret tensor "
-                     "(default to false)"),
-      llvm::cl::init(false)};
 };
 
 struct BackendOptions : public PassPipelineOptions<BackendOptions> {
@@ -260,8 +248,13 @@ void mlirToRLWEPipeline(OpPassManager& pm,
                         const MlirToRLWEPipelineOptions& options,
                         RLWEScheme scheme);
 
+// The rolled form of a block linear transform reads its rotation amounts from
+// a table at run time. Ciphertext management and rotation key collection need
+// static amounts, so only pipelines that stop before a scheme pass false for
+// `unrollLinearTransforms`.
 void mlirToSecretArithmeticPipelineBuilder(
-    OpPassManager& pm, const MlirToRLWEPipelineOptions& options);
+    OpPassManager& pm, const MlirToRLWEPipelineOptions& options,
+    bool unrollLinearTransforms = true);
 
 void mlirToPlaintextPipelineBuilder(OpPassManager& pm,
                                     const PlaintextBackendOptions& options);
@@ -274,8 +267,7 @@ BackendPipelineBuilder toLattigoPipelineBuilder();
 
 // A subpipeline that preprocesses linalg ops to make them more suitable for
 // FHE.
-void linalgPreprocessingBuilder(OpPassManager& manager,
-                                bool linearKernel = false);
+void linalgPreprocessingBuilder(OpPassManager& manager);
 
 void torchLinalgToCkksBuilder(OpPassManager& manager,
                               const MlirToRLWEPipelineOptions& options);

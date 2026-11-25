@@ -10,6 +10,12 @@ def LayoutPropagation : Pass<"layout-propagation"> {
   through the input IR, starting from the assumption that each secret tensor
   argument to a function has a row-major layout.
 
+  The pass does nothing on a module to which `strided-layout-propagation` has
+  assigned layouts. That pass handles programs made of operations that are
+  linear in one secret tensor and of elementwise operations, and it is the only
+  one with a kernel for convolutions, pools and products of a secret vector
+  with a cleartext matrix.
+
   The chosen layouts (Integer Relations) are annotated on ops throughout the IR.
   In particular,
 

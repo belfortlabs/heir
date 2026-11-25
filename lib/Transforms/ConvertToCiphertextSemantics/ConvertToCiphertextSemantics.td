@@ -71,13 +71,6 @@ def ConvertToCiphertextSemantics : Pass<"convert-to-ciphertext-semantics"> {
       "layouts; a transform that needs more is an error."
     >,
     Option<
-      "unrollKernels",
-      "unroll-kernels",
-      "bool",
-      /*default=*/"true",
-      "Unroll kernel implementations."
-    >,
-    Option<
       "codegenStrategy",
       "codegen-strategy",
       "mlir::heir::CodegenStrategy",

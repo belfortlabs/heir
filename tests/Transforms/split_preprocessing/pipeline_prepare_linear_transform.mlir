@@ -6,7 +6,7 @@
 // See prepare_linear_transform.mlir for the unit test of --split-preprocessing.
 
 // CHECK: func.func @matvec__preprocessing() -> !preprocessing.storage<
-// CHECK: %[[PREPARE:.*]] = kernel.prepare_linear_transform %{{.*}} <diagonal_indices = [0, 1, 2, 3]>
+// CHECK: %[[PREPARE:.*]] = kernel.prepare_linear_transform %{{.*}} <diagonal_indices = [0, 1, 2, 3]
 // CHECK: preprocessing.store %[[PREPARE]], %{{.*}} site 0<
 
 // CHECK: func.func @matvec__preprocessed(

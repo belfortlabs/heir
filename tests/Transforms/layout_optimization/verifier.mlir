@@ -11,11 +11,11 @@ func.func @main(%arg0: tensor<512xf32>) -> tensor<512xf32> {
 // -----
 
 // Good kernel name
-func.func @main(%arg0: tensor<512x512xf32>, %arg1: tensor<512xf32>) -> tensor<512xf32> {
-  %cst = tensor.empty() : tensor<512xf32>
-  %0 = linalg.matvec
-    {secret.kernel = #secret.kernel<name="MatvecDiagonal", force=false>}
-    ins(%arg0, %arg1 : tensor<512x512xf32>, tensor<512xf32>)
-    outs(%cst : tensor<512xf32>) -> tensor<512xf32>
-  func.return %0 : tensor<512xf32>
+func.func @main(%arg0: tensor<512xf32>, %arg1: tensor<512xf32>) -> tensor<f32> {
+  %cst = tensor.empty() : tensor<f32>
+  %0 = linalg.dot
+    {secret.kernel = #secret.kernel<name="Dot", force=false>}
+    ins(%arg0, %arg1 : tensor<512xf32>, tensor<512xf32>)
+    outs(%cst : tensor<f32>) -> tensor<f32>
+  func.return %0 : tensor<f32>
 }

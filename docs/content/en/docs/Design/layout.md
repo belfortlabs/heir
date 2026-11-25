@@ -245,6 +245,7 @@ form as part of a layout conversion step.
 The `mlir-to-<scheme>` pipeline involves the following passes that manipulate
 layouts:
 
+- `strided-layout-propagation`
 - `layout-propagation`
 - `layout-optimization`
 - `convert-to-ciphertext-semantics`
@@ -260,10 +261,64 @@ attempting to hoist layout conversions earlier in the IR. If layout conversions
 are hoisted all the way to function arguments then they are "free" because they
 can be merged into client preprocessing.
 
+`strided-layout-propagation` runs first and handles programs that consist of
+operations that are linear in one secret tensor (convolutions, sum pools,
+products with cleartext matrices, reshapes, slices, concatenations) and of
+elementwise operations. This covers most neural networks. It assigns
+[strided layouts](#strided-layouts) and does not use Presburger relations. If a
+module contains an operation outside that set, such as a product of two secret
+matrices, a secret scalar, or a loop over secret values, the pass leaves the
+module unchanged and the two relation-based passes assign its layouts. If
+`strided-layout-propagation` assigned layouts, the relation-based passes do
+nothing.
+
 Next we will outline the responsibility of each pass in detail. The
 documentation page for each of these passes is linked in each section, and
 contains doctests as examples that are kept in sync with the implementation of
 the pass.
+
+### `strided-layout-propagation`
+
+#### Strided layouts
+
+A strided layout places a tensor element at a position in the concatenation of
+all ciphertexts. The position is an offset plus a sum of `stride * digit` terms,
+where each digit is `(index // div) % mod` of one tensor axis. The ciphertext is
+the position divided by the slot count, and the slot is the remainder. An
+optional period repeats the tensor every `period` slots.
+
+```mlir
+#tensor_ext.strided_layout<shape = [16, 8, 8], slots = 1024,
+                           digits = [(0, 1, 0, 64), (1, 1, 0, 8), (2, 1, 0, 1)]>
+```
+
+The example is the row-major layout of a `tensor<16x8x8>`. Strides larger than
+the extent of the inner axes leave gaps; the result of a stride-2 convolution
+stays on its input's grid with doubled strides, and later channels fill the
+gaps. Two digits of one axis express layouts that multiplex channels into
+spatial gaps.
+
+The [`strided-layout-propagation`](/docs/passes/#-strided-layout-propagation)
+pass gives each secret function argument a row-major layout and propagates
+layouts forward:
+
+- An operation that is linear in its secret operand gets the output layout that
+  keeps its number of diagonals low. The operation is described by a loop nest
+  with affine index maps for its input and output, which is read from the
+  `linalg` operation, so there is one kernel for all such operations.
+- Reshapes, slices and transposes whose result is again strided move no element:
+  the result is the operand's ciphertexts under another layout.
+- Elementwise operations require equal layouts. Operands with different layouts
+  are converted to the one among them that costs the fewest diagonals.
+
+`convert-to-ciphertext-semantics` lowers each linear operation to a
+`kernel.block_linear_transform`: a set of diagonals indexed by output
+ciphertext, input ciphertext and rotation, which are packed at run time by a
+helper function that loops over the operation's iterations. Operations whose
+coefficients are all one (sum pools, reductions, broadcasts) are lowered to
+rotations and additions. `implement-linear-transforms` evaluates the block
+transform with a baby-step giant-step schedule, or hands each block to the
+backend's linear transform where there is one.
 
 ### `layout-propagation`
 
