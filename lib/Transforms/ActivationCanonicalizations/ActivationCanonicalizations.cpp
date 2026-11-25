@@ -42,7 +42,9 @@ static bool IsOne(mlir::Attribute attr) {
 // populateWithGenerated, which can conflict with other generated patterns.
 #include "lib/Transforms/ActivationCanonicalizations/Rewrites.cpp.inc"
 
-// select(a > c, a, c) = max(a, c) for floats. This replaces the DRR
+// select(a > c, a, c) = max(a, c) and select(a < c, a, c) = min(a, c) for
+// floats, with any of the ordered or unordered inequality predicates. A
+// clamp such as ReLU6 is one of each. This replaces the DRR
 // `SelectGreaterThanEqualFloat` pattern and folds in
 // two attr-forwarding behaviors so the polynomial-approximation domain survives
 // regardless of where torch-mlir attached it:
@@ -64,19 +66,32 @@ struct SelectGreaterThanEqualFloatPattern
     if (!cmpOp)
       return rewriter.notifyMatchFailure(op, "condition is not arith.cmpf");
 
+    using Pred = arith::CmpFPredicate;
     auto pred = cmpOp.getPredicate();
-    if (pred != arith::CmpFPredicate::UGT && pred != arith::CmpFPredicate::UGE)
-      return rewriter.notifyMatchFailure(op, "predicate is not ugt/uge");
+    bool isGreater = pred == Pred::UGT || pred == Pred::UGE ||
+                     pred == Pred::OGT || pred == Pred::OGE;
+    bool isLess = pred == Pred::ULT || pred == Pred::ULE || pred == Pred::OLT ||
+                  pred == Pred::OLE;
+    if (!isGreater && !isLess)
+      return rewriter.notifyMatchFailure(op, "predicate is not an inequality");
 
-    // Must be the ReLU/max shape: select(a >? c, a, c).
+    // Must be the max/min shape: select(a >? c, a, c) or select(a <? c, a, c).
+    // The ordered and unordered predicates differ only on NaN, which this
+    // arithmetization does not model.
     if (cmpOp.getLhs() != op.getTrueValue() ||
         cmpOp.getRhs() != op.getFalseValue())
       return rewriter.notifyMatchFailure(op,
                                          "operands are not select(a>c,a,c)");
 
-    auto maxOp =
-        arith::MaximumFOp::create(rewriter, op.getLoc(), op.getTrueValue(),
-                                  op.getFalseValue(), cmpOp.getFastmathAttr());
+    Operation* maxOp = isGreater
+                           ? arith::MaximumFOp::create(
+                                 rewriter, op.getLoc(), op.getTrueValue(),
+                                 op.getFalseValue(), cmpOp.getFastmathAttr())
+                                 .getOperation()
+                           : arith::MinimumFOp::create(
+                                 rewriter, op.getLoc(), op.getTrueValue(),
+                                 op.getFalseValue(), cmpOp.getFastmathAttr())
+                                 .getOperation();
 
     // (a) Forward any discardable attrs annotated on the select op itself onto
     // the maximumf (the old DRR `SelectGreaterThanEqualFloat` behavior). Covers
@@ -100,7 +115,7 @@ struct SelectGreaterThanEqualFloatPattern
         maxOp->setAttr("domain_upper", hi);
     }
 
-    rewriter.replaceOp(op, maxOp.getResult());
+    rewriter.replaceOp(op, maxOp->getResult(0));
     return success();
   }
 };

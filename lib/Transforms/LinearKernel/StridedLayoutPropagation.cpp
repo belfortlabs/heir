@@ -17,12 +17,16 @@
 #include "llvm/include/llvm/ADT/DenseSet.h"              // from @llvm-project
 #include "llvm/include/llvm/ADT/STLExtras.h"             // from @llvm-project
 #include "llvm/include/llvm/ADT/SmallVector.h"           // from @llvm-project
+#include "llvm/include/llvm/Support/Debug.h"             // from @llvm-project
+#include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"    // from @llvm-project
 #include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"   // from @llvm-project
 #include "mlir/include/mlir/Dialect/Linalg/IR/Linalg.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
 #include "mlir/include/mlir/Dialect/Utils/ReshapeOpsUtils.h"  // from @llvm-project
-#include "mlir/include/mlir/IR/Builders.h"  // from @llvm-project
-#include "mlir/include/mlir/IR/Visitors.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/Builders.h"       // from @llvm-project
+#include "mlir/include/mlir/IR/Matchers.h"       // from @llvm-project
+#include "mlir/include/mlir/IR/TypeUtilities.h"  // from @llvm-project
+#include "mlir/include/mlir/IR/Visitors.h"       // from @llvm-project
 
 #define DEBUG_TYPE "strided-layout-propagation"
 
@@ -53,7 +57,49 @@ struct StridedLayoutPropagation
     : impl::StridedLayoutPropagationBase<StridedLayoutPropagation> {
   using StridedLayoutPropagationBase::StridedLayoutPropagationBase;
 
+  // Rewrites `x / c` with a cleartext `c` to `x * (1 / c)`. The cleartext
+  // operand of a slotwise operation is packed with zeros in the slots that
+  // hold no element, and a division by those zeros would leave infinities
+  // there.
+  void rewriteCleartextDivisions() {
+    // The divisions with the operation that the reciprocal is placed before:
+    // the secret region, if the divisor is defined outside of it.
+    SmallVector<std::pair<arith::DivFOp, Operation*>> divisions;
+    getOperation()->walk([&](arith::DivFOp div) {
+      auto generic = dyn_cast_or_null<secret::GenericOp>(div->getParentOp());
+      if (!generic) return;
+      Value divisor = div.getRhs();
+      Operation* def = divisor.getDefiningOp();
+      Operation* parent =
+          def ? def->getParentOp()
+              : cast<BlockArgument>(divisor).getOwner()->getParentOp();
+      if (parent != generic.getOperation()) {
+        divisions.emplace_back(div, generic.getOperation());
+      } else if (matchPattern(divisor, m_Constant())) {
+        divisions.emplace_back(div, div.getOperation());
+      }
+    });
+    for (auto [div, before] : divisions) {
+      OpBuilder builder(before);
+      Value divisor = div.getRhs();
+      Type type = divisor.getType();
+      TypedAttr oneAttr = builder.getFloatAttr(getElementTypeOrSelf(type), 1.0);
+      if (auto shaped = dyn_cast<ShapedType>(type)) {
+        oneAttr = DenseElementsAttr::get(shaped, oneAttr);
+      }
+      Value one = arith::ConstantOp::create(builder, div.getLoc(), oneAttr);
+      Value reciprocal =
+          builder.createOrFold<arith::DivFOp>(div.getLoc(), one, divisor);
+      builder.setInsertionPoint(div);
+      Value product = arith::MulFOp::create(builder, div.getLoc(), div.getLhs(),
+                                            reciprocal);
+      div.replaceAllUsesWith(product);
+      div.erase();
+    }
+  }
+
   void runOnOperation() override {
+    rewriteCleartextDivisions();
     WalkResult result =
         getOperation()->walk<WalkOrder::PreOrder>([&](Operation* op) {
           return failed(visit(op)) ? WalkResult::interrupt()
@@ -90,24 +136,6 @@ struct StridedLayoutPropagation
     auto it = layouts.find(value);
     return shape && it != layouts.end() &&
            ArrayRef<int64_t>(it->second.shape) != *shape;
-  }
-
-  // True if every user of a padded value reads it as a linear operation, so
-  // the padding never has to exist in a ciphertext.
-  bool isOnlyReadLinearly(Value value) {
-    for (OpOperand& use : value.getUses()) {
-      Operation* user = use.getOwner();
-      if (isViewReshape(user)) {
-        if (!isOnlyReadLinearly(user->getResult(0))) return false;
-        continue;
-      }
-      auto linalgOp = dyn_cast<linalg::LinalgOp>(user);
-      if (!linalgOp || !linalgOp.isDpsInput(&use) ||
-          !matchLinearOp(user, use.getOperandNumber())) {
-        return false;
-      }
-    }
-    return true;
   }
 
   // Replaces operand `operand` of `op` by a copy of it in `layout`.
@@ -220,11 +248,34 @@ struct StridedLayoutPropagation
                << "argument " << arg.getArgNumber()
                << " must be a secret tensor of static shape and nonzero rank";
       }
-      StridedLayout layout = StridedLayout::rowMajor(*shape, minSlotCount);
+      StridedLayout layout = StridedLayout::aligned(*shape, minSlotCount);
       layouts[arg] = layout;
       func.setArgAttr(arg.getArgNumber(), kLayoutAttrName, attrOf(layout));
     }
     return success();
+  }
+
+  // The layout of the other operand, if the result of `op` has one use and
+  // that use combines it slot by slot with a secret tensor of its shape.
+  std::optional<StridedLayout> joinPartnerLayout(Operation* op) {
+    Value result = op->getResult(0);
+    if (!result.hasOneUse()) return std::nullopt;
+    Operation* user = result.use_begin()->getOwner();
+    if (isa<linalg::LinalgOp, tensor::PadOp, tensor::CollapseShapeOp,
+            tensor::ExpandShapeOp, tensor::ExtractSliceOp,
+            tensor::InsertSliceOp, secret::YieldOp>(user) ||
+        user->getNumRegions() != 0 || user->getNumResults() != 1) {
+      return std::nullopt;
+    }
+    auto shape = staticShape(result.getType());
+    if (!shape) return std::nullopt;
+    for (Value other : user->getOperands()) {
+      if (other == result || !isSecret(other) || isView(other)) continue;
+      if (ArrayRef<int64_t>(layouts[other].shape) == *shape) {
+        return layouts[other];
+      }
+    }
+    return std::nullopt;
   }
 
   LogicalResult visitLinear(Operation* op) {
@@ -256,9 +307,51 @@ struct StridedLayoutPropagation
 
     const StridedLayout& in = layouts[linear->source];
     StridedLayout out = inducedOutputLayout(linear->spec, in);
-    LLVM_DEBUG(llvm::dbgs() << "linear op " << op->getName() << ": "
-                            << computeDiagonalKeys(linear->spec, in, out).size()
-                            << " diagonals\n");
+    bool unit = !linear->coefficient;
+    bool allowUnused = isOnlyReadLinearly(op->getResult(0));
+    // A result that is only combined slot by slot with another secret tensor
+    // is produced in that tensor's layout, if that takes no more diagonals
+    // than converting it afterwards. A broadcast scale is an example: copying
+    // each value over the plane it multiplies costs rotations only.
+    if (std::optional<StridedLayout> partner = joinPartnerLayout(op)) {
+      int64_t direct =
+          planTransform(linear->spec, unit, in, *partner, allowUnused)
+              .numDiagonals();
+      int64_t converted =
+          planTransform(linear->spec, unit, in, out, allowUnused)
+              .numDiagonals() +
+          computeDiagonalKeys(identityLinearOp(op->getResult(0)).spec, out,
+                              *partner)
+              .size();
+      if (direct <= converted) out = *partner;
+    }
+    LLVM_DEBUG({
+      auto printRow = [](const std::vector<int64_t>& row) {
+        llvm::dbgs() << "[";
+        llvm::interleaveComma(row, llvm::dbgs());
+        llvm::dbgs() << "]";
+      };
+      TransformPlan plan =
+          planTransform(linear->spec, unit, in, out, allowUnused);
+      llvm::dbgs() << "linear op " << op->getName() << ": "
+                   << plan.numDiagonals() << " diagonals, "
+                   << plan.sums.size() + plan.copies.size()
+                   << " rotation sums; loops ";
+      printRow(linear->spec.loops);
+      llvm::dbgs() << " in";
+      for (size_t axis = 0; axis < linear->spec.inMap.size(); ++axis) {
+        llvm::dbgs() << " ";
+        printRow(linear->spec.inMap[axis]);
+        llvm::dbgs() << "+" << linear->spec.inOffset[axis];
+      }
+      llvm::dbgs() << " out";
+      for (size_t axis = 0; axis < linear->spec.outMap.size(); ++axis) {
+        llvm::dbgs() << " ";
+        printRow(linear->spec.outMap[axis]);
+        llvm::dbgs() << "+" << linear->spec.outOffset[axis];
+      }
+      llvm::dbgs() << "\n";
+    });
 
     if (linear->init) {
       OpOperand* initOperand = cast<linalg::LinalgOp>(op).getDpsInitOperand(0);
@@ -335,6 +428,18 @@ struct StridedLayoutPropagation
       return op->emitOpError() << "is not supported on secret tensors";
     }
     StridedLayout layout = *target;
+    LLVM_DEBUG({
+      if (bestCost > 0) {
+        llvm::dbgs() << "join at " << op->getName() << ": " << bestCost
+                     << " diagonals into " << attrOf(layout) << " from";
+        for (Value operand : op->getOperands()) {
+          if (isSecret(operand) && layouts[operand] != layout) {
+            llvm::dbgs() << " " << attrOf(layouts[operand]);
+          }
+        }
+        llvm::dbgs() << "\n";
+      }
+    });
     for (OpOperand& operand : op->getOpOperands()) {
       if (staticShape(operand.get().getType())) {
         convertOperand(op, operand, layout);

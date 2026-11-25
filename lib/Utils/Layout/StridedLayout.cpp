@@ -381,5 +381,17 @@ StridedLayout StridedLayout::rowMajor(llvm::ArrayRef<int64_t> shape,
   return layout;
 }
 
+StridedLayout StridedLayout::aligned(llvm::ArrayRef<int64_t> shape,
+                                     int64_t numSlots) {
+  StridedLayout layout = rowMajor(shape, numSlots);
+  if (layout.numCiphertexts() == 1 || layout.digits.empty()) return layout;
+  // The digits are pushed innermost axis first.
+  StridedDigit& outermost = layout.digits.back();
+  int64_t stride = 1;
+  while (stride < outermost.stride) stride *= 2;
+  outermost.stride = stride;
+  return layout;
+}
+
 }  // namespace heir
 }  // namespace mlir

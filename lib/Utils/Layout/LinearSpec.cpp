@@ -305,6 +305,156 @@ std::vector<DiagonalKey> computeDiagonalKeys(const LinearSpec& spec,
   return keys.sorted();
 }
 
+std::optional<BoxSumFactor> factorBoxSum(const LinearSpec& spec,
+                                         const StridedLayout& in) {
+  if (in.period != 0) return std::nullopt;
+  size_t numLoops = spec.loops.size();
+  BoxSumFactor factor;
+  factor.rest = spec;
+  std::vector<int64_t> strideOf(numLoops, 0);
+  std::vector<int64_t> restLoops;
+  for (size_t loop = 0; loop < numLoops; ++loop) {
+    restLoops.push_back(loop);
+    if (spec.loops[loop] <= 1) continue;
+    bool inOutput = false;
+    for (const std::vector<int64_t>& row : spec.outMap) {
+      inOutput |= row[loop] != 0;
+    }
+    if (inOutput) continue;
+    bool inInput = false;
+    bool affine = true;
+    int64_t stride = 0;
+    for (size_t axis = 0; axis < spec.inMap.size(); ++axis) {
+      int64_t step = spec.inMap[axis][loop];
+      if (step == 0) continue;
+      inInput = true;
+      std::optional<int64_t> axisStride = in.affineStride(axis);
+      affine &= axisStride.has_value();
+      stride += axisStride.value_or(0) * step;
+    }
+    // A loop in neither index repeats the same term, which no rotation does.
+    if (!inInput) return std::nullopt;
+    if (!affine || stride <= 0) continue;
+    strideOf[loop] = stride;
+    factor.axes.emplace_back(stride, spec.loops[loop]);
+    factor.rest.loops[loop] = 1;
+    restLoops.pop_back();
+  }
+  if (factor.axes.empty()) return std::nullopt;
+
+  // Every read must be an element: a rotation cannot produce the zero that a
+  // read outside the input stands for.
+  for (size_t axis = 0; axis < spec.inMap.size(); ++axis) {
+    int64_t lo = spec.inOffset[axis];
+    int64_t hi = spec.inOffset[axis];
+    for (size_t loop = 0; loop < numLoops; ++loop) {
+      int64_t reach = spec.inMap[axis][loop] * (spec.loops[loop] - 1);
+      (reach > 0 ? hi : lo) += reach;
+    }
+    if (lo < 0 || hi >= spec.inShape[axis]) return std::nullopt;
+  }
+
+  // Every window must lie in one ciphertext.
+  int64_t numWindows = 1;
+  for (int64_t loop : restLoops) {
+    if (spec.loops[loop] <= 0) return std::nullopt;
+    numWindows *= spec.loops[loop];
+    if (numWindows > (int64_t{1} << 26)) return std::nullopt;
+  }
+  int64_t span = 0;
+  for (size_t loop = 0; loop < numLoops; ++loop) {
+    span += strideOf[loop] * (spec.loops[loop] - 1);
+  }
+  bool fits = true;
+  std::vector<int64_t> d(numLoops, 0);
+  forEachPoint(spec.loops, restLoops, d, [&]() {
+    int64_t first = in.position(applyMap(spec.inMap, spec.inOffset, d));
+    fits &= first / in.numSlots == (first + span) / in.numSlots;
+  });
+  if (!fits) return std::nullopt;
+  return factor;
+}
+
+std::optional<BoxSumFactor> factorBoxCopy(const LinearSpec& spec,
+                                          const StridedLayout& out) {
+  if (out.period != 0) return std::nullopt;
+  size_t numLoops = spec.loops.size();
+  BoxSumFactor factor;
+  factor.rest = spec;
+  std::vector<int64_t> restLoops;
+  int64_t span = 0;
+  for (size_t loop = 0; loop < numLoops; ++loop) {
+    restLoops.push_back(loop);
+    if (spec.loops[loop] <= 1) continue;
+    bool inInput = false;
+    for (const std::vector<int64_t>& row : spec.inMap) {
+      inInput |= row[loop] != 0;
+    }
+    if (inInput) continue;
+    bool inOutput = false;
+    bool affine = true;
+    int64_t stride = 0;
+    for (size_t axis = 0; axis < spec.outMap.size(); ++axis) {
+      int64_t step = spec.outMap[axis][loop];
+      if (step == 0) continue;
+      inOutput = true;
+      std::optional<int64_t> axisStride = out.affineStride(axis);
+      affine &= axisStride.has_value();
+      stride += axisStride.value_or(0) * step;
+    }
+    if (!inOutput) return std::nullopt;
+    if (!affine || stride <= 0) continue;
+    span += stride * (spec.loops[loop] - 1);
+    factor.axes.emplace_back(stride, spec.loops[loop]);
+    factor.rest.loops[loop] = 1;
+    restLoops.pop_back();
+  }
+  if (factor.axes.empty()) return std::nullopt;
+
+  int64_t numElements = 1;
+  for (int64_t loop : restLoops) {
+    if (spec.loops[loop] <= 0) return std::nullopt;
+    numElements *= spec.loops[loop];
+    if (numElements > (int64_t{1} << 26)) return std::nullopt;
+  }
+  bool fits = true;
+  std::vector<int64_t> d(numLoops, 0);
+  forEachPoint(spec.loops, restLoops, d, [&]() {
+    int64_t first = out.position(applyMap(spec.outMap, spec.outOffset, d));
+    fits &= first / out.numSlots == (first + span) / out.numSlots;
+  });
+  if (!fits) return std::nullopt;
+  return factor;
+}
+
+TransformPlan planTransform(const LinearSpec& spec, bool unitCoefficients,
+                            const StridedLayout& in, const StridedLayout& out,
+                            bool allowUnusedSlotValues) {
+  TransformPlan plan;
+  plan.spec = spec;
+  if (unitCoefficients && in.period == 0 && out.period == 0) {
+    if (std::optional<BoxSumFactor> factor = factorBoxSum(plan.spec, in)) {
+      plan.sums = factor->axes;
+      plan.spec = factor->rest;
+    }
+    if (std::optional<BoxSumFactor> factor = factorBoxCopy(plan.spec, out)) {
+      plan.copies = factor->axes;
+      plan.spec = factor->rest;
+    }
+  }
+  plan.keys = computeDiagonalKeys(plan.spec, in, out);
+  // The copies add up rotations of the whole result, so they need the zeros
+  // that only the diagonals put into the unused slots.
+  plan.skipDiagonals =
+      allowUnusedSlotValues && !plan.sums.empty() && plan.copies.empty() &&
+      !plan.keys.empty() && out.numCiphertexts() <= in.numCiphertexts() &&
+      std::all_of(plan.keys.begin(), plan.keys.end(),
+                  [](const DiagonalKey& key) {
+                    return key.shift == 0 && key.ctOut == key.ctIn;
+                  });
+  return plan;
+}
+
 std::vector<std::vector<double>> packDiagonals(
     const LinearSpec& spec, const StridedLayout& in, const StridedLayout& out,
     ArrayRef<DiagonalKey> keys,
@@ -425,20 +575,35 @@ StridedLayout inducedOutputLayoutImpl(const LinearSpec& spec,
     foundPlane = true;
   }
 
-  size_t nextFree = 0;
-  for (auto it = freeAxes.rbegin(); it != freeAxes.rend(); ++it) {
-    int64_t axis = *it;
-    int64_t extent = spec.outShape[axis];
-    int64_t div = 1;
-    while (nextFree < freeDigits.size() && div < extent) {
-      const FreeDigit& digit = freeDigits[nextFree++];
-      result.digits.push_back({axis, div, digit.radix, digit.stride});
-      div *= digit.radix;
+  // Places the free axes: first in the gaps, then on planes of stride
+  // `plane` and above.
+  size_t numGridDigits = result.digits.size();
+  auto placeFreeAxes = [&](int64_t plane) {
+    result.digits.resize(numGridDigits);
+    size_t nextFree = 0;
+    for (auto it = freeAxes.rbegin(); it != freeAxes.rend(); ++it) {
+      int64_t axis = *it;
+      int64_t extent = spec.outShape[axis];
+      int64_t div = 1;
+      while (nextFree < freeDigits.size() && div < extent) {
+        const FreeDigit& digit = freeDigits[nextFree++];
+        result.digits.push_back({axis, div, digit.radix, digit.stride});
+        div *= digit.radix;
+      }
+      if (div < extent) {
+        result.digits.push_back({axis, div, 0, plane});
+        plane *= ceilDiv(extent, div);
+      }
     }
-    if (div < extent) {
-      result.digits.push_back({axis, div, 0, top});
-      top *= ceilDiv(extent, div);
-    }
+  };
+  placeFreeAxes(top);
+  // A result in several ciphertexts gets planes at a power-of-two stride, so
+  // that they start at the same slot of every ciphertext; see
+  // StridedLayout::aligned.
+  int64_t alignedTop = 1;
+  while (alignedTop < top) alignedTop *= 2;
+  if (alignedTop != top && result.numCiphertexts() > 1) {
+    placeFreeAxes(alignedTop);
   }
 
   int64_t total = result.numElements();
@@ -448,7 +613,7 @@ StridedLayout inducedOutputLayoutImpl(const LinearSpec& spec,
     return StridedLayout::rowMajor(spec.outShape, numSlots, period);
   }
   if (!result.isInjective()) {
-    return StridedLayout::rowMajor(spec.outShape, numSlots);
+    return StridedLayout::aligned(spec.outShape, numSlots);
   }
   return result;
 }

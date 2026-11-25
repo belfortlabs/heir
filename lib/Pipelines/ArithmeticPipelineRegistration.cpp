@@ -264,7 +264,7 @@ void mlirToSecretArithmeticPipelineBuilder(
 void mlirToPlaintextPipelineBuilder(OpPassManager& pm,
                                     const PlaintextBackendOptions& options) {
   pm.addPass(debug::createDebugValidateNames());
-  linalgPreprocessingBuilder(pm);
+  linalgPreprocessingBuilder(pm, options.linearKernel);
 
   // Convert to secret arithmetic
   MlirToRLWEPipelineOptions mlirToRLWEPipelineOptions;
@@ -722,14 +722,18 @@ BackendPipelineBuilder toLattigoPipelineBuilder() {
   };
 }
 
-void linalgPreprocessingBuilder(OpPassManager& manager) {
+void linalgPreprocessingBuilder(OpPassManager& manager, bool linearKernel) {
+  // The linear kernel reads dilations and pooling windows from the operation,
+  // so it keeps them instead of dense filters with zeros.
+  LinalgCanonicalizationsOptions canonicalizationOptions;
+  canonicalizationOptions.densifyConvolutions = !linearKernel;
   // Before the pooling operation is generalized. No layout handles a max
   // pool directly; the taps and maxima this leaves are linear operations and
   // ReLUs.
   manager.addPass(createDecomposeMaxPool());
   manager.addPass(createInlineActivations());
   manager.addPass(createActivationCanonicalizations());
-  manager.addPass(createLinalgCanonicalizations());
+  manager.addPass(createLinalgCanonicalizations(canonicalizationOptions));
   manager.addPass(createLinalgFuseLinearOpsPass());
   manager.addPass(createDropUnitDims());
   manager.addPass(createFoldConstantTensors());
@@ -737,7 +741,7 @@ void linalgPreprocessingBuilder(OpPassManager& manager) {
   manager.addPass(createSymbolDCEPass());
   manager.addPass(createSCCPPass());
   manager.addPass(createCSEPass());
-  manager.addPass(createLinalgCanonicalizations());
+  manager.addPass(createLinalgCanonicalizations(canonicalizationOptions));
   manager.addPass(createReductionCanonicalizations());
   manager.addPass(createSoftmaxCanonicalizations());
 }
@@ -745,7 +749,7 @@ void linalgPreprocessingBuilder(OpPassManager& manager) {
 void torchLinalgToCkksBuilder(OpPassManager& manager,
                               const MlirToRLWEPipelineOptions& options) {
   manager.addPass(debug::createDebugValidateNames());
-  linalgPreprocessingBuilder(manager);
+  linalgPreprocessingBuilder(manager, options.linearKernel);
   MlirToRLWEPipelineOptions suboptions;
 
   suboptions.enableArithmetization = true;

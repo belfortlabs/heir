@@ -34,6 +34,7 @@ cc_library(
         "@heir//lib/Utils/Layout:LinearSpec",
         "@heir//lib/Utils/Layout:StridedLayout",
         "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:DialectUtils",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <functional>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -162,6 +163,9 @@ class Harness {
     });
     EXPECT_LT(maxError, 1e-9);
     lastKeyCount = keys.size();
+    std::set<int64_t> shifts;
+    for (const DiagonalKey& key : keys) shifts.insert(key.shift);
+    lastShiftCount = shifts.size();
     return out;
   }
 
@@ -169,6 +173,79 @@ class Harness {
                       const StridedLayout& in) {
     return check(name, op, in, inducedOutputLayout(op.spec, in));
   }
+
+  // Runs a unit-coefficient op as rotations and additions of the input
+  // followed by the rest of the op, and compares with the direct evaluation.
+  // Returns false if the op has no such form in this layout.
+  bool checkBoxSum(const std::string& name, const Op& op,
+                   const StridedLayout& in) {
+    SCOPED_TRACE(name);
+    std::optional<BoxSumFactor> factor = factorBoxSum(op.spec, in);
+    if (!factor) return false;
+    int64_t n = in.numSlots;
+    StridedLayout out = inducedOutputLayout(op.spec, in);
+    // The copies of a periodic result are not modeled here.
+    if (out.period != 0) out = StridedLayout::rowMajor(op.spec.outShape, n);
+    int64_t inSize = 1;
+    for (int64_t extent : op.spec.inShape) inSize *= extent;
+    std::vector<double> x = randomWeights(inSize);
+    std::vector<double> expected = naive(op, x);
+
+    std::vector<std::vector<double>> summed = encode(x, in);
+    for (const auto& [stride, count] : factor->axes) {
+      for (std::vector<double>& ct : summed) {
+        std::vector<double> sum(n, 0.0);
+        for (int64_t i = 0; i < count; ++i) {
+          for (int64_t slot = 0; slot < n; ++slot) {
+            sum[slot] += ct[(slot + i * stride) % n];
+          }
+        }
+        ct = sum;
+      }
+    }
+
+    std::vector<DiagonalKey> keys = computeDiagonalKeys(factor->rest, in, out);
+    lastRestIsRelabel = true;
+    for (const DiagonalKey& key : keys) {
+      lastRestIsRelabel &= key.shift == 0 && key.ctOut == key.ctIn;
+    }
+    std::vector<std::vector<double>> diagonals = packDiagonals(
+        factor->rest, in, out, keys, [](ArrayRef<int64_t>) { return 1.0; });
+    std::vector<std::vector<double>> result(out.numCiphertexts(),
+                                            std::vector<double>(n, 0.0));
+    for (size_t k = 0; k < keys.size(); ++k) {
+      const DiagonalKey& key = keys[k];
+      for (int64_t slot = 0; slot < n; ++slot) {
+        result[key.ctOut][slot] +=
+            diagonals[k][slot] * summed[key.ctIn][(slot + key.shift) % n];
+      }
+    }
+    double maxError = 0.0;
+    forEachPoint(out.shape, [&](const std::vector<int64_t>& idx) {
+      int64_t p = out.position(idx);
+      maxError = std::max(
+          maxError,
+          std::abs(result[p / n][p % n] - expected[flatten(idx, out.shape)]));
+    });
+    EXPECT_LT(maxError, 1e-9);
+    return true;
+  }
+
+  // out[c] = sum over h, w of in[c, h, w]
+  Op globalSum(int64_t c, int64_t h, int64_t w) {
+    Op op;
+    op.spec.loops = {c, h, w};
+    op.spec.inShape = {c, h, w};
+    op.spec.inMap = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    op.spec.inOffset = {0, 0, 0};
+    op.spec.outShape = {c};
+    op.spec.outMap = {{1, 0, 0}};
+    op.spec.outOffset = {0};
+    op.coeff = [](ArrayRef<int64_t>) { return 1.0; };
+    return op;
+  }
+
+  bool lastRestIsRelabel = false;
 
   // w: (Co, Ci / groups, kh, kw) row-major; tensors are (C, H, W).
   Op conv2d(int64_t co, int64_t ci, int64_t k, int64_t h, int64_t w,
@@ -286,6 +363,7 @@ class Harness {
   }
 
   size_t lastKeyCount = 0;
+  size_t lastShiftCount = 0;
 
  private:
   std::mt19937 rng_;
@@ -357,15 +435,76 @@ TEST(LinearSpecTest, OddSizesAndUnpaddedConvs) {
 TEST(LinearSpecTest, PlanesLargerThanACiphertext) {
   Harness t(3);
   int64_t n = 128;
-  StridedLayout l0 = StridedLayout::rowMajor({3, 12, 12}, n);
-  EXPECT_EQ(l0.numCiphertexts(), 4);
+  // Planes of 144 elements at stride 256, two ciphertexts apart.
+  StridedLayout l0 = StridedLayout::aligned({3, 12, 12}, n);
+  EXPECT_EQ(l0.numCiphertexts(), 6);
   StridedLayout l1 =
       t.check("conv 3->6 k3 p1", t.conv2d(6, 3, 3, 12, 12, 1, 1), l0);
-  EXPECT_EQ(l1.numCiphertexts(), 7);
+  EXPECT_EQ(l1.numCiphertexts(), 12);
+  // Every channel pair has the same nine shifts.
+  EXPECT_EQ(t.lastShiftCount, 9u);
   StridedLayout l2 =
       t.check("conv 6->12 k3 s2 p1", t.conv2d(12, 6, 3, 12, 12, 2, 1), l1);
   t.check("depthwise k3 p1 on gap 2", t.depthwise(12, 3, 6, 6, 1, 1), l2);
   t.check("fc 432->5", t.fullyConnected(5, 12, 6, 6), l2);
+}
+
+TEST(LinearSpecTest, DilatedConvAcrossCiphertexts) {
+  Harness t(6);
+  int64_t n = 128;
+  StridedLayout l0 = StridedLayout::aligned({5, 11, 9}, n);
+  EXPECT_EQ(l0.numCiphertexts(), 5);
+  t.check("conv k3 dilation 4 p4", t.conv2d(5, 5, 3, 11, 9, 1, 4, 4), l0);
+  // One plane per ciphertext: a shift per tap, in every ciphertext pair.
+  EXPECT_EQ(t.lastShiftCount, 9u);
+  EXPECT_LE(t.lastKeyCount, 9u * 5u * 5u);
+}
+
+TEST(LinearSpecTest, DilatedConvAtModelSize) {
+  Harness t(7);
+  // Planes of 4040 elements at stride 4096, four to a ciphertext.
+  StridedLayout l0 = StridedLayout::aligned({45, 101, 40}, 16384);
+  EXPECT_EQ(l0.numCiphertexts(), 12);
+  Op op = t.conv2d(45, 45, 3, 101, 40, 1, 16, 16);
+  StridedLayout out = inducedOutputLayout(op.spec, l0);
+  EXPECT_EQ(out, l0);
+  std::vector<DiagonalKey> keys = computeDiagonalKeys(op.spec, l0, out);
+  std::set<int64_t> shifts;
+  for (const DiagonalKey& key : keys) shifts.insert(key.shift);
+  // Nine taps times four plane offsets within a ciphertext.
+  EXPECT_EQ(shifts.size(), 36u);
+  EXPECT_LE(keys.size(), 36u * 12u * 12u);
+  // Row-major planes at stride 4040 need a shift per channel offset.
+  StridedLayout dense = StridedLayout::rowMajor({45, 101, 40}, 16384);
+  EXPECT_EQ(computeDiagonalKeys(op.spec, dense, dense).size(), 9680u);
+}
+
+TEST(LinearSpecTest, BoxSums) {
+  Harness t(8);
+  int64_t n = 128;
+  // Planes of 30 elements at stride 32, four to a ciphertext.
+  StridedLayout planes = StridedLayout::aligned({10, 5, 6}, n);
+  EXPECT_EQ(planes.numCiphertexts(), 3);
+  EXPECT_TRUE(t.checkBoxSum("global sum", t.globalSum(10, 5, 6), planes));
+  // Each sum is left at the first position of its plane.
+  EXPECT_TRUE(t.lastRestIsRelabel);
+  EXPECT_TRUE(t.checkBoxSum("pool k2 s2", t.sumPool(10, 4, 6, 2, 2, 1.0),
+                            StridedLayout::aligned({10, 4, 6}, n)));
+  EXPECT_TRUE(
+      t.checkBoxSum("pool k3 s1", t.sumPool(10, 5, 6, 3, 1, 1.0), planes));
+
+  // Row-major planes of 30 elements cross ciphertext boundaries.
+  EXPECT_FALSE(t.checkBoxSum("unaligned", t.globalSum(10, 5, 6),
+                             StridedLayout::rowMajor({10, 5, 6}, n)));
+  // A padded pool reads zeros that no rotation provides.
+  EXPECT_FALSE(
+      t.checkBoxSum("padded", t.depthwise(10, 3, 5, 6, 1, 1, 1.0), planes));
+  // A gapped input: the strided convolution leaves its result on every
+  // second position of the input grid.
+  StridedLayout gapped = inducedOutputLayout(
+      t.conv2d(4, 4, 3, 8, 8, 2, 1).spec, StridedLayout::aligned({4, 8, 8}, n));
+  EXPECT_TRUE(
+      t.checkBoxSum("global sum on gaps", t.globalSum(4, 4, 4), gapped));
 }
 
 TEST(LinearSpecTest, AnyLayoutPairIsCorrect) {
@@ -400,11 +539,14 @@ TEST(LinearSpecTest, RandomConvs) {
     for (int layer = 0; layer < 3; ++layer) {
       int64_t k = pick({1, 2, 3});
       int64_t stride = pick({1, 1, 2});
-      int64_t pad = pick({0, 1});
-      if (h + 2 * pad < k || w + 2 * pad < k) break;
+      int64_t pad = pick({0, 1, 2});
+      int64_t dil = pick({1, 1, 2, 3});
+      if (h + 2 * pad < dil * (k - 1) + 1 || w + 2 * pad < dil * (k - 1) + 1) {
+        break;
+      }
       int64_t groups = (ci % 2 == 0) ? pick({1, 2}) : 1;
       int64_t co = groups * pick({1, 2, 3});
-      Op op = t.conv2d(co, ci, k, h, w, stride, pad, 1, groups);
+      Op op = t.conv2d(co, ci, k, h, w, stride, pad, dil, groups);
       layout = t.check(
           "trial " + std::to_string(trial) + " layer " + std::to_string(layer),
           op, layout);

@@ -29,6 +29,26 @@ void _mlir_ciface_concat__encrypt__arg0(Ct* res, Tensor<4>* arg);
 void _mlir_ciface_concat__encrypt__arg1(Ct* res, Tensor<4>* arg);
 void _mlir_ciface_concat__decrypt__result0(Tensor<4>* res, Ct* arg);
 
+void _mlir_ciface_global_sum(Ct* res, Ct* x);
+void _mlir_ciface_global_sum__encrypt__arg0(Ct* res, Tensor<4>* arg);
+void _mlir_ciface_global_sum__decrypt__result0(Tensor<2>* res, Ct* arg);
+
+void _mlir_ciface_sum_pool_multi(Ct* res, Ct* x);
+void _mlir_ciface_sum_pool_multi__encrypt__arg0(Ct* res, Tensor<4>* arg);
+void _mlir_ciface_sum_pool_multi__decrypt__result0(Tensor<4>* res, Ct* arg);
+
+void _mlir_ciface_channel_scale(Ct* res, Ct* x);
+void _mlir_ciface_channel_scale__encrypt__arg0(Ct* res, Tensor<4>* arg);
+void _mlir_ciface_channel_scale__decrypt__result0(Tensor<4>* res, Ct* arg);
+
+void _mlir_ciface_avg_pool_conv(Ct* res, Ct* x, Tensor<4>* w);
+void _mlir_ciface_avg_pool_conv__encrypt__arg0(Ct* res, Tensor<4>* arg);
+void _mlir_ciface_avg_pool_conv__decrypt__result0(Tensor<4>* res, Ct* arg);
+
+void _mlir_ciface_periodic_chain(Ct* res, Ct* x, Tensor<2>* m1, Tensor<2>* m2);
+void _mlir_ciface_periodic_chain__encrypt__arg0(Ct* res, Tensor<1>* arg);
+void _mlir_ciface_periodic_chain__decrypt__result0(Tensor<3>* res, Ct* arg);
+
 void _mlir_ciface_conv_clear_init(Ct* res, Ct* x, Tensor<1>* mean,
                                   Tensor<1>* scale, Tensor<4>* w1,
                                   Tensor<4>* w2);
@@ -201,6 +221,117 @@ TEST(LinearKernelLayoutTest, ConvClearInit) {
   checkBatchNorm(_mlir_ciface_conv_clear_init,
                  _mlir_ciface_conv_clear_init__encrypt__arg0,
                  _mlir_ciface_conv_clear_init__decrypt__result0);
+}
+
+TEST(LinearKernelLayoutTest, GlobalSum) {
+  std::mt19937 rng(16);
+  std::vector<float> x = randomValues(rng, 20 * 8 * 8);
+  std::vector<float> expected(20, 0.0f);
+  for (int64_t c = 0; c < 20; ++c)
+    for (int64_t i = 0; i < 64; ++i) expected[c] += x[c * 64 + i];
+
+  Tensor<4> xRef = view<4>(x, {1, 20, 8, 8});
+  Ct enc, res;
+  Tensor<2> out;
+  _mlir_ciface_global_sum__encrypt__arg0(&enc, &xRef);
+  _mlir_ciface_global_sum(&res, &enc);
+  _mlir_ciface_global_sum__decrypt__result0(&out, &res);
+  expectNear(out, expected);
+}
+
+TEST(LinearKernelLayoutTest, SumPoolMulti) {
+  std::mt19937 rng(17);
+  std::vector<float> x = randomValues(rng, 30 * 7 * 6);
+  std::vector<float> expected;
+  for (int64_t c = 0; c < 30; ++c)
+    for (int64_t h = 0; h < 3; ++h)
+      for (int64_t w = 0; w < 3; ++w) {
+        float sum = 0;
+        for (int64_t u = 0; u < 3; ++u)
+          for (int64_t v = 0; v < 2; ++v)
+            sum += x[(c * 7 + 2 * h + u) * 6 + 2 * w + v];
+        expected.push_back(sum);
+      }
+
+  Tensor<4> xRef = view<4>(x, {1, 30, 7, 6});
+  Ct enc, res;
+  Tensor<4> out;
+  _mlir_ciface_sum_pool_multi__encrypt__arg0(&enc, &xRef);
+  _mlir_ciface_sum_pool_multi(&res, &enc);
+  _mlir_ciface_sum_pool_multi__decrypt__result0(&out, &res);
+  expectNear(out, expected);
+}
+
+TEST(LinearKernelLayoutTest, ChannelScale) {
+  std::mt19937 rng(18);
+  std::vector<float> x = randomValues(rng, 20 * 8 * 8);
+  std::vector<float> expected(x.size());
+  for (int64_t c = 0; c < 20; ++c) {
+    float sum = 0;
+    for (int64_t i = 0; i < 64; ++i) sum += x[c * 64 + i];
+    for (int64_t i = 0; i < 64; ++i) expected[c * 64 + i] = x[c * 64 + i] * sum;
+  }
+
+  Tensor<4> xRef = view<4>(x, {1, 20, 8, 8});
+  Ct enc, res;
+  Tensor<4> out;
+  _mlir_ciface_channel_scale__encrypt__arg0(&enc, &xRef);
+  _mlir_ciface_channel_scale(&res, &enc);
+  _mlir_ciface_channel_scale__decrypt__result0(&out, &res);
+  expectNear(out, expected);
+}
+
+TEST(LinearKernelLayoutTest, AvgPoolConv) {
+  std::mt19937 rng(19);
+  std::vector<float> x = randomValues(rng, 2 * 8 * 8);
+  std::vector<float> w = randomValues(rng, 3 * 2);
+  std::vector<float> avg(2 * 4 * 4, 0.0f);
+  for (int64_t c = 0; c < 2; ++c)
+    for (int64_t h = 0; h < 4; ++h)
+      for (int64_t v = 0; v < 4; ++v)
+        for (int64_t a = 0; a < 2; ++a)
+          for (int64_t b = 0; b < 2; ++b)
+            avg[(c * 4 + h) * 4 + v] +=
+                x[(c * 8 + 2 * h + a) * 8 + 2 * v + b] / 4.0f;
+  std::vector<float> expected(3 * 4 * 4, 0.0f);
+  for (int64_t f = 0; f < 3; ++f)
+    for (int64_t c = 0; c < 2; ++c)
+      for (int64_t i = 0; i < 16; ++i)
+        expected[f * 16 + i] += w[f * 2 + c] * avg[c * 16 + i];
+
+  Tensor<4> xRef = view<4>(x, {1, 2, 8, 8});
+  Tensor<4> wRef = view<4>(w, {3, 2, 1, 1});
+  Ct enc, res;
+  Tensor<4> out;
+  _mlir_ciface_avg_pool_conv__encrypt__arg0(&enc, &xRef);
+  _mlir_ciface_avg_pool_conv(&res, &enc, &wRef);
+  _mlir_ciface_avg_pool_conv__decrypt__result0(&out, &res);
+  expectNear(out, expected);
+}
+
+TEST(LinearKernelLayoutTest, PeriodicChain) {
+  std::mt19937 rng(20);
+  std::vector<float> x = randomValues(rng, 16);
+  std::vector<float> m1 = randomValues(rng, 8 * 16);
+  std::vector<float> m2 = randomValues(rng, 16 * 8);
+  std::vector<float> a(8, 0.0f), b(16, 0.0f);
+  for (int64_t r = 0; r < 8; ++r)
+    for (int64_t c = 0; c < 16; ++c) a[r] += m1[r * 16 + c] * x[c];
+  for (int64_t r = 0; r < 16; ++r)
+    for (int64_t c = 0; c < 8; ++c) b[r] += m2[r * 8 + c] * a[c];
+  std::vector<float> expected;
+  for (int64_t r = 0; r < 16; ++r)
+    for (int64_t i = 0; i < 16; ++i) expected.push_back(b[r]);
+
+  Tensor<1> xRef = view<1>(x, {16});
+  Tensor<2> m1Ref = view<2>(m1, {8, 16});
+  Tensor<2> m2Ref = view<2>(m2, {16, 8});
+  Ct enc, res;
+  Tensor<3> out;
+  _mlir_ciface_periodic_chain__encrypt__arg0(&enc, &xRef);
+  _mlir_ciface_periodic_chain(&res, &enc, &m1Ref, &m2Ref);
+  _mlir_ciface_periodic_chain__decrypt__result0(&out, &res);
+  expectNear(out, expected);
 }
 
 }  // namespace

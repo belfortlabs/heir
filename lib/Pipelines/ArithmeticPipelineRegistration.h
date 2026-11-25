@@ -274,7 +274,8 @@ BackendPipelineBuilder toLattigoPipelineBuilder();
 
 // A subpipeline that preprocesses linalg ops to make them more suitable for
 // FHE.
-void linalgPreprocessingBuilder(OpPassManager& manager);
+void linalgPreprocessingBuilder(OpPassManager& manager,
+                                bool linearKernel = false);
 
 void torchLinalgToCkksBuilder(OpPassManager& manager,
                               const MlirToRLWEPipelineOptions& options);

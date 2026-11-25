@@ -62,3 +62,62 @@ func.func @conv_clear_init(%x: tensor<1x2x8x8xf32> {secret.secret}, %mean: tenso
   %c2 = linalg.conv_2d_nchw_fchw {dilations = dense<1> : vector<2xi64>, strides = dense<1> : vector<2xi64>} ins(%padded, %w2 : tensor<1x3x6x6xf32>, tensor<2x3x3x3xf32>) outs(%f2 : tensor<1x2x4x4xf32>) -> tensor<1x2x4x4xf32>
   return %c2 : tensor<1x2x4x4xf32>
 }
+
+// The sum of every channel plane of a tensor in two ciphertexts. The planes
+// are aligned to a power-of-two stride, so each sum is rotations and
+// additions of one ciphertext.
+func.func @global_sum(%x: tensor<1x20x8x8xf32> {secret.secret}) -> tensor<1x20xf32> {
+  %init = arith.constant dense<0.0> : tensor<1x20xf32>
+  %out = linalg.reduce { arith.addf } ins(%x : tensor<1x20x8x8xf32>) outs(%init : tensor<1x20xf32>) dimensions = [2, 3]
+  return %out : tensor<1x20xf32>
+}
+
+// A 3x2 sum pool with stride 2 on planes of 7x6 elements, which are not a
+// power of two.
+func.func @sum_pool_multi(%x: tensor<1x30x7x6xf32> {secret.secret}) -> tensor<1x30x3x3xf32> {
+  %window = tensor.empty() : tensor<3x2xf32>
+  %init = arith.constant dense<0.0> : tensor<1x30x3x3xf32>
+  %out = linalg.pooling_nchw_sum {dilations = dense<1> : vector<2xi64>, strides = dense<2> : vector<2xi64>} ins(%x, %window : tensor<1x30x7x6xf32>, tensor<3x2xf32>) outs(%init : tensor<1x30x3x3xf32>) -> tensor<1x30x3x3xf32>
+  return %out : tensor<1x30x3x3xf32>
+}
+
+// A squeeze-and-excite scale without its fully connected layers: every
+// channel is multiplied by the sum of its plane. The sums stay at the first
+// position of each plane, and the broadcast copies them over the plane with
+// rotations, into the layout of the tensor they multiply.
+func.func @channel_scale(%x: tensor<1x20x8x8xf32> {secret.secret}) -> tensor<1x20x8x8xf32> {
+  %init = arith.constant dense<0.0> : tensor<20xf32>
+  %squeezed = tensor.collapse_shape %x [[0, 1], [2], [3]] : tensor<1x20x8x8xf32> into tensor<20x8x8xf32>
+  %sums = linalg.reduce { arith.addf } ins(%squeezed : tensor<20x8x8xf32>) outs(%init : tensor<20xf32>) dimensions = [1, 2]
+  %empty = tensor.empty() : tensor<1x20x8x8xf32>
+  %scale = linalg.broadcast ins(%sums : tensor<20xf32>) outs(%empty : tensor<1x20x8x8xf32>) dimensions = [0, 2, 3]
+  %out = arith.mulf %x, %scale : tensor<1x20x8x8xf32>
+  return %out : tensor<1x20x8x8xf32>
+}
+
+// An average pool as torch-mlir writes it, a sum pool divided by the window
+// size, followed by a convolution that reads the result.
+func.func @avg_pool_conv(%x: tensor<1x2x8x8xf32> {secret.secret}, %w: tensor<3x2x1x1xf32>) -> tensor<1x3x4x4xf32> {
+  %window = tensor.empty() : tensor<2x2xf32>
+  %zeros = arith.constant dense<0.0> : tensor<1x2x4x4xf32>
+  %sums = linalg.pooling_nchw_sum {dilations = dense<1> : vector<2xi64>, strides = dense<2> : vector<2xi64>} ins(%x, %window : tensor<1x2x8x8xf32>, tensor<2x2xf32>) outs(%zeros : tensor<1x2x4x4xf32>) -> tensor<1x2x4x4xf32>
+  %four = arith.constant dense<4.0> : tensor<1x2x4x4xf32>
+  %avg = arith.divf %sums, %four : tensor<1x2x4x4xf32>
+  %init = arith.constant dense<0.0> : tensor<1x3x4x4xf32>
+  %out = linalg.conv_2d_nchw_fchw {dilations = dense<1> : vector<2xi64>, strides = dense<1> : vector<2xi64>} ins(%avg, %w : tensor<1x2x4x4xf32>, tensor<3x2x1x1xf32>) outs(%init : tensor<1x3x4x4xf32>) -> tensor<1x3x4x4xf32>
+  return %out : tensor<1x3x4x4xf32>
+}
+
+// Two matrix-vector products and a broadcast. The intermediate vectors fit
+// one ciphertext many times over and are stored periodically, with periods 8
+// and 16. The broadcast reads whichever copy is nearest to each output slot,
+// so every copy of the second product has to exist.
+func.func @periodic_chain(%x: tensor<16xf32> {secret.secret}, %m1: tensor<8x16xf32>, %m2: tensor<16x8xf32>) -> tensor<16x4x4xf32> {
+  %z1 = arith.constant dense<0.0> : tensor<8xf32>
+  %a = linalg.matvec ins(%m1, %x : tensor<8x16xf32>, tensor<16xf32>) outs(%z1 : tensor<8xf32>) -> tensor<8xf32>
+  %z2 = arith.constant dense<0.0> : tensor<16xf32>
+  %b = linalg.matvec ins(%m2, %a : tensor<16x8xf32>, tensor<8xf32>) outs(%z2 : tensor<16xf32>) -> tensor<16xf32>
+  %empty = tensor.empty() : tensor<16x4x4xf32>
+  %out = linalg.broadcast ins(%b : tensor<16xf32>) outs(%empty : tensor<16x4x4xf32>) dimensions = [1, 2]
+  return %out : tensor<16x4x4xf32>
+}

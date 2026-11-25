@@ -226,19 +226,77 @@ FailureOr<Value> emitDiagonals(OpBuilder& b, Location loc,
   return nest.results.front();
 }
 
+// Emits the sum of `count` left rotations of every ciphertext of `value` by
+// multiples of `stride`, for each `(stride, count)`, with a logarithmic number
+// of rotations and additions per axis.
+Value emitBoxSum(OpBuilder& b, Location loc, Value value,
+                 ArrayRef<std::pair<int64_t, int64_t>> axes) {
+  auto rotated = [&](Value v, int64_t shift) {
+    Value amount =
+        arith::ConstantOp::create(b, loc, b.getI64IntegerAttr(shift));
+    return Value(tensor_ext::RotateOp::create(b, loc, v.getType(), v, amount));
+  };
+  auto sum = [&](Value lhs, Value rhs) {
+    return makeAppropriatelyTypedAddOp(b, loc, lhs, rhs)->getResult(0);
+  };
+  for (const auto& [stride, count] : axes) {
+    // `window` is the sum of `width` rotations, `result` that of the first
+    // `done` rotations.
+    Value window = value;
+    Value result;
+    int64_t done = 0;
+    for (int64_t width = 1; width <= count; width *= 2) {
+      if (count & width) {
+        result = result ? sum(result, rotated(window, done * stride)) : window;
+        done += width;
+      }
+      if (2 * width <= count) {
+        window = sum(window, rotated(window, width * stride));
+      }
+    }
+    value = result;
+  }
+  return value;
+}
+
 // Emits the transform of `input`, a ciphertext-semantic tensor in layout
 // `in`, into layout `out`.
 FailureOr<Value> emitLinearTransform(OpBuilder& b, Location loc,
-                                     const LinearOp& linear,
+                                     const LinearOp& original,
                                      const StridedLayout& in,
                                      const StridedLayout& out, Value input,
-                                     int64_t maxDiagonals) {
+                                     int64_t maxDiagonals,
+                                     bool allowUnusedSlotValues = false) {
   Type elementType = cast<RankedTensorType>(input.getType()).getElementType();
   int64_t numSlots = out.numSlots;
   auto resultType =
       RankedTensorType::get({out.numCiphertexts(), numSlots}, elementType);
 
-  std::vector<DiagonalKey> keys = computeDiagonalKeys(linear.spec, in, out);
+  // Sums of input elements and copies of result elements with unit
+  // coefficients need no plaintext multiplication where they are boxes inside
+  // one ciphertext.
+  TransformPlan plan = planTransform(original.spec, !original.coefficient, in,
+                                     out, allowUnusedSlotValues);
+  LinearOp linear = original;
+  linear.spec = plan.spec;
+  const std::vector<DiagonalKey>& keys = plan.keys;
+  if (!plan.sums.empty()) input = emitBoxSum(b, loc, input, plan.sums);
+  // Left rotations by the negated strides.
+  std::vector<std::pair<int64_t, int64_t>> copies;
+  for (const auto& [stride, count] : plan.copies) {
+    copies.emplace_back(-stride, count);
+  }
+  // The sums already are where the result's layout has them, and every
+  // reader ignores the partial sums in the other slots.
+  if (plan.skipDiagonals) {
+    if (out.numCiphertexts() == in.numCiphertexts()) return input;
+    return Value(tensor::ExtractSliceOp::create(
+        b, loc, resultType, input,
+        ArrayRef<OpFoldResult>{b.getIndexAttr(0), b.getIndexAttr(0)},
+        ArrayRef<OpFoldResult>{b.getIndexAttr(out.numCiphertexts()),
+                               b.getIndexAttr(numSlots)},
+        ArrayRef<OpFoldResult>{b.getIndexAttr(1), b.getIndexAttr(1)}));
+  }
   if (keys.empty()) {
     return Value(arith::ConstantOp::create(b, loc, b.getZeroAttr(resultType)));
   }
@@ -266,23 +324,24 @@ FailureOr<Value> emitLinearTransform(OpBuilder& b, Location loc,
   Value result = kernel::BlockLinearTransformOp::create(
       b, loc, resultType, input, *diagonals, outputCiphertexts,
       inputCiphertexts, shifts);
+  if (!copies.empty()) result = emitBoxSum(b, loc, result, copies);
 
   // With a periodic output every term was written to one copy of its output
-  // element. Summing the rotations by multiples of the period completes all
-  // copies.
-  ShiftRule rule = getShiftRule(in, out);
-  if (rule.writeFollowsInput) {
-    int64_t copies = numSlots / rule.modulus;
-    if (copies * rule.modulus != numSlots || (copies & (copies - 1)) != 0) {
-      return emitError(loc) << "output period " << rule.modulus
-                            << " must divide the slot count " << numSlots
-                            << " into a power of two";
+  // element: the copy the shift leads to when the input's period is at least
+  // as long, and the first copy otherwise. Summing the rotations by multiples
+  // of the period completes all copies.
+  if (out.period != 0) {
+    int64_t copies = numSlots / out.period;
+    if (copies * out.period != numSlots || (copies & (copies - 1)) != 0) {
+      return emitError(loc)
+             << "output period " << out.period << " must divide the slot count "
+             << numSlots << " into a power of two";
     }
     for (int64_t step = 1; step < copies; step *= 2) {
       // The shift has the type the transform's own rotations use, so that
       // rotations can be merged.
       Value shift = arith::ConstantOp::create(
-          b, loc, b.getI64IntegerAttr(step * rule.modulus));
+          b, loc, b.getI64IntegerAttr(step * out.period));
       Value rotated =
           tensor_ext::RotateOp::create(b, loc, result.getType(), result, shift);
       result =
@@ -409,9 +468,9 @@ struct ConvertStridedTensorOp : public StridedPattern {
 
     Operation* before = op->getPrevNode();
     rewriter.setInsertionPoint(op);
-    FailureOr<Value> result =
-        emitLinearTransform(rewriter, op->getLoc(), *linear, *in, *out,
-                            operands[secretOperand], maxDiagonals);
+    FailureOr<Value> result = emitLinearTransform(
+        rewriter, op->getLoc(), *linear, *in, *out, operands[secretOperand],
+        maxDiagonals, isOnlyReadLinearly(op->getResult(0)));
     if (failed(result)) return failure();
     Value value = *result;
     if (linear->init) {

@@ -641,6 +641,22 @@ bool isZeroTensor(Value value) {
   return false;
 }
 
+bool isOnlyReadLinearly(Value value) {
+  for (OpOperand& use : value.getUses()) {
+    Operation* user = use.getOwner();
+    if (isViewReshape(user)) {
+      if (!isOnlyReadLinearly(user->getResult(0))) return false;
+      continue;
+    }
+    auto linalgOp = dyn_cast<linalg::LinalgOp>(user);
+    if (!linalgOp || !linalgOp.isDpsInput(&use) ||
+        !matchLinearOp(user, use.getOperandNumber())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool isStaticZeroPad(Operation* op) {
   auto pad = dyn_cast_or_null<tensor::PadOp>(op);
   if (!pad || !pad.getLow().empty() || !pad.getHigh().empty()) return false;

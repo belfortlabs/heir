@@ -1361,18 +1361,23 @@ struct UndilateConv2DNchwFchw
 
 struct LinalgCanonicalizations
     : public impl::LinalgCanonicalizationsBase<LinalgCanonicalizations> {
+  using LinalgCanonicalizationsBase::LinalgCanonicalizationsBase;
+
   void runOnOperation() override {
     MLIRContext* context = &getContext();
     auto* module = getOperation();
 
     RewritePatternSet patterns(context);
-    patterns.add<
-        BroadcastToExpandShape, DropCfAssertInLinalg, FoldBroadcastExtractSlice,
-        FoldConstantBroadcast, FoldConstantFill, FoldConstantLinalgTranspose,
-        FuseConv2DPooling, LinalgGenericToElementwise, LinalgMapToElementwise,
-        MaterializeBroadcasts, RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D,
-        RewriteTransposedMatvec, RewriteTransposedVecmat, UndilateConv1DNcwFcw,
-        UndilateConv2DNchwFchw>(context);
+    patterns.add<BroadcastToExpandShape, DropCfAssertInLinalg,
+                 FoldBroadcastExtractSlice, FoldConstantBroadcast,
+                 FoldConstantFill, FoldConstantLinalgTranspose,
+                 FuseConv2DPooling, LinalgGenericToElementwise,
+                 LinalgMapToElementwise, MaterializeBroadcasts,
+                 RewriteTransposedMatvec, RewriteTransposedVecmat>(context);
+    if (densifyConvolutions) {
+      patterns.add<RewriteAvgPoolAsConv1D, RewriteAvgPoolAsConv2D,
+                   UndilateConv1DNcwFcw, UndilateConv2DNchwFchw>(context);
+    }
 
     mlir::linalg::populateDecomposeProjectedPermutationPatterns(patterns);
 

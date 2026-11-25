@@ -35,7 +35,10 @@ struct StridedDigit {
 /// `period`, the tensor occupies one ciphertext and the element is also at
 /// every position `p + m * period`; `period` must divide `numSlots`.
 ///
-/// Slots that hold no element are unspecified.
+/// Slots that hold no element are unspecified, but they hold values in the
+/// range of the data: zeros, what slotwise operations make of zeros, or
+/// elements of a tensor this one was cut from. A transform that would leave
+/// anything else there is applied only where every reader ignores those slots.
 ///
 /// This family contains row-major layouts, channel-multiplexed (gapped)
 /// layouts of strided convolution chains, and cyclically replicated vectors.
@@ -111,6 +114,13 @@ struct StridedLayout {
   /// Row-major order, with stride 1 on the last axis.
   static StridedLayout rowMajor(llvm::ArrayRef<int64_t> shape, int64_t numSlots,
                                 int64_t period = 0);
+
+  /// Row-major, except that a tensor that needs several ciphertexts gets a
+  /// power of two as the stride of its outermost axis of extent above one.
+  /// The slices along that axis (the channel planes of an image tensor) then
+  /// start at the same slot in every ciphertext, or at a ciphertext boundary,
+  /// so the shift between two planes takes few values modulo the slot count.
+  static StridedLayout aligned(llvm::ArrayRef<int64_t> shape, int64_t numSlots);
 };
 
 }  // namespace heir

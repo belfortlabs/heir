@@ -74,6 +74,12 @@ Operation* findFoldablePad(Value value);
 /// `tensor.collapse_shape` that only removes unit dimensions.
 bool isViewReshape(Operation* op);
 
+/// True if every user of `value` reads it as the secret operand of a linear
+/// operation, directly or through reshapes that `isViewReshape` accepts.
+/// Such readers take only the slots that hold elements, so zero padding
+/// never has to exist in a ciphertext and unused slots may hold any value.
+bool isOnlyReadLinearly(Value value);
+
 /// True if a `tensor.pad` has static bounds and a zero padding value.
 bool isStaticZeroPad(Operation* op);
 
