@@ -1,0 +1,8 @@
+# usage: ops_fixed.sh <backend> <model>  -- uses a frozen copy of heir-opt so other builds do not interfere
+b=$1; m=$2
+d=~/ops/$b; mkdir -p $d
+s=$(date +%s)
+timeout ${T:-5400} ~/heir-opt-count "--annotate-module=backend=$b scheme=ckks" "--torch-linalg-to-ckks=min-slot-count=16384" --count-ops ~/sky_workdir/tmp_linear_kernel_proto/corpus/michiel_$m.mlir -o /dev/null 2>&1 | grep -a --line-buffered '^count-ops\|error:\|Assertion\|LLVM ERROR' | cut -c1-400 | head -3000 > $d/$m.counts
+rc=${PIPESTATUS[0]}
+echo "== $m rc=$rc time=$(( $(date +%s) - s ))s errors=$(grep -c 'error:\|Assertion\|LLVM ERROR' $d/$m.counts)" > $d/$m.summary
+grep -m3 'error:\|Assertion\|LLVM ERROR' $d/$m.counts | sed 's/^.*error: /error: /' | cut -c1-250 >> $d/$m.summary
