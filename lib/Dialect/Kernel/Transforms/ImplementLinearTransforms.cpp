@@ -146,14 +146,9 @@ struct ImplementLinearTransforms
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    // getTargetConfig reports an error on a module without a backend, which
-    // is a valid input here: it gets the generic lowering.
-    bool hasBackend = llvm::any_of(module->getAttrs(), [](NamedAttribute attr) {
-      return isa<UnitAttr>(attr.getValue()) &&
-             attr.getName().getValue().starts_with("backend.");
-    });
+    // A module without a backend gets the generic lowering.
     bool native = false;
-    if (hasBackend) {
+    if (hasBackend(module)) {
       auto target = getTargetConfig(module);
       native = succeeded(target) && target->hasKernelLinearTransform;
     }

@@ -17,6 +17,7 @@ namespace mgmt {
 
 static bool cannotEmitAdjustScale(Operation* op) {
   auto module = op->getParentOfType<ModuleOp>();
+  if (!hasBackend(module)) return false;
   auto target = getTargetConfig(module);
   return succeeded(target) && !target->supportsAdjustScale;
 }

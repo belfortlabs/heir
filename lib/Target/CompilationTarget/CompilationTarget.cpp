@@ -5,6 +5,7 @@
 
 #include "lib/Target/CompilationTarget/CompilationTargetOverrides.cpp.inc"
 #include "llvm/include/llvm/ADT/DenseMap.h"           // from @llvm-project
+#include "llvm/include/llvm/ADT/STLExtras.h"          // from @llvm-project
 #include "llvm/include/llvm/ADT/StringRef.h"          // from @llvm-project
 #include "mlir/include/mlir/IR/Attributes.h"          // from @llvm-project
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"   // from @llvm-project
@@ -59,6 +60,14 @@ FailureOr<BackendName> findBackend(ModuleOp module) {
     }
   }
   return module->emitError("Unable to find backend attribute on module");
+}
+
+bool hasBackend(ModuleOp module) {
+  if (!module) return false;
+  return llvm::any_of(module->getAttrs(), [](NamedAttribute attr) {
+    return isa<UnitAttr>(attr.getValue()) &&
+           attr.getName().getValue().starts_with("backend.");
+  });
 }
 
 FailureOr<CompilationTarget> getTargetConfig(ModuleOp module) {

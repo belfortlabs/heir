@@ -30,6 +30,11 @@ class CompilationTargetRegistry {
   llvm::DenseMap<BackendName, CompilationTarget> targets;
 };
 
+// True if the module names a backend with a `backend.<name>` unit attribute.
+// `getTargetConfig` reports an error on a module that does not, so code that
+// has a default for such modules checks this first.
+bool hasBackend(ModuleOp module);
+
 // Return the CompilationTarget corresponding to the backend registered as a
 // module attribute (e.g., backend.lattigo) along with any overrides applied via
 // the backend.config_override dictionary attr. Returns failure if the backend
