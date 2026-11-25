@@ -5,6 +5,7 @@
 
 #include "lib/Analysis/LevelAnalysis/LevelAnalysis.h"
 #include "lib/Analysis/MulDepthAnalysis/MulDepthAnalysis.h"
+#include "lib/Analysis/PendingRescaleAnalysis/PendingRescaleAnalysis.h"
 #include "lib/Analysis/SecretnessAnalysis/SecretnessAnalysis.h"
 #include "lib/Dialect/Kernel/IR/KernelOps.h"
 #include "lib/Dialect/Mgmt/IR/MgmtOps.h"
@@ -137,55 +138,32 @@ LogicalResult ModReduceBefore<Op>::matchAndRewrite(
     return rewriter.notifyMatchFailure(op, "results must be secret");
   }
 
-  int64_t mulDepth = 0;
   SmallVector<OpOperand*, 2> secretOperands;
   getSecretOperands(op, secretOperands, solver);
-  for (auto* operand : secretOperands) {
-    auto mulDepthState =
-        solver->lookupState<MulDepthLattice>(operand->get())->getValue();
-    if (!mulDepthState.isInitialized()) {
-      LLVM_DEBUG(
-          llvm::dbgs()
-          << "ModReduceBefore: mul depth state not initialized for operand "
-          << operand->get() << "\n");
-      return rewriter.notifyMatchFailure(op, "mul depth state not initialized");
-    }
-    if (mulDepthState.isInvalid()) {
-      mulDepth = std::max(mulDepth, (int64_t)1);
-    } else {
-      mulDepth = std::max(mulDepth, mulDepthState.getMulDepth());
-    }
-  }
-  LLVM_DEBUG(llvm::dbgs() << "ModReduceBefore: effective mul depth: "
-                          << mulDepth << "\n");
-
-  // first mulOp in the chain, skip
-  if (!includeFirstMul && mulDepth == 0) {
-    LLVM_DEBUG(llvm::dbgs() << "ModReduceBefore: skipping first mul\n");
-    return rewriter.notifyMatchFailure(op, "skipping first mulOp in the chain");
+  bool pending = llvm::any_of(secretOperands, [&](OpOperand* operand) {
+    return hasPendingRescale(operand->get(), solver);
+  });
+  if (!pending) {
+    LLVM_DEBUG(llvm::dbgs() << "ModReduceBefore: no pending rescale\n");
+    return rewriter.notifyMatchFailure(op, "no operand has a pending rescale");
   }
 
-  SmallVector<Value, 2> secretOperandValues = llvm::to_vector(
-      llvm::map_range(secretOperands, [](OpOperand* op) { return op->get(); }));
   // iterating over Values instead of OpOperands
   // because one Value can corresponds to multiple OpOperands
-  bool changed = false;
-  for (auto operand : secretOperandValues) {
-    if (auto defOp = operand.getDefiningOp()) {
-      if (isa<kernel::EvalChebyshevOp>(defOp)) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "ModReduceBefore: skipping operand defined by "
-                      "EvalChebyshevOp\n");
-        continue;
-      }
+  SmallVector<Value, 2> toReduce;
+  for (auto* operand : secretOperands) {
+    Value value = operand->get();
+    if (!onlyPendingOperands || hasPendingRescale(value, solver)) {
+      if (!llvm::is_contained(toReduce, value)) toReduce.push_back(value);
     }
+  }
+  for (auto operand : toReduce) {
     rewriter.setInsertionPoint(op);
     auto managed = mgmt::ModReduceOp::create(rewriter, op.getLoc(), operand);
     op->replaceUsesOfWith(operand, managed);
-    changed = true;
   }
 
-  return changed ? success() : failure();
+  return success();
 }
 
 template <typename Op>
@@ -466,6 +444,7 @@ template struct UseInitOpForPlaintextOperand<arith::AddFOp>;
 template struct UseInitOpForPlaintextOperand<arith::MulFOp>;
 template struct UseInitOpForPlaintextOperand<arith::SubFOp>;
 template struct ModReduceBefore<kernel::EvalChebyshevOp>;
+template struct ModReduceBefore<kernel::LinearTransformOp>;
 template struct UseInitOpForPlaintextOperand<kernel::EvalChebyshevOp>;
 
 }  // namespace heir

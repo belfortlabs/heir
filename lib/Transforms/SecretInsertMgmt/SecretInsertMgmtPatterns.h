@@ -71,17 +71,23 @@ struct ModReduceAfterMult : public OpRewritePattern<MulOp> {
   DataFlowSolver* solver;
 };
 
-/// Insert mgmt.modreduce op for each operand of the matched mul op. This
-/// pattern updates the analysis states in the solver of results, and so it
-/// must be used in a walkAndApplyPatterns format, not a greedy rewrite.
+/// Insert a mgmt.modreduce op before the matched op if one of its secret
+/// operands has a pending rescale according to the PendingRescaleAnalysis in
+/// the solver. The pattern does not update the solver: the analysis already
+/// accounts for the mod reduces this pattern inserts.
+///
+/// With `onlyPendingOperands`, only the operands that have a pending rescale
+/// are mod reduced, and the levels of the operands are left to be matched by
+/// MatchCrossLevel. Otherwise all secret operands are mod reduced, which keeps
+/// operands of the same level at the same level.
 template <typename Op>
 struct ModReduceBefore : public OpRewritePattern<Op> {
   using OpRewritePattern<Op>::OpRewritePattern;
 
-  ModReduceBefore(MLIRContext* context, bool includeFirstMul, Operation* top,
-                  DataFlowSolver* solver)
+  ModReduceBefore(MLIRContext* context, bool onlyPendingOperands,
+                  Operation* top, DataFlowSolver* solver)
       : OpRewritePattern<Op>(context, /*benefit=*/1),
-        includeFirstMul(includeFirstMul),
+        onlyPendingOperands(onlyPendingOperands),
         top(top),
         solver(solver) {}
 
@@ -89,7 +95,7 @@ struct ModReduceBefore : public OpRewritePattern<Op> {
                                 PatternRewriter& rewriter) const override;
 
  private:
-  bool includeFirstMul;
+  bool onlyPendingOperands;
   Operation* top;
   DataFlowSolver* solver;
 };

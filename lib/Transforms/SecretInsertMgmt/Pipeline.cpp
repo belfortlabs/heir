@@ -8,6 +8,7 @@
 #include "lib/Analysis/LevelAnalysis/BootstrapWaterlineAnalysis.h"
 #include "lib/Analysis/LevelAnalysis/LevelAnalysis.h"
 #include "lib/Analysis/MulDepthAnalysis/MulDepthAnalysis.h"
+#include "lib/Analysis/PendingRescaleAnalysis/PendingRescaleAnalysis.h"
 #include "lib/Analysis/SecretnessAnalysis/SecretnessAnalysis.h"
 #include "lib/Dialect/HEIRInterfaces.h"
 #include "lib/Dialect/Kernel/IR/KernelOps.h"
@@ -86,6 +87,15 @@ void makeAndRunSecretnessAndMulDepthSolver(Operation* top,
   dataflow::loadBaselineAnalyses(solver);
   solver.load<SecretnessAnalysis>();
   solver.load<MulDepthAnalysis>();
+  runSolver(top, solver);
+}
+
+void makeAndRunSecretnessAndPendingRescaleSolver(Operation* top,
+                                                 DataFlowSolver& solver,
+                                                 bool inputsPending) {
+  dataflow::loadBaselineAnalyses(solver);
+  solver.load<SecretnessAnalysis>();
+  solver.load<PendingRescaleAnalysis>(inputsPending);
   runSolver(top, solver);
 }
 
@@ -255,9 +265,6 @@ void insertMgmtInitForPlaintexts(Operation* top, bool includeFloats) {
 void insertModReduceBeforeOrAfterMult(Operation* top, bool afterMul,
                                       bool beforeMulIncludeFirstMul,
                                       bool includeFloats) {
-  DataFlowSolver solver;
-  makeAndRunSecretnessAndMulDepthSolver(top, solver);
-
   MLIRContext* ctx = top->getContext();
   LLVM_DEBUG({
     auto when = "before mul";
@@ -266,25 +273,50 @@ void insertModReduceBeforeOrAfterMult(Operation* top, bool afterMul,
     llvm::dbgs() << "Insert ModReduce " << when << "\n";
   });
 
-  RewritePatternSet patterns(ctx);
   if (afterMul) {
+    DataFlowSolver solver;
+    makeAndRunSecretnessSolver(top, solver);
+    RewritePatternSet patterns(ctx);
     patterns.add<ModReduceAfterMult<arith::MulIOp>>(ctx, top, &solver);
     if (includeFloats)
       patterns.add<ModReduceAfterMult<arith::MulFOp>>(ctx, top, &solver);
-  } else {
-    patterns.add<ModReduceBefore<arith::MulIOp>>(ctx, beforeMulIncludeFirstMul,
-                                                 top, &solver);
-    if (includeFloats) {
-      patterns.add<ModReduceBefore<arith::MulFOp>>(
-          ctx, beforeMulIncludeFirstMul, top, &solver);
-      patterns.add<ModReduceBefore<kernel::EvalChebyshevOp>>(
-          ctx, beforeMulIncludeFirstMul, top, &solver);
-    }
-    // includeFirstMul = false here
-    // as before yield we only want mulResult to be mod reduced
-    patterns.add<ModReduceBefore<secret::YieldOp>>(
-        ctx, /*includeFirstMul*/ false, top, &solver);
+    (void)walkAndApplyPatterns(top, std::move(patterns));
+    return;
   }
+
+  // A mod reduce goes before an op that increases the multiplicative depth
+  // if one of its operands has a pending rescale. Including the first
+  // multiplication means that the inputs count as having one.
+  DataFlowSolver solver;
+  makeAndRunSecretnessAndPendingRescaleSolver(top, solver,
+                                              beforeMulIncludeFirstMul);
+  // The results only get the rescales that the computation left pending, so
+  // the inputs never count as having one here.
+  DataFlowSolver yieldSolver;
+  if (beforeMulIncludeFirstMul) {
+    makeAndRunSecretnessAndPendingRescaleSolver(top, yieldSolver,
+                                                /*inputsPending=*/false);
+  }
+
+  // In CKKS a mod reduced value has the scale of its level, so an operand
+  // without a pending rescale is left alone: mod reducing it would spend a
+  // level on a value that may already be at the level of the others. In the
+  // other schemes operands of the same level are kept at the same level, as
+  // matching levels afterwards would need a scale adjustment.
+  bool onlyPendingOperands = moduleTargetsCKKS(top);
+
+  RewritePatternSet patterns(ctx);
+  patterns.add<ModReduceBefore<arith::MulIOp>>(ctx, onlyPendingOperands, top,
+                                               &solver);
+  if (includeFloats) {
+    patterns.add<ModReduceBefore<arith::MulFOp>,
+                 ModReduceBefore<kernel::EvalChebyshevOp>,
+                 ModReduceBefore<kernel::LinearTransformOp>>(
+        ctx, onlyPendingOperands, top, &solver);
+  }
+  patterns.add<ModReduceBefore<secret::YieldOp>>(
+      ctx, onlyPendingOperands, top,
+      beforeMulIncludeFirstMul ? &yieldSolver : &solver);
   (void)walkAndApplyPatterns(top, std::move(patterns));
 }
 

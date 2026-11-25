@@ -64,6 +64,7 @@ cc_library(
         ":pass_inc_gen",
         "@heir//lib/Analysis/LevelAnalysis",
         "@heir//lib/Analysis/MulDepthAnalysis",
+        "@heir//lib/Analysis/PendingRescaleAnalysis",
         "@heir//lib/Analysis/SecretnessAnalysis",
         "@heir//lib/Dialect:HEIRInterfaces",
         "@heir//lib/Dialect:ModuleAttributes",
@@ -100,6 +101,7 @@ cc_library(
     deps = [
         "@heir//lib/Analysis/LevelAnalysis",
         "@heir//lib/Analysis/MulDepthAnalysis",
+        "@heir//lib/Analysis/PendingRescaleAnalysis",
         "@heir//lib/Analysis/SecretnessAnalysis",
         "@heir//lib/Dialect:ModuleAttributes",
         "@heir//lib/Dialect/Kernel/IR:Dialect",
