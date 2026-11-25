@@ -30,6 +30,7 @@ namespace {
 struct Counts {
   std::map<std::string, uint64_t> ops;
   std::set<int64_t> shifts;
+  std::set<int64_t> transformDiagonals;
 };
 
 // The number of scalar operations an elementwise operation on a tensor of
@@ -90,6 +91,9 @@ struct Counter {
           counts.ops[name] += weight * count;
         counts.shifts.insert(calleeCounts.shifts.begin(),
                              calleeCounts.shifts.end());
+        counts.transformDiagonals.insert(
+            calleeCounts.transformDiagonals.begin(),
+            calleeCounts.transformDiagonals.end());
       }
       counts.ops["func.call"] += weight;
       return;
@@ -117,6 +121,20 @@ struct Counter {
       else
         counts.ops[name + "(dynamic shift)"] += weight;
     }
+    if (name == "kernel.apply_linear_transform") {
+      // A native transform evaluates one plaintext multiplication per
+      // diagonal; its rotations depend on the backend's baby-step giant-step
+      // split and are not counted here.
+      if (auto diagonals =
+              op->getAttrOfType<DenseI64ArrayAttr>("diagonal_indices")) {
+        counts.ops[name + "(diagonals)"] +=
+            weight * elementMultiplicity(op) * diagonals.size();
+        for (int64_t diagonal : diagonals.asArrayRef())
+          counts.transformDiagonals.insert(diagonal);
+      } else {
+        counts.ops[name + "(unknown diagonals)"] += weight;
+      }
+    }
     if (name == "kernel.eval_chebyshev") {
       if (auto coefficients = op->getAttrOfType<ArrayAttr>("coefficients")) {
         counts.ops[name + "(degree " + std::to_string(coefficients.size() - 1) +
@@ -143,6 +161,9 @@ struct CountOps : impl::CountOpsBase<CountOps> {
                      << "\t" << count << "\n";
       llvm::errs() << "count-ops\t" << func.getSymName()
                    << "\tdistinct-shifts\t" << counts.shifts.size() << "\n";
+      llvm::errs() << "count-ops\t" << func.getSymName()
+                   << "\tdistinct-transform-diagonals\t"
+                   << counts.transformDiagonals.size() << "\n";
     }
     markAllAnalysesPreserved();
   }

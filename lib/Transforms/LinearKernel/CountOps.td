@@ -22,7 +22,9 @@ def CountOps : Pass<"count-ops", "ModuleOp"> {
   `ckks.rotate`, `bgv.rotate_cols` and `tensor_ext.rotate` with a static shift
   are additionally reported as `distinct-shifts`, the number of different
   shifts in the function and its callees. `kernel.eval_chebyshev` is also
-  reported per polynomial degree.
+  reported per polynomial degree, and `kernel.apply_linear_transform` with
+  the total number of its diagonals and, as `distinct-transform-diagonals`,
+  the number of different diagonal indices.
 
   The output goes to stderr, one tab-separated line per function and
   operation: `count-ops <function> <operation> <count>`.
