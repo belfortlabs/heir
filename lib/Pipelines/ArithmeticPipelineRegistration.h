@@ -31,6 +31,12 @@ void hecoSIMDVectorizerPipelineBuilder(OpPassManager& manager,
                                        bool disableLoopUnroll);
 
 struct MlirToRLWEPipelineOptions : public LoopOptions {
+  PassOptions::Option<bool> linearKernel{
+      *this, "linear-kernel",
+      llvm::cl::desc("Use strided layouts and one linear-transform kernel for "
+                     "every operation that is linear in a secret tensor "
+                     "(default to false)"),
+      llvm::cl::init(false)};
   PassOptions::Option<bool> enableArithmetization{
       *this, "enable-arithmetization",
       llvm::cl::desc(
@@ -200,6 +206,12 @@ struct PlaintextBackendOptions
   PassOptions::Option<bool> unrollFheKernelLoops{
       *this, "unroll-fhe-kernel-loops",
       llvm::cl::desc("Unroll FHE kernel loops (default to false)"),
+      llvm::cl::init(false)};
+  PassOptions::Option<bool> linearKernel{
+      *this, "linear-kernel",
+      llvm::cl::desc("Use strided layouts and one linear-transform kernel for "
+                     "every operation that is linear in a secret tensor "
+                     "(default to false)"),
       llvm::cl::init(false)};
 };
 

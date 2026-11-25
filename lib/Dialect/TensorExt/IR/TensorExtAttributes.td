@@ -68,6 +68,67 @@ def TensorExt_LayoutAttr : TensorExt_Attr<"Layout", "layout"> {
   }];
 }
 
+def TensorExt_StridedLayoutAttr : TensorExt_Attr<"StridedLayout", "strided_layout"> {
+  let summary = "a layout given by a position formula with strides.";
+  let description = [{
+    This attribute describes the same thing as `tensor_ext.layout`, how a
+    data-semantic tensor is laid out among a tensor of ciphertexts, for the
+    family of layouts in which the element at index `idx` sits at the global
+    position
+
+    ```
+    p(idx) = offset + sum over digits of stride * ((idx[axis] / div) mod m)
+    ```
+
+    which is slot `p mod slots` of ciphertext `p / slots`. Each digit is
+    written `(axis, div, m, stride)`, and `m = 0` means no reduction. With a
+    nonzero `period` the tensor occupies one ciphertext and the element is
+    also at every position `p + k * period`.
+
+    The family contains row-major layouts, the gapped (channel-multiplexed)
+    layouts that strided convolutions and pools produce, and cyclically
+    repeated vectors. Unlike a relation, the position of an element and the
+    rotation between two layouts are computed in closed form.
+
+    ```mlir
+    // A 3x4x5 tensor in row-major order.
+    #row_major = #tensor_ext.strided_layout<shape = [3, 4, 5], slots = 64,
+        digits = [(0, 1, 0, 20), (1, 1, 0, 5), (2, 1, 0, 1)]>
+
+    // 8 channels of 4x4 on an 8x8 grid with gap 2: four channels fill each
+    // 2x2 cell of the grid, the other four go to a second ciphertext.
+    #gapped = #tensor_ext.strided_layout<shape = [8, 4, 4], slots = 64,
+        digits = [(1, 1, 0, 16), (2, 1, 0, 2),
+                  (0, 1, 2, 1), (0, 2, 2, 8), (0, 4, 0, 64)]>
+
+    // A vector of 5 values repeated with period 8.
+    #periodic = #tensor_ext.strided_layout<shape = [5], slots = 32,
+        digits = [(0, 1, 0, 1)], period = 8>
+    ```
+  }];
+  let parameters = (ins
+    ArrayRefParameter<"int64_t">:$shape,
+    // Four entries per digit: axis, div, mod, stride.
+    ArrayRefParameter<"int64_t">:$digits,
+    "int64_t":$slots,
+    "int64_t":$offset,
+    "int64_t":$period
+  );
+  let genVerifyDecl = 1;
+  let assemblyFormat = ?;
+  let hasCustomAssemblyFormat = 1;
+
+  let extraClassDeclaration = [{
+    ::mlir::heir::StridedLayout getStridedLayout() const;
+
+    static StridedLayoutAttr getFromStridedLayout(
+      ::mlir::MLIRContext* context, const ::mlir::heir::StridedLayout& layout);
+
+    /// The layout as the relation that `tensor_ext.layout` stores.
+    presburger::IntegerRelation getIntegerRelation() const;
+  }];
+}
+
 def TensorExt_OriginalTypeAttr : TensorExt_Attr<"OriginalType", "original_type"> {
   let summary = "The original type of a secret tensor whose layout has been converted to ciphertext semantics.";
   let description = [{

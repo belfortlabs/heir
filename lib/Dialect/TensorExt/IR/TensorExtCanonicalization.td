@@ -16,6 +16,11 @@ def OutOfBoundsOfTensorDim :
     >
   >;
 
+// Two shift amounts can only be added if they have the same integer type.
+def HaveSameType : Constraint<
+  CPred<"$0.getType() == $1.getType()">, "have the same type"
+>;
+
 def IsOneDimTensor : Constraint<
   CPred<
     "llvm::cast<mlir::ShapedType>($0.getType()).getRank() == 1"
@@ -70,7 +75,7 @@ def CombineSequentialRotates : Pat<
     (TensorExt_RotateOp $tensor, (Arith_ConstantOp:$xOp APIntAttr:$x)),
     (Arith_ConstantOp:$yOp APIntAttr:$y)),
   (TensorExt_RotateOp $tensor, (Arith_AddIOp $xOp, $yOp, DefOverflow)),
-  []
+  [(HaveSameType $xOp, $yOp)]
 >;
 
 // A rotation followed by extraction can be extracted directly from the
@@ -117,7 +122,7 @@ foreach ArithOp = [Arith_AddIOp, Arith_SubIOp, Arith_MulIOp] in {
       (TensorExt_RotateOp $t1, (Arith_AddIOp $s3, $s1, DefOverflow)),
       (TensorExt_RotateOp $t2, (Arith_AddIOp $s3, $s2, DefOverflow)),
       $ovf),
-    [], [], (addBenefit 2)
+    [(HaveSameType $s3, $s1), (HaveSameType $s3, $s2)], [], (addBenefit 2)
   >;
 
   // These two patterns don't eliminate any rotations, but they move rotations
@@ -162,7 +167,7 @@ foreach ArithOp = [Arith_AddIOp, Arith_SubIOp, Arith_MulIOp] in {
     //
     // But the original addi cannot be removed, and so the rotation it depends
     // on also cannot be removed.
-    [(HasOneUse:$arithOp)]
+    [(HasOneUse:$arithOp), (HaveSameType $s2, $s1)]
   >;
   def MergeEquivalentRotationsEarlierRHS_#ArithOp : Pat<
     (TensorExt_RotateOp
@@ -175,7 +180,7 @@ foreach ArithOp = [Arith_AddIOp, Arith_SubIOp, Arith_MulIOp] in {
       (TensorExt_RotateOp $t2, $s2),
       (TensorExt_RotateOp $t1, (Arith_AddIOp $s2, $s1, DefOverflow)),
       $ovf),
-    [(HasOneUse:$arithOp)]
+    [(HasOneUse:$arithOp), (HaveSameType $s2, $s1)]
   >;
 }
 
@@ -200,7 +205,7 @@ foreach ArithOp = [Arith_AddFOp, Arith_SubFOp, Arith_MulFOp] in {
       (TensorExt_RotateOp $t1, (Arith_AddIOp $s3, $s1, DefOverflow)),
       (TensorExt_RotateOp $t2, (Arith_AddIOp $s3, $s2, DefOverflow)),
       $fm, $rm),
-    [], [], (addBenefit 2)
+    [(HaveSameType $s3, $s1), (HaveSameType $s3, $s2)], [], (addBenefit 2)
   >;
 
   def MergeEquivalentRotationsEarlierLHS_#ArithOp : Pat<
@@ -214,7 +219,7 @@ foreach ArithOp = [Arith_AddFOp, Arith_SubFOp, Arith_MulFOp] in {
       (TensorExt_RotateOp $t1, (Arith_AddIOp $s2, $s1, DefOverflow)),
       (TensorExt_RotateOp $t2, $s2),
       $fm, $rm),
-    [(HasOneUse:$arithOp)]
+    [(HasOneUse:$arithOp), (HaveSameType $s2, $s1)]
   >;
 
   def MergeEquivalentRotationsEarlierRHS_#ArithOp : Pat<
@@ -228,7 +233,7 @@ foreach ArithOp = [Arith_AddFOp, Arith_SubFOp, Arith_MulFOp] in {
       (TensorExt_RotateOp $t1, $s2),
       (TensorExt_RotateOp $t2, (Arith_AddIOp $s2, $s1, DefOverflow)),
       $fm, $rm),
-    [(HasOneUse:$arithOp)]
+    [(HasOneUse:$arithOp), (HaveSameType $s2, $s1)]
   >;
 }
 

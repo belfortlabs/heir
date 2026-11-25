@@ -46,6 +46,69 @@ cc_test(
 )
 
 cc_library(
+    name = "StridedLayout",
+    srcs = ["StridedLayout.cpp"],
+    hdrs = ["StridedLayout.h"],
+    deps = [
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_test(
+    name = "StridedLayoutTest",
+    srcs = ["StridedLayoutTest.cpp"],
+    deps = [
+        ":IslConversion",
+        ":StridedLayout",
+        ":Utils",
+        "@googletest//:gtest_main",
+        "@llvm-project//mlir:Analysis",
+        "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
+    name = "LinearSpec",
+    srcs = ["LinearSpec.cpp"],
+    hdrs = ["LinearSpec.h"],
+    deps = [
+        ":StridedLayout",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_test(
+    name = "LinearSpecTest",
+    srcs = ["LinearSpecTest.cpp"],
+    deps = [
+        ":LinearSpec",
+        ":StridedLayout",
+        "@googletest//:gtest_main",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_library(
+    name = "SparseBsgs",
+    srcs = ["SparseBsgs.cpp"],
+    hdrs = ["SparseBsgs.h"],
+    deps = [
+        ":LinearSpec",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_test(
+    name = "SparseBsgsTest",
+    srcs = ["SparseBsgsTest.cpp"],
+    deps = [
+        ":LinearSpec",
+        ":SparseBsgs",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "Utils",
     srcs = ["Utils.cpp"],
     hdrs = ["Utils.h"],

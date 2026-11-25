@@ -150,4 +150,15 @@ module {
     %1 = kernel.apply_linear_transform %arg1, %lt : !ckks_ct, !kernel.prepared_linear_transform<level = 0, slots = 512, log_bsgs_ratio = 0> -> !ckks_ct
     return %0, %1 : tensor<2x!ckks_ct>, !ckks_ct
   }
+
+  // CHECK: @test_block_linear_transform
+  func.func @test_block_linear_transform(%arg0: tensor<2x8xf32>, %diagonals: tensor<3x8xf32>) -> tensor<2x8xf32> {
+    // CHECK: kernel.block_linear_transform %{{.*}}, %{{.*}} <output_ciphertexts = [0, 0, 1], input_ciphertexts = [0, 1, 1], shifts = [0, 3, 7]> : tensor<2x8xf32>, tensor<3x8xf32> -> tensor<2x8xf32>
+    %0 = kernel.block_linear_transform %arg0, %diagonals <
+      output_ciphertexts = [0, 0, 1],
+      input_ciphertexts = [0, 1, 1],
+      shifts = [0, 3, 7]
+    > : tensor<2x8xf32>, tensor<3x8xf32> -> tensor<2x8xf32>
+    return %0 : tensor<2x8xf32>
+  }
 }

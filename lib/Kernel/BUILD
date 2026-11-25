@@ -81,6 +81,32 @@ cc_library(
 )
 
 cc_library(
+    name = "LinearTransformImplementation",
+    hdrs = ["LinearTransformImplementation.h"],
+    deps = [
+        ":AbstractValue",
+        ":ArithmeticDag",
+        ":KernelImplementation",
+        "@heir//lib/Utils/Layout:SparseBsgs",
+    ],
+)
+
+cc_test(
+    name = "LinearTransformImplementationTest",
+    srcs = ["LinearTransformImplementationTest.cpp"],
+    deps = [
+        ":AbstractValue",
+        ":ArithmeticDag",
+        ":EvalVisitor",
+        ":LinearTransformImplementation",
+        ":RotationCountVisitor",
+        "@googletest//:gtest_main",
+        "@heir//lib/Utils/Layout:LinearSpec",
+        "@heir//lib/Utils/Layout:SparseBsgs",
+    ],
+)
+
+cc_library(
     name = "Utils",
     srcs = ["Utils.cpp"],
     hdrs = ["Utils.h"],

@@ -79,5 +79,12 @@ Type materializePermutationLayout(Type type, DenseIntElementsAttr permutation,
   return RankedTensorType::get({1, minSlotCount}, getElementTypeOrSelf(type));
 }
 
+Type materializeStridedLayout(Type elementType,
+                              tensor_ext::StridedLayoutAttr attr) {
+  StridedLayout layout = attr.getStridedLayout();
+  return RankedTensorType::get({layout.numCiphertexts(), layout.numSlots},
+                               elementType);
+}
+
 }  // namespace heir
 }  // namespace mlir

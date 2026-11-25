@@ -106,6 +106,7 @@ def LayoutLike : AnyAttrOf<[
   // (ct, slot) defined by f(a, b) = (c, d).
   AnyI64ElementsAttr,
   TensorExt_LayoutAttr,
+  TensorExt_StridedLayoutAttr,
   CompositeLayoutAttr,
 ]>;
 

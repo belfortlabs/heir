@@ -31,6 +31,7 @@
 #include "lib/Kernel/Utils.h"
 #include "lib/Target/CompilationTarget/CompilationTarget.h"
 #include "lib/Transforms/ConvertToCiphertextSemantics/AssignLayout.h"
+#include "lib/Transforms/ConvertToCiphertextSemantics/StridedPatterns.h"
 #include "lib/Transforms/ConvertToCiphertextSemantics/TypeConversion.h"
 #include "lib/Transforms/DropUnitDims/DropUnitDims.h"
 #include "lib/Transforms/LayoutPropagation/Utils.h"
@@ -247,6 +248,17 @@ struct LayoutMaterializationTypeConverter
         [this](IndexType type, LayoutAttr attr) -> std::optional<Type> {
           return materializeLayout(type, attr, getCiphertextSize());
         });
+    addConversion(
+        [](secret::SecretType type,
+           tensor_ext::StridedLayoutAttr attr) -> std::optional<Type> {
+          return secret::SecretType::get(materializeStridedLayout(
+              getElementTypeOrSelf(type.getValueType()), attr));
+        });
+    addConversion(
+        [](RankedTensorType type,
+           tensor_ext::StridedLayoutAttr attr) -> std::optional<Type> {
+          return materializeStridedLayout(type.getElementType(), attr);
+        });
     addConversion([this](secret::SecretType type,
                          DenseIntElementsAttr attr) -> std::optional<Type> {
       auto innerType = type.getValueType();
@@ -304,7 +316,9 @@ struct ConvertFunc : public ContextAwareFuncConversion {
       setMaterializedAttr(op);
       for (int i = 0; i < op.getNumArguments(); ++i) {
         auto layoutAttr = op.getArgAttr(i, kLayoutAttrName);
-        if (!layoutAttr || !isa<LayoutAttr, ArrayAttr>(layoutAttr)) {
+        if (!layoutAttr ||
+            !isa<LayoutAttr, ArrayAttr, tensor_ext::StridedLayoutAttr>(
+                layoutAttr)) {
           continue;
         }
 
@@ -316,7 +330,9 @@ struct ConvertFunc : public ContextAwareFuncConversion {
 
       for (int i = 0; i < op.getNumResults(); ++i) {
         auto layoutAttr = op.getResultAttr(i, kLayoutAttrName);
-        if (!layoutAttr || !isa<LayoutAttr, ArrayAttr>(layoutAttr)) {
+        if (!layoutAttr ||
+            !isa<LayoutAttr, ArrayAttr, tensor_ext::StridedLayoutAttr>(
+                layoutAttr)) {
           continue;
         }
 
@@ -385,7 +401,8 @@ class ConvertAssignLayout
       if (arrayAttr.empty() || !isa<LayoutAttr>(arrayAttr.getValue().front())) {
         return failure();
       }
-    } else if (!isa<LayoutAttr>(layout) && !isa<DenseIntElementsAttr>(layout)) {
+    } else if (!isa<LayoutAttr, DenseIntElementsAttr,
+                    tensor_ext::StridedLayoutAttr>(layout)) {
       return failure();
     }
 
@@ -410,8 +427,8 @@ class ConvertAssignLayout
       if (arrayAttr.empty() || !isa<LayoutAttr>(arrayAttr.getValue().front())) {
         return failure();
       }
-    } else if (!isa<LayoutAttr>(resLayout) &&
-               !isa<DenseIntElementsAttr>(resLayout)) {
+    } else if (!isa<LayoutAttr, DenseIntElementsAttr,
+                    tensor_ext::StridedLayoutAttr>(resLayout)) {
       return failure();
     }
 
@@ -3589,20 +3606,30 @@ struct ConvertToCiphertextSemantics
     target.markUnknownOpDynamicallyLegal([&](Operation* op) {
       return isa<ModuleOp>(op) || hasMaterializedAttr(op);
     });
-    patterns.add<
-        ConvertAnyAddingMaterializedAttr, ConvertBootstrap,
-        ConvertConvertLayout, ConvertFunc, ConvertLinalgBroadcast,
-        ConvertLinalgMatmul, ConvertLinalgTranspose, ConvertLinalgBatchMatmul,
-        ConvertLinalgReduce, ConvertBroadcastedReduce, ConvertLinalgDot,
-        ConvertSecretGeneric, ConvertTensorCollapseShape,
-        ConvertTensorExpandShape, ConvertTensorExtractLayout,
-        ConvertTensorExtractSlice, ConvertTensorPad, ConvertTensorInsertLayout,
-        ConvertTensorInsertSlice, PreserveLinalgMatvecAsLinearTransform>(
-        typeConverter, context);
-    patterns.add<ConvertLinalgMatvecLayout, ConvertLinalgConv1D,
-                 ConvertLinalgConv2D, ConvertLinalgConv2DNchwFchw,
-                 ConvertLinalgConv1DNcwFcw>(typeConverter, context,
-                                            unrollKernels);
+    // Values in strided layouts have their own patterns, which replace every
+    // layout-specific pattern below.
+    if (usesStridedLayouts(module)) {
+      patterns.add<ConvertAnyAddingMaterializedAttr, ConvertFunc,
+                   ConvertSecretGeneric>(typeConverter, context);
+      populateStridedLayoutPatterns(patterns, typeConverter, context,
+                                    maxDiagonals);
+    } else {
+      patterns
+          .add<ConvertAnyAddingMaterializedAttr, ConvertBootstrap,
+               ConvertConvertLayout, ConvertFunc, ConvertLinalgBroadcast,
+               ConvertLinalgMatmul, ConvertLinalgTranspose,
+               ConvertLinalgBatchMatmul, ConvertLinalgReduce,
+               ConvertBroadcastedReduce, ConvertLinalgDot, ConvertSecretGeneric,
+               ConvertTensorCollapseShape, ConvertTensorExpandShape,
+               ConvertTensorExtractLayout, ConvertTensorExtractSlice,
+               ConvertTensorPad, ConvertTensorInsertLayout,
+               ConvertTensorInsertSlice, PreserveLinalgMatvecAsLinearTransform>(
+              typeConverter, context);
+      patterns.add<ConvertLinalgMatvecLayout, ConvertLinalgConv1D,
+                   ConvertLinalgConv2D, ConvertLinalgConv2DNchwFchw,
+                   ConvertLinalgConv1DNcwFcw>(typeConverter, context,
+                                              unrollKernels);
+    }
     patterns.add<ConvertAssignLayout>(typeConverter, context, minSlotCount,
                                       codegenStrategy);
 

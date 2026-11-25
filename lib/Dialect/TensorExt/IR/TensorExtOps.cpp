@@ -147,6 +147,17 @@ LogicalResult verifyLayoutMatchesType(const Attribute& layoutAttr, Type type,
     return success();
   }
 
+  if (auto stridedLayout = dyn_cast<StridedLayoutAttr>(layoutAttr)) {
+    ArrayRef<int64_t> shape = stridedLayout.getShape();
+    if (shapedType && shapedType.getShape() != shape) {
+      return op->emitOpError()
+             << "requires the tensor's shape to match the strided layout's "
+                "shape, but found type "
+             << type << " and layout " << layoutAttr;
+    }
+    return success();
+  }
+
   if (auto denseElementsAttr = dyn_cast<DenseIntElementsAttr>(layoutAttr)) {
     // Assert the attr has shape <N x 4>
     int64_t rank = denseElementsAttr.getType().getRank();

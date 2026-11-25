@@ -12,6 +12,7 @@ cc_library(
     name = "Transforms",
     hdrs = ["Passes.h"],
     deps = [
+        ":ImplementLinearTransforms",
         ":PrepareLinearTransforms",
         ":pass_inc_gen",
         "@heir//lib/Dialect/Kernel/IR:Dialect",
@@ -31,6 +32,32 @@ cc_library(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
+    ],
+)
+
+cc_library(
+    name = "ImplementLinearTransforms",
+    srcs = ["ImplementLinearTransforms.cpp"],
+    hdrs = ["ImplementLinearTransforms.h"],
+    deps = [
+        ":pass_inc_gen",
+        "@heir//lib/Dialect/Kernel/IR:Dialect",
+        "@heir//lib/Dialect/TensorExt/IR:Dialect",
+        "@heir//lib/Kernel:AbstractValue",
+        "@heir//lib/Kernel:ArithmeticDag",
+        "@heir//lib/Kernel:IRMaterializingVisitor",
+        "@heir//lib/Kernel:LinearTransformImplementation",
+        "@heir//lib/Kernel:Utils",
+        "@heir//lib/Target/CompilationTarget",
+        "@heir//lib/Utils/Layout:LinearSpec",
+        "@heir//lib/Utils/Layout:SparseBsgs",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SCFDialect",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TensorDialect",
     ],
 )
 

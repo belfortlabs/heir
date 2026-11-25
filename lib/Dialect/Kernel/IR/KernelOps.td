@@ -93,6 +93,53 @@ def Kernel_LinearTransformOp : Kernel_Op<"linear_transform", [
   let hasVerifier = 1;
 }
 
+def Kernel_BlockLinearTransformOp : Kernel_Op<"block_linear_transform", [Pure]> {
+  let summary = "Performs a linear transform between two tensors of ciphertexts.";
+  let description = [{
+    A linear transform from the rows of `input` (one ciphertext-semantic
+    tensor per row) to the rows of `output`, given by generalized diagonals of
+    its blocks. Row `k` of `diagonals` belongs to the block from input row
+    `input_ciphertexts[k]` to output row `output_ciphertexts[k]` and is the
+    diagonal with left-rotation `shifts[k]`:
+
+    ```
+    output[output_ciphertexts[k]] +=
+        diagonals[k] * rotate_left(input[input_ciphertexts[k]], shifts[k])
+    ```
+
+    Output rows that no diagonal writes to are zero.
+
+    Unlike `kernel.linear_transform`, which is mapped over a tensor of
+    ciphertexts one at a time, this op mixes ciphertexts. It is lowered by
+    `--implement-linear-transforms` before ciphertext types are introduced.
+
+    Example:
+
+    ```mlir
+    %y = kernel.block_linear_transform %x, %diagonals <
+        output_ciphertexts = [0, 0, 1],
+        input_ciphertexts = [0, 1, 1],
+        shifts = [0, 3, 1020]
+      > : tensor<2x1024xf32>, tensor<3x1024xf32> -> tensor<2x1024xf32>
+    ```
+  }];
+
+  let arguments = (ins
+    2DTensorOf<[AnyFloat, AnyInteger]>:$input,
+    Kernel_Diagonals:$diagonals,
+    DenseI64ArrayAttr:$output_ciphertexts,
+    DenseI64ArrayAttr:$input_ciphertexts,
+    DenseI64ArrayAttr:$shifts
+  );
+
+  let results = (outs
+    2DTensorOf<[AnyFloat, AnyInteger]>:$output
+  );
+
+  let assemblyFormat = "$input `,` $diagonals prop-dict attr-dict `:` type($input) `,` type($diagonals) `->` type($output)";
+  let hasVerifier = 1;
+}
+
 def Kernel_PrepareLinearTransformOp : Kernel_Op<"prepare_linear_transform", [
   Pure,
   PlaintextEncodeOpInterface

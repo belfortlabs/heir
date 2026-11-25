@@ -4,6 +4,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -322,9 +326,90 @@ std::vector<Value> IRMaterializingVisitor::operator()(
   return {op->getResult(0)};
 }
 
+namespace {
+
+using DagNodePtr = std::shared_ptr<ArithmeticDagNode<SSAValue>>;
+
+// Calls fn on the nodes that `node` uses in its own region: all of its
+// operands, except the bodies of loops and the branches of conditionals,
+// which are materialized in regions of their own.
+void forEachOperandInRegion(const DagNodePtr& node,
+                            const std::function<void(const DagNodePtr&)>& fn) {
+  std::visit(
+      [&](auto&& n) {
+        using NodeType = std::decay_t<decltype(n)>;
+        if constexpr (std::is_same_v<NodeType, AddNode<SSAValue>> ||
+                      std::is_same_v<NodeType, SubtractNode<SSAValue>> ||
+                      std::is_same_v<NodeType, MultiplyNode<SSAValue>> ||
+                      std::is_same_v<NodeType, ComparisonNode<SSAValue>>) {
+          fn(n.left);
+          fn(n.right);
+        } else if constexpr (std::is_same_v<NodeType, FloorDivNode<SSAValue>>) {
+          fn(n.left);
+        } else if constexpr (std::is_same_v<NodeType, PowerNode<SSAValue>>) {
+          fn(n.base);
+        } else if constexpr (std::is_same_v<NodeType,
+                                            LeftRotateNode<SSAValue>>) {
+          fn(n.operand);
+          fn(n.shift);
+        } else if constexpr (std::is_same_v<NodeType,
+                                            LeftRotateBulkNode<SSAValue>>) {
+          fn(n.operand);
+          for (const DagNodePtr& shift : n.shifts) fn(shift);
+        } else if constexpr (std::is_same_v<NodeType, ExtractNode<SSAValue>>) {
+          fn(n.operand);
+          fn(n.index);
+        } else if constexpr (std::is_same_v<NodeType, InsertNode<SSAValue>>) {
+          fn(n.scalar);
+          fn(n.dest);
+          fn(n.index);
+        } else if constexpr (std::is_same_v<NodeType, IfElseNode<SSAValue>>) {
+          fn(n.condition);
+        } else if constexpr (std::is_same_v<NodeType, ResultAtNode<SSAValue>>) {
+          fn(n.operand);
+        } else if constexpr (std::is_same_v<NodeType, ForLoopNode<SSAValue>>) {
+          for (const DagNodePtr& init : n.inits) fn(init);
+        } else if constexpr (std::is_same_v<NodeType, YieldNode<SSAValue>>) {
+          for (const DagNodePtr& element : n.elements) fn(element);
+        }
+      },
+      node->node_variant);
+}
+
+// The nodes a branch of a conditional uses in its own region, in an order in
+// which each node comes after its operands.
+void collectRegionNodes(const DagNodePtr& node,
+                        std::unordered_set<const void*>& visited,
+                        std::vector<DagNodePtr>& postOrder) {
+  if (!visited.insert(node.get()).second) return;
+  forEachOperandInRegion(node, [&](const DagNodePtr& operand) {
+    collectRegionNodes(operand, visited, postOrder);
+  });
+  postOrder.push_back(node);
+}
+
+}  // namespace
+
 std::vector<Value> IRMaterializingVisitor::operator()(
     const IfElseNode<SSAValue>& node, ImplicitLocOpBuilder& builder) {
   Value condition = this->process(node.condition, builder)[0];
+
+  // A node is materialized where it is first used. One that both branches use
+  // would be created inside the first branch and would not be visible to the
+  // second, so create those before the conditional.
+  std::unordered_set<const void*> thenVisited;
+  std::vector<DagNodePtr> thenNodes;
+  collectRegionNodes(node.thenBody, thenVisited, thenNodes);
+  std::unordered_set<const void*> elseVisited;
+  std::vector<DagNodePtr> elseNodes;
+  collectRegionNodes(node.elseBody, elseVisited, elseNodes);
+  for (const DagNodePtr& shared : elseNodes) {
+    if (!thenVisited.contains(shared.get())) continue;
+    if (std::holds_alternative<YieldNode<SSAValue>>(shared->node_variant)) {
+      continue;
+    }
+    this->process(shared, builder);
+  }
 
   auto* thenYield =
       std::get_if<YieldNode<SSAValue>>(&node.thenBody->node_variant);

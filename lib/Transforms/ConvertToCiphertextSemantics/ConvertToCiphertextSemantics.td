@@ -63,6 +63,14 @@ def ConvertToCiphertextSemantics : Pass<"convert-to-ciphertext-semantics"> {
       "Minimum number of slots to use for packing messages in ciphertexts."
     >,
     Option<
+      "maxDiagonals",
+      "max-diagonals",
+      "int64_t",
+      /*default=*/"65536",
+      "Largest number of diagonals of one linear transform over strided "
+      "layouts; a transform that needs more is an error."
+    >,
+    Option<
       "unrollKernels",
       "unroll-kernels",
       "bool",

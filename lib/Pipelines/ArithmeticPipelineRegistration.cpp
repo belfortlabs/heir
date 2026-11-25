@@ -6,6 +6,7 @@
 #include "lib/Dialect/BGV/Conversions/BGVToLWE/BGVToLWE.h"
 #include "lib/Dialect/CKKS/Transforms/CKKSToLWE.h"
 #include "lib/Dialect/Debug/Transforms/ValidateNames.h"
+#include "lib/Dialect/Kernel/Transforms/ImplementLinearTransforms.h"
 #include "lib/Dialect/Kernel/Transforms/PrepareLinearTransforms.h"
 #include "lib/Dialect/LWE/Conversions/LWEToLattigo/LWEToLattigo.h"
 #include "lib/Dialect/LWE/Conversions/LWEToOpenfhe/LWEToOpenfhe.h"
@@ -57,6 +58,8 @@
 #include "lib/Transforms/LayoutPropagation/LayoutPropagation.h"
 #include "lib/Transforms/LinalgCanonicalizations/LinalgCanonicalizations.h"
 #include "lib/Transforms/LinalgFuseLinearOps/LinalgFuseLinearOps.h"
+#include "lib/Transforms/LinearKernel/DecomposeMaxPool.h"
+#include "lib/Transforms/LinearKernel/StridedLayoutPropagation.h"
 #include "lib/Transforms/OperationBalancer/OperationBalancer.h"
 #include "lib/Transforms/OptimizeRelinearization/OptimizeRelinearization.h"
 #include "lib/Transforms/PopulateScale/PopulateScale.h"
@@ -207,12 +210,18 @@ void mlirToSecretArithmeticPipelineBuilder(
   mathToPolynomialApproximationBuilder(pm, options.useCompositeRelu);
 
   // Layout assignment and optimization
-  LayoutPropagationOptions layoutPropagationOptions;
-  layoutPropagationOptions.minSlotCount = options.minSlotCount;
-  pm.addPass(createLayoutPropagation(layoutPropagationOptions));
-  LayoutOptimizationOptions layoutOptimizationOptions;
-  layoutOptimizationOptions.minSlotCount = options.minSlotCount;
-  pm.addPass(createLayoutOptimization(layoutOptimizationOptions));
+  if (options.linearKernel) {
+    StridedLayoutPropagationOptions stridedLayoutPropagationOptions;
+    stridedLayoutPropagationOptions.minSlotCount = options.minSlotCount;
+    pm.addPass(createStridedLayoutPropagation(stridedLayoutPropagationOptions));
+  } else {
+    LayoutPropagationOptions layoutPropagationOptions;
+    layoutPropagationOptions.minSlotCount = options.minSlotCount;
+    pm.addPass(createLayoutPropagation(layoutPropagationOptions));
+    LayoutOptimizationOptions layoutOptimizationOptions;
+    layoutOptimizationOptions.minSlotCount = options.minSlotCount;
+    pm.addPass(createLayoutOptimization(layoutOptimizationOptions));
+  }
   // Layout conversions may be repeated, so run CSE
   pm.addPass(createCSEPass());
 
@@ -233,6 +242,10 @@ void mlirToSecretArithmeticPipelineBuilder(
   pm.addPass(createApplyFolders());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(tensor_ext::createImplementRotateAndReduce());
+  kernel::ImplementLinearTransformsOptions implementLinearTransformsOptions;
+  implementLinearTransformsOptions.unroll = options.unrollFheKernelLoops;
+  pm.addPass(kernel::createImplementLinearTransforms(
+      implementLinearTransformsOptions));
 
   implementShiftNetworkPipelineBuilder(pm);
 
@@ -257,6 +270,7 @@ void mlirToPlaintextPipelineBuilder(OpPassManager& pm,
   MlirToRLWEPipelineOptions mlirToRLWEPipelineOptions;
   mlirToRLWEPipelineOptions.minSlotCount = options.plaintextSize;
   mlirToRLWEPipelineOptions.unrollFheKernelLoops = options.unrollFheKernelLoops;
+  mlirToRLWEPipelineOptions.linearKernel = options.linearKernel;
   mlirToSecretArithmeticPipelineBuilder(pm, mlirToRLWEPipelineOptions);
 
   // Insert debug handler calls and/or lower debug.validate
@@ -709,6 +723,10 @@ BackendPipelineBuilder toLattigoPipelineBuilder() {
 }
 
 void linalgPreprocessingBuilder(OpPassManager& manager) {
+  // Before the pooling operation is generalized. No layout handles a max
+  // pool directly; the taps and maxima this leaves are linear operations and
+  // ReLUs.
+  manager.addPass(createDecomposeMaxPool());
   manager.addPass(createInlineActivations());
   manager.addPass(createActivationCanonicalizations());
   manager.addPass(createLinalgCanonicalizations());

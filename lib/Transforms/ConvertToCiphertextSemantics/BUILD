@@ -12,6 +12,7 @@ cc_library(
     hdrs = ["ConvertToCiphertextSemantics.h"],
     deps = [
         ":AssignLayout",
+        ":StridedPatterns",
         ":TypeConversion",
         ":pass_inc_gen",
         "@heir//lib/Dialect:ModuleAttributes",
@@ -60,6 +61,7 @@ cc_library(
     hdrs = ["TypeConversion.h"],
     deps = [
         "@heir//lib/Dialect/TensorExt/IR:Dialect",
+        "@heir//lib/Utils/Layout:StridedLayout",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:IR",
@@ -76,6 +78,7 @@ cc_library(
         "@heir//lib/Dialect/TensorExt/IR:Dialect",
         "@heir//lib/Utils/Layout:Codegen",
         "@heir//lib/Utils/Layout:IslConversion",
+        "@heir//lib/Utils/Layout:StridedLayout",
         "@heir//lib/Utils/Layout:Utils",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Analysis",
@@ -84,6 +87,31 @@ cc_library(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:SCFDialect",
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TensorDialect",
+    ],
+)
+
+cc_library(
+    name = "StridedPatterns",
+    srcs = ["StridedPatterns.cpp"],
+    hdrs = ["StridedPatterns.h"],
+    deps = [
+        ":AssignLayout",
+        ":TypeConversion",
+        "@heir//lib/Dialect/Kernel/IR:Dialect",
+        "@heir//lib/Dialect/TensorExt/IR:Dialect",
+        "@heir//lib/Transforms/LinearKernel:LinearOp",
+        "@heir//lib/Utils",
+        "@heir//lib/Utils:AttributeUtils",
+        "@heir//lib/Utils:ContextAwareDialectConversion",
+        "@heir//lib/Utils:ContextAwareTypeConversion",
+        "@heir//lib/Utils/Layout:LinearSpec",
+        "@heir//lib/Utils/Layout:StridedLayout",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:ArithDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LinalgDialect",
+        "@llvm-project//mlir:SCFDialect",
         "@llvm-project//mlir:TensorDialect",
     ],
 )

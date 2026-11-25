@@ -25,6 +25,11 @@ Type materializePermutationLayout(Type elementType,
                                   DenseIntElementsAttr permutation,
                                   int minSlotCount);
 
+// The ciphertext-semantic type of a tensor in a strided layout: one row of
+// `slots` elements per ciphertext.
+Type materializeStridedLayout(Type elementType,
+                              tensor_ext::StridedLayoutAttr attr);
+
 }  // namespace heir
 }  // namespace mlir
 

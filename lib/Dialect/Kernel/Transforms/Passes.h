@@ -3,6 +3,7 @@
 
 // IWYU pragma: begin_keep
 #include "lib/Dialect/Kernel/IR/KernelDialect.h"
+#include "lib/Dialect/Kernel/Transforms/ImplementLinearTransforms.h"
 #include "lib/Dialect/Kernel/Transforms/PrepareLinearTransforms.h"
 // IWYU pragma: end_keep
 

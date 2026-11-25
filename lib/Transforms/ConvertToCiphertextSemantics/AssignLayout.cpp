@@ -50,6 +50,130 @@ namespace heir {
 
 using ::mlir::presburger::IntegerRelation;
 using tensor_ext::LayoutAttr;
+using tensor_ext::StridedLayoutAttr;
+
+Value emitStridedPosition(OpBuilder& builder, Location loc,
+                          const StridedLayout& layout, ValueRange indices) {
+  auto constant = [&](int64_t value) -> Value {
+    return arith::ConstantIndexOp::create(builder, loc, value);
+  };
+  Value position = constant(layout.offset);
+  for (const StridedDigit& digit : layout.digits) {
+    Value term = indices[digit.axis];
+    if (digit.div != 1) {
+      term = arith::DivUIOp::create(builder, loc, term, constant(digit.div));
+    }
+    if (digit.mod != 0) {
+      term = arith::RemUIOp::create(builder, loc, term, constant(digit.mod));
+    }
+    if (digit.stride != 1) {
+      term = arith::MulIOp::create(builder, loc, term, constant(digit.stride));
+    }
+    position = arith::AddIOp::create(builder, loc, position, term);
+  }
+  return position;
+}
+
+// A loop nest over the elements of a tensor of the layout's shape, threading
+// one tensor through the iterations. `body` gets the element's indices, its
+// ciphertext and slot, and the threaded tensor, and returns its new value.
+static Value emitStridedLoopNest(
+    ImplicitLocOpBuilder& builder, const StridedLayout& layout, Value init,
+    const std::function<void(Operation*)>& createdOpCallback,
+    llvm::function_ref<Value(OpBuilder&, Location, ValueRange, Value, Value,
+                             Value)>
+        body) {
+  SmallVector<Value> lbs, ubs, steps;
+  for (int64_t extent : layout.shape) {
+    for (auto [values, value] :
+         {std::pair(&lbs, int64_t{0}), std::pair(&ubs, extent),
+          std::pair(&steps, int64_t{1})}) {
+      auto constant = arith::ConstantIndexOp::create(builder, value);
+      createdOpCallback(constant);
+      values->push_back(constant);
+    }
+  }
+  scf::LoopNest nest = scf::buildLoopNest(
+      builder, builder.getLoc(), lbs, ubs, steps, {init},
+      [&](OpBuilder& b, Location loc, ValueRange ivs,
+          ValueRange args) -> scf::ValueVector {
+        Value position = emitStridedPosition(b, loc, layout, ivs);
+        Value numSlots =
+            arith::ConstantIndexOp::create(b, loc, layout.numSlots);
+        Value ct = arith::DivUIOp::create(b, loc, position, numSlots);
+        Value slot = arith::RemUIOp::create(b, loc, position, numSlots);
+        return {body(b, loc, ivs, ct, slot, args[0])};
+      });
+  createdOpCallback(nest.loops.front());
+  return nest.results.front();
+}
+
+static FailureOr<Value> implementStridedAssignLayout(
+    Value input, StridedLayoutAttr attr, ImplicitLocOpBuilder& builder,
+    const std::function<void(Operation*)>& createdOpCallback) {
+  StridedLayout layout = attr.getStridedLayout();
+  auto inputType = dyn_cast<RankedTensorType>(input.getType());
+  if (!inputType || inputType.getShape() != ArrayRef<int64_t>(layout.shape)) {
+    return builder.emitError()
+           << "strided layout " << attr << " does not match the type "
+           << input.getType();
+  }
+  auto resultType = cast<RankedTensorType>(
+      materializeStridedLayout(inputType.getElementType(), attr));
+  auto zeros =
+      arith::ConstantOp::create(builder, builder.getZeroAttr(resultType));
+  createdOpCallback(zeros);
+  int64_t copies = layout.period == 0 ? 1 : layout.numSlots / layout.period;
+  return emitStridedLoopNest(
+      builder, layout, zeros, createdOpCallback,
+      [&](OpBuilder& b, Location loc, ValueRange ivs, Value ct, Value slot,
+          Value packed) -> Value {
+        Value element = tensor::ExtractOp::create(b, loc, input, ivs);
+        if (copies == 1) {
+          return tensor::InsertOp::create(b, loc, element, packed,
+                                          ValueRange{ct, slot});
+        }
+        // A periodic layout holds a copy of the tensor in every period.
+        auto copyLoop = scf::ForOp::create(
+            b, loc, arith::ConstantIndexOp::create(b, loc, 0),
+            arith::ConstantIndexOp::create(b, loc, copies),
+            arith::ConstantIndexOp::create(b, loc, 1), ValueRange{packed},
+            [&](OpBuilder& b, Location loc, Value copy, ValueRange args) {
+              Value copySlot = arith::AddIOp::create(
+                  b, loc, slot,
+                  arith::MulIOp::create(
+                      b, loc, copy,
+                      arith::ConstantIndexOp::create(b, loc, layout.period)));
+              Value inserted = tensor::InsertOp::create(
+                  b, loc, element, args[0], ValueRange{ct, copySlot});
+              scf::YieldOp::create(b, loc, inserted);
+            });
+        return copyLoop.getResult(0);
+      });
+}
+
+static FailureOr<Value> implementStridedUnpack(
+    Value input, StridedLayoutAttr attr, Type targetType,
+    ImplicitLocOpBuilder& builder,
+    const std::function<void(Operation*)>& createdOpCallback) {
+  StridedLayout layout = attr.getStridedLayout();
+  auto resultType = dyn_cast<RankedTensorType>(targetType);
+  if (!resultType || resultType.getShape() != ArrayRef<int64_t>(layout.shape)) {
+    return builder.emitError() << "strided layout " << attr
+                               << " does not match the type " << targetType;
+  }
+  auto zeros =
+      arith::ConstantOp::create(builder, builder.getZeroAttr(resultType));
+  createdOpCallback(zeros);
+  return emitStridedLoopNest(
+      builder, layout, zeros, createdOpCallback,
+      [&](OpBuilder& b, Location loc, ValueRange ivs, Value ct, Value slot,
+          Value unpacked) -> Value {
+        Value element =
+            tensor::ExtractOp::create(b, loc, input, ValueRange{ct, slot});
+        return tensor::InsertOp::create(b, loc, element, unpacked, ivs);
+      });
+}
 
 static std::string printRelation(const IntegerRelation& rel) {
   std::string str;
@@ -642,6 +766,11 @@ FailureOr<Value> implementAssignLayout(
     ArrayRef<int64_t> domainSchedule, CodegenStrategy strategy) {
   OpBuilder::InsertionGuard guard(builder);
 
+  if (auto stridedAttr = dyn_cast<StridedLayoutAttr>(layout)) {
+    return implementStridedAssignLayout(input, stridedAttr, builder,
+                                        createdOpCallback);
+  }
+
   if (auto arrayAttr = dyn_cast<ArrayAttr>(layout)) {
     Value currentInput = input;
     for (size_t i = 0; i < arrayAttr.size(); ++i) {
@@ -693,6 +822,11 @@ FailureOr<Value> implementUnpackOp(
     tensor_ext::UnpackOp op, ImplicitLocOpBuilder& builder,
     const std::function<void(Operation*)>& createdOpCallback) {
   OpBuilder::InsertionGuard guard(builder);
+  if (auto stridedAttr = dyn_cast<StridedLayoutAttr>(op.getLayout())) {
+    return implementStridedUnpack(op.getValue(), stridedAttr,
+                                  op.getResult().getType(), builder,
+                                  createdOpCallback);
+  }
   if (auto layoutAttr = dyn_cast<LayoutAttr>(op.getLayout())) {
     return implementUnpackOpStep(op.getValue(), layoutAttr,
                                  op.getResult().getType(), builder,

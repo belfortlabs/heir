@@ -5,6 +5,7 @@
 #include <functional>
 
 #include "lib/Dialect/TensorExt/IR/TensorExtOps.h"
+#include "lib/Utils/Layout/StridedLayout.h"
 #include "mlir/include/mlir/IR/Attributes.h"            // from @llvm-project
 #include "mlir/include/mlir/IR/Builders.h"              // from @llvm-project
 #include "mlir/include/mlir/IR/ImplicitLocOpBuilder.h"  // from @llvm-project
@@ -39,6 +40,12 @@ FailureOr<Value> implementUnpackOp(
     tensor_ext::UnpackOp op, ImplicitLocOpBuilder& builder,
     const std::function<void(Operation*)>& createdOpCallback =
         [](Operation* op) {});
+
+// Emits the position `offset + sum of stride * ((index / div) mod m)` of an
+// element in a strided layout. `indices` and the result have type `index`.
+// The indices must be within the layout's shape.
+Value emitStridedPosition(OpBuilder& builder, Location loc,
+                          const StridedLayout& layout, ValueRange indices);
 
 // A pattern to wrap implementUnpackOp
 struct LowerUnpackOp : public OpRewritePattern<tensor_ext::UnpackOp> {

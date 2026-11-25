@@ -371,3 +371,51 @@ func.func @test_prepare_dynamic_diagonals(%diagonals: tensor<2x?xf64>) -> !kerne
   > : tensor<2x?xf64> -> !kernel.prepared_linear_transform<level = 0, slots = 4, log_bsgs_ratio = 0>
   return %lt : !kernel.prepared_linear_transform<level = 0, slots = 4, log_bsgs_ratio = 0>
 }
+
+// -----
+
+func.func @test_block_wrong_attr_count(%arg0: tensor<2x8xf32>, %diagonals: tensor<3x8xf32>) -> tensor<2x8xf32> {
+  // expected-error@below {{must have one entry per diagonal (3)}}
+  %0 = kernel.block_linear_transform %arg0, %diagonals <
+    output_ciphertexts = [0, 0],
+    input_ciphertexts = [0, 1, 1],
+    shifts = [0, 3, 7]
+  > : tensor<2x8xf32>, tensor<3x8xf32> -> tensor<2x8xf32>
+  return %0 : tensor<2x8xf32>
+}
+
+// -----
+
+func.func @test_block_input_out_of_bounds(%arg0: tensor<2x8xf32>, %diagonals: tensor<1x8xf32>) -> tensor<2x8xf32> {
+  // expected-error@below {{input ciphertext index 2 is out of bounds for 2 input rows}}
+  %0 = kernel.block_linear_transform %arg0, %diagonals <
+    output_ciphertexts = [0],
+    input_ciphertexts = [2],
+    shifts = [0]
+  > : tensor<2x8xf32>, tensor<1x8xf32> -> tensor<2x8xf32>
+  return %0 : tensor<2x8xf32>
+}
+
+// -----
+
+func.func @test_block_shift_out_of_range(%arg0: tensor<2x8xf32>, %diagonals: tensor<1x8xf32>) -> tensor<2x8xf32> {
+  // expected-error@below {{shift 8 is outside [0, 8)}}
+  %0 = kernel.block_linear_transform %arg0, %diagonals <
+    output_ciphertexts = [0],
+    input_ciphertexts = [0],
+    shifts = [8]
+  > : tensor<2x8xf32>, tensor<1x8xf32> -> tensor<2x8xf32>
+  return %0 : tensor<2x8xf32>
+}
+
+// -----
+
+func.func @test_block_slot_mismatch(%arg0: tensor<2x8xf32>, %diagonals: tensor<1x4xf32>) -> tensor<2x8xf32> {
+  // expected-error@below {{must have the same number of slots}}
+  %0 = kernel.block_linear_transform %arg0, %diagonals <
+    output_ciphertexts = [0],
+    input_ciphertexts = [0],
+    shifts = [0]
+  > : tensor<2x8xf32>, tensor<1x4xf32> -> tensor<2x8xf32>
+  return %0 : tensor<2x8xf32>
+}

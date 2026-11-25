@@ -343,6 +343,64 @@ LogicalResult LinearTransformOp::verify() {
   return success();
 }
 
+LogicalResult BlockLinearTransformOp::verify() {
+  RankedTensorType inputType = getInput().getType();
+  RankedTensorType diagonalsType = getDiagonals().getType();
+  RankedTensorType outputType = getOutput().getType();
+
+  if (failed(verifyStaticShape(getOperation(), inputType, "input")) ||
+      failed(verifyStaticShape(getOperation(), diagonalsType, "diagonals")) ||
+      failed(verifyStaticShape(getOperation(), outputType, "output")))
+    return failure();
+
+  if (inputType.getElementType() != diagonalsType.getElementType() ||
+      inputType.getElementType() != outputType.getElementType()) {
+    return emitOpError(
+        "input, diagonals and output must have the same element type");
+  }
+
+  int64_t numSlots = inputType.getDimSize(1);
+  if (diagonalsType.getDimSize(1) != numSlots ||
+      outputType.getDimSize(1) != numSlots) {
+    return emitOpError(
+        "input, diagonals and output must have the same number "
+        "of slots (second dimension)");
+  }
+
+  int64_t numDiagonals = diagonalsType.getDimSize(0);
+  ArrayRef<int64_t> outputCiphertexts = getOutputCiphertexts();
+  ArrayRef<int64_t> inputCiphertexts = getInputCiphertexts();
+  ArrayRef<int64_t> shifts = getShifts();
+  if (static_cast<int64_t>(outputCiphertexts.size()) != numDiagonals ||
+      static_cast<int64_t>(inputCiphertexts.size()) != numDiagonals ||
+      static_cast<int64_t>(shifts.size()) != numDiagonals) {
+    return emitOpError(
+               "output_ciphertexts, input_ciphertexts and shifts must "
+               "have one entry per diagonal (")
+           << numDiagonals << ")";
+  }
+
+  for (int64_t k = 0; k < numDiagonals; ++k) {
+    if (outputCiphertexts[k] < 0 ||
+        outputCiphertexts[k] >= outputType.getDimSize(0)) {
+      return emitOpError("output ciphertext index ")
+             << outputCiphertexts[k] << " is out of bounds for "
+             << outputType.getDimSize(0) << " output rows";
+    }
+    if (inputCiphertexts[k] < 0 ||
+        inputCiphertexts[k] >= inputType.getDimSize(0)) {
+      return emitOpError("input ciphertext index ")
+             << inputCiphertexts[k] << " is out of bounds for "
+             << inputType.getDimSize(0) << " input rows";
+    }
+    if (shifts[k] < 0 || shifts[k] >= numSlots) {
+      return emitOpError("shift ")
+             << shifts[k] << " is outside [0, " << numSlots << ")";
+    }
+  }
+  return success();
+}
+
 // ElementwiseByOperandOpInterface impl
 
 bool LinearTransformOp::operandIsMappable(unsigned operandIndex) {
