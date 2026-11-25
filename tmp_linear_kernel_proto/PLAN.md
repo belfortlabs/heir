@@ -347,6 +347,117 @@ Open after WP5:
 **Milestone C:** at least 30 of 38 pass, each under 10 minutes and 60 GB; every
 remaining failure is listed by op.
 
+**WP6 status (2026-11-25): done, Milestone C reached.**
+
+What was built:
+
+- **Aligned planes.** A tensor that needs several ciphertexts gets a power of
+  two as the stride of its outermost axis (`StridedLayout::aligned`), and
+  `inducedOutputLayout` rounds the stride of new planes the same way. Channel
+  planes then start at the same slot of every ciphertext, so the shift between
+  two channels takes `N / stride` values instead of one per channel offset.
+  BHonkRes15's 45-to-45-channel convolutions went from 801 distinct shifts to
+  36\. This replaces the planned input-grid pre-pass.
+- **Rotation-only sums and copies** (`planTransform`, `factorBoxSum`,
+  `factorBoxCopy` in `LinearSpec`). A unit-coefficient operation whose windows
+  are boxes inside one ciphertext is a logarithmic number of rotations and
+  additions with no plaintext multiplication: sum pools and reductions sum the
+  input first, broadcasts copy the result afterwards. A global pool that needed
+  48,480 diagonals needs none.
+- **Join partner layouts.** A linear result that is only combined slot by slot
+  with another secret tensor is produced in that tensor's layout when that costs
+  no more diagonals than converting afterwards. A squeeze-excite scale is then
+  copied over the planes it multiplies by rotations; before, the conversion at
+  that join cost up to 200,704 diagonals.
+- **Dilations and pools stay native.** `linalg-canonicalizations` has an option
+  `densify-convolutions`, off for the linear kernel: dilated convolutions are
+  not rewritten to filters with zeros (a dilation of 16 made a 33x33 filter,
+  821,953 diagonals), and sum pools are not rewritten to convolutions over all
+  channel pairs.
+- **Clamps.** `activation-canonicalizations` rewrites `select(a > c, a, c)` and
+  `select(a < c, a, c)` with any ordered or unordered predicate to
+  `maximumf`/`minimumf`. ReLU6 and hard-sigmoid reached
+  `compare-to-sign-rewrite` before, which asserts on tensor comparisons.
+- **Divisions by cleartext** become multiplications by the reciprocal in
+  `strided-layout-propagation`. The packed divisor is zero in unused slots.
+
+Bugs found by the numeric check and fixed:
+
+- A transform from a periodic tensor to one with a longer period wrote only the
+  first copy of its result. Readers that take another copy got zeros. This was
+  present since WP4 and is why squeeze-excite models were off by up to 0.7 %;
+  the old threshold of 1e-3 absolute hid it for small outputs.
+- A rotation-only sum leaves partial sums in unused slots. They are now only
+  left there when every reader is a linear operation (`isOnlyReadLinearly`); a
+  polynomial activation applied to them overflowed.
+
+Milestone C result (16,384 slots, plaintext backend, fastbuild heir-opt):
+
+All 38 models compile and match the reference. heir-opt takes 6-201 s and at
+most 2.5 GB; the limits were 10 minutes and 60 GB.
+
+| Model                                                  | Ciphertexts | heir-opt  | Peak memory | Max abs error  | Max abs reference |
+| ------------------------------------------------------ | ----------- | --------- | ----------- | -------------- | ----------------- |
+| 6 LeNet/MLP/CryptoNets models                          | 1           | 6-32 s    | 0.1 GB      | 2e-8 to 7e-8   | 0.05-0.21         |
+| BResNet8, BResNet32, CResNet20, BWRN16_1               | 1           | 24-41 s   | 0.1 GB      | 1e-8 to 4e-8   | 0.12-0.23         |
+| BDSCNN, BMobileNetV1_025, BTestEfficientNet            | 1-3         | 31-45 s   | 0.1 GB      | 3e-8           | 0.06-0.15         |
+| BHonkRes15                                             | 12          | 43 s      | 0.2 GB      | 3e-7           | 0.33              |
+| BBCResNet8                                             | 16          | 69 s      | 0.4 GB      | 4e-8           | 0.10              |
+| CResNet18Cifar                                         | 4           | 64 s      | 0.3 GB      | 9e-8           | 0.27              |
+| CRepVGGA0                                              | 3           | 74 s      | 0.3 GB      | 1.5e-4         | 20.6              |
+| CRepVGGA1                                              | 4           | 86 s      | 0.4 GB      | 3.6e28         | 1.6e33            |
+| AResNet18_32                                           | 1           | 51 s      | 0.3 GB      | 1.5e-7         | 0.17              |
+| AMNASNet_32, AMobileNetV2_32, AMobileNetV4ConvSmall_32 | 1-2         | 59-69 s   | 0.2-0.5 GB  | 4e-8 to 2.5e-6 | 0.04-1.5          |
+| AConvNeXtAtto_32                                       | 1           | 100 s     | 0.6 GB      | 6e-7           | 0.42              |
+| ARegNetY400MF_32                                       | 1           | 153 s     | 1.4 GB      | 2e-8           | 0.04              |
+| AEfficientNetB0_32                                     | 2           | 141 s     | 1.4 GB      | 4e-20          | 3.8e-14           |
+| AGhostNet_32 (domain 8)                                | 1           | 145 s     | 1.0 GB      | 1.5e-7         | 0.25              |
+| AMobileNetV3Small_32, AMobileNetV3Large_32 (domain 16) | 1           | 102-118 s | 1.0-1.2 GB  | 1e-6 to 2e-6   | 1.2-2.3           |
+| AMNASNet                                               | 37          | 86 s      | 0.8 GB      | 2e-7           | 0.22              |
+| AMobileNetV2                                           | 74          | 91 s      | 1.3 GB      | 1e-7           | 0.07              |
+| AMobileNetV4ConvSmall                                  | 25          | 80 s      | 0.6 GB      | 8e-8           | 0.08              |
+| AConvNeXtAtto                                          | 31          | 118 s     | 0.8 GB      | 3e-7           | 0.45              |
+| AResNet18 (domain 16)                                  | 49          | 123 s     | 1.2 GB      | 4e-6           | 4.3               |
+| AMobileNetV3Small (domain 16)                          | 16          | 117 s     | 1.1 GB      | 3e-6           | 2.2               |
+| AMobileNetV3Large (domain 16)                          | 49          | 143 s     | 1.6 GB      | 4e-6           | 3.5               |
+| AGhostNet (domain 8)                                   | 37          | 189 s     | 1.7 GB      | 7e-7           | 0.61              |
+| ARegNetY400MF                                          | 37          | 190 s     | 2.0 GB      | 4e-8           | 0.06              |
+| AEfficientNetB0                                        | 109         | 201 s     | 2.5 GB      | 3e-20          | 1.7e-14           |
+
+Ciphertext counts are those of the row-major corpus statistics; aligned planes
+need up to 30 % more. "Domain N" marks a corpus variant in which the
+compare-and-select activations carry the approximation domain \[-N, N\]; without
+it the reference of these seven models overflows. Three results say less than
+the others: the outputs of CRepVGGA1 are of the order 1e33 and those of the two
+EfficientNetB0 models of the order 1e-14, so the polynomial activations are far
+outside their domain or the signal has died out. They agree with the reference
+to a relative 2e-5 and 2e-6.
+
+Also checked at 256 slots, where every plane spans several ciphertexts: 10 small
+models and a minimal squeeze-excite model match.
+
+At 32,768 slots all 38 models compile (6-248 s, at most 1.8 GB); that sweep was
+run before the last two fixes and without a numeric check.
+
+Tests: the full suite passes on the final state (1091 of 1091).
+
+Changes to the numeric check: `pcheck.sh` runs models in parallel; a match is an
+error of at most 1e-4 of the largest output; the driver also measures how far
+the compiled result moves for a 1e-6 input change; `add_domains.py` writes
+corpus variants with approximation domains for models whose reference overflows
+on the default domain \[-1, 1\] (hard-swish, hard-sigmoid, ReLU at 224x224).
+
+Open after WP6:
+
+- The join in AGhostNet between a gapped and a compact layout of a
+  `[24, 56, 56]` tensor costs 60,048 diagonals. It compiles and matches, but a
+  layout choice that avoids the conversion would be much cheaper.
+- Packing loops are still emitted inline per transform. Lowering a full-size
+  model to an object file takes 15-30 minutes in the check harness.
+- No numeric check was run at 32,768 slots; all 38 models compile there.
+- `linalg-fuse-linear-ops` and `compare-to-sign-rewrite` still have the upstream
+  defects listed under WP5.
+
 ### WP7. Make it the default and remove the old paths (4 d)
 
 - Flag on by default; delete the conv Toeplitz relations

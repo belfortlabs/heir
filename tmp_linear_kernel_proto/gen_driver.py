@@ -165,6 +165,22 @@ lines.append(f"""
   double seconds = std::chrono::duration<double>(
                        std::chrono::steady_clock::now() - start).count();
 
+  // The same for the compiled result. It evaluates the activation
+  // polynomials in another order than the reference, and in single precision
+  // that evaluation can be far noisier than the reference's.
+  reset();
+  for (auto& v : {s}_data) v *= 1.000001f;
+  Ct encMoved, resMoved;
+  {out} actualMoved;
+  _mlir_ciface_{fn}__encrypt__arg{index}(&encMoved, &{s});
+  _mlir_ciface_{fn}(&resMoved, {", ".join(("&encMoved" if p[3] else "&" + p[0]) for p in params)});
+  _mlir_ciface_{fn}__decrypt__result0(&actualMoved, &resMoved);
+  double fheSensitivity = 0;
+  for (int64_t i = 0; i < {out_size}; ++i) {{
+    fheSensitivity = std::fmax(fheSensitivity,
+        std::fabs(actualMoved.data[actualMoved.offset + i] - actual.data[actual.offset + i]));
+  }}
+
   double maxError = 0, maxValue = 0;
   int nanRef = 0, nanFhe = 0;
   for (int64_t i = 0; i < {out_size}; ++i) {{
@@ -176,21 +192,19 @@ lines.append(f"""
     maxError = std::fmax(maxError, std::fabs(e - a));
     maxValue = std::fmax(maxValue, std::fabs(e));
   }}
-  bool ok = maxError <= 1e-3 * std::fmax(1.0, maxValue);
-  if (!ok && std::isfinite(maxError) && sensitivity >= 0.01 * maxError) {{
-    std::printf("ILL-CONDITIONED max|ref|=%.4g max|err|=%.3g, and the reference "
-                "moves by %.3g for a 1e-6 relative change of the input\\n",
-                maxValue, maxError, sensitivity);
-    return 3;
-  }}
+  // A match is an error of at most 1e-4 of the largest output, or of the
+  // order of what a 1e-6 change of the input does to either result.
+  double noise = std::fmax(sensitivity, fheSensitivity);
+  bool ok = maxError <= 1e-4 * maxValue + 1e-6;
+  bool noisy = !ok && std::isfinite(maxError) && maxError <= 20 * noise;
   if (nanRef == {out_size}) {{
     std::printf("NO-REFERENCE: every reference output is non-finite "
                 "(%d of them in the compiled result)\\n", nanFhe);
     return 2;
   }}
-  std::printf("%s max|ref|=%.4g max|err|=%.3g sens=%.3g nonfinite ref/fhe=%d/%d run=%.1fs\\n",
-              ok ? "MATCH" : "MISMATCH", maxValue, maxError, sensitivity, nanRef, nanFhe,
-              seconds);
+  std::printf("%s max|ref|=%.4g max|err|=%.3g sens ref/fhe=%.3g/%.3g nonfinite ref/fhe=%d/%d run=%.1fs\\n",
+              ok ? "MATCH" : noisy ? "ILL-CONDITIONED" : "MISMATCH", maxValue,
+              maxError, sensitivity, fheSensitivity, nanRef, nanFhe, seconds);
   return ok ? 0 : 1;
 }}""")
 print('\n'.join(lines))
