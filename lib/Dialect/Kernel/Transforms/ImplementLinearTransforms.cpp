@@ -103,16 +103,20 @@ Value splitIntoBlocks(BlockLinearTransformOp op, ImplicitLocOpBuilder& b,
 
   Value result = tensor::EmptyOp::create(b, op.getOutput().getType().getShape(),
                                          rowType.getElementType());
+  // The transformed rows go in first. On ciphertexts, a zero row inserted into
+  // a tensor of ciphertexts is one trivial encryption, while a ciphertext
+  // inserted into a tensor of cleartext rows makes all of those rows trivial
+  // encryptions.
+  for (int64_t o = 0; o < numOut; ++o) {
+    if (outputs[o]) result = insertRow(b, outputs[o], result, o, rowType);
+  }
   Value zeroRow;
   for (int64_t o = 0; o < numOut; ++o) {
-    Value rowValue = outputs[o];
-    if (!rowValue) {
-      if (!zeroRow) {
-        zeroRow = arith::ConstantOp::create(b, rowType, b.getZeroAttr(rowType));
-      }
-      rowValue = zeroRow;
+    if (outputs[o]) continue;
+    if (!zeroRow) {
+      zeroRow = arith::ConstantOp::create(b, rowType, b.getZeroAttr(rowType));
     }
-    result = insertRow(b, rowValue, result, o, rowType);
+    result = insertRow(b, zeroRow, result, o, rowType);
   }
   return result;
 }

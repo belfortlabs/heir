@@ -2,12 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include "lib/Dialect/Debug/IR/DebugOps.h"
 #include "lib/Dialect/LWE/IR/LWEAttributes.h"
 #include "lib/Dialect/LWE/IR/LWEDialect.h"
 #include "lib/Dialect/LWE/IR/LWEOps.h"
 #include "lib/Dialect/LWE/IR/LWETypes.h"
+#include "lib/Dialect/Mgmt/IR/MgmtAttributes.h"
 #include "lib/Dialect/Mgmt/IR/MgmtOps.h"
 #include "lib/Dialect/ModuleAttributes.h"
 #include "lib/Dialect/Secret/IR/SecretDialect.h"
@@ -419,6 +421,52 @@ FailureOr<Operation*> ConvertExtractSlice::matchAndRewriteInner(
   return extractOp;
 }
 
+// Encodes the cleartext operand of `initOp` and trivially encrypts it to
+// ciphertexts of type `ciphertextTy`, the element type of the tensor of
+// ciphertexts that `op` mixes the cleartext with. The management attribute of
+// `initOp` gives the level and scale of the cleartext, which have to be those
+// of `ciphertextTy`.
+static FailureOr<Value> trivialEncryptCleartext(
+    Operation* op, mgmt::InitOp initOp, lwe::LWECiphertextType ciphertextTy,
+    ContextAwareConversionPatternRewriter& rewriter) {
+  mgmt::MgmtAttr mgmtAttr = mgmt::findMgmtAttrAssociatedWith(initOp);
+  if (!mgmtAttr) {
+    return op->emitError()
+           << "expected cleartext operand to have a mgmt.mgmt attribute";
+  }
+  if (lwe::ModulusChainAttr chain = ciphertextTy.getModulusChain();
+      chain && chain.getCurrent() != mgmtAttr.getLevel()) {
+    return op->emitError()
+           << "cleartext operand has level " << mgmtAttr.getLevel()
+           << ", but the ciphertexts it is combined with have level "
+           << chain.getCurrent();
+  }
+
+  std::string errMsg;
+  llvm::raw_string_ostream errStream(errMsg);
+  ImplicitLocOpBuilder b(op->getLoc(), rewriter);
+  FailureOr<Value> encoded = encodeCleartextAsPlaintext(
+      b, initOp.getInput(), ciphertextTy, mgmtAttr, errStream);
+  if (failed(encoded)) return op->emitError() << errMsg;
+
+  Type encodedTy = encoded.value().getType();
+  auto plaintextTy =
+      cast<lwe::LWEPlaintextType>(getElementTypeOrSelf(encodedTy));
+  if (plaintextTy.getPlaintextSpace() != ciphertextTy.getPlaintextSpace()) {
+    return op->emitError()
+           << "cleartext operand has scale " << mgmtAttr.getScale()
+           << ", which is not the scale of the ciphertexts it is combined "
+              "with";
+  }
+
+  Type encryptedTy = ciphertextTy;
+  if (auto encodedTensorTy = dyn_cast<RankedTensorType>(encodedTy)) {
+    encryptedTy =
+        RankedTensorType::get(encodedTensorTy.getShape(), ciphertextTy);
+  }
+  return lwe::TrivialEncryptOp::create(b, encryptedTy, *encoded).getResult();
+}
+
 // An insert_slice op corresponds to inserting one ciphertext into a tensor
 // of ciphertexts. E.g., the destination ciphertext-semantic tensor might be
 // tensor<4x4096>, and the supported insert_slice op inserts one 4096-sized
@@ -449,28 +497,39 @@ FailureOr<Operation*> ConvertInsertSlice::matchAndRewriteInner(
   }
 
   auto resultTensorOfCtsTy = cast<RankedTensorType>(outputTypes[0]);
-  // This is a bit of a hack: if the dest tensor is (a mgmt.init of) a
-  // tensor.empty, then it won't be type converted in the adaptor because it's
-  // not an input to the secret.generic (even if another pattern handles the
-  // tensor.empty properly). However, the tensor.empty needs to be converted to
-  // a tensor.empty of ciphertext types. So just do the conversion here and make
-  // a new tensor.empty op.
+  auto ciphertextTy =
+      cast<lwe::LWECiphertextType>(resultTensorOfCtsTy.getElementType());
   if (auto initOp = dyn_cast_or_null<mgmt::InitOp>(dest.getDefiningOp())) {
     if (auto emptyOp = dyn_cast_or_null<tensor::EmptyOp>(
             initOp.getOperand().getDefiningOp())) {
+      // This is a bit of a hack: if the dest tensor is (a mgmt.init of) a
+      // tensor.empty, then it won't be type converted in the adaptor because
+      // it's not an input to the secret.generic (even if another pattern
+      // handles the tensor.empty properly). However, the tensor.empty needs to
+      // be converted to a tensor.empty of ciphertext types. So just do the
+      // conversion here and make a new tensor.empty op.
       dest = tensor::EmptyOp::create(rewriter, op.getLoc(),
                                      resultTensorOfCtsTy.getShape(),
                                      resultTensorOfCtsTy.getElementType());
       if (initOp.use_empty()) rewriter.eraseOp(initOp);
       if (emptyOp.use_empty()) rewriter.eraseOp(emptyOp);
+    } else {
+      // A cleartext tensor that a ciphertext is inserted into: its rows become
+      // ciphertexts.
+      FailureOr<Value> encrypted =
+          trivialEncryptCleartext(op, initOp, ciphertextTy, rewriter);
+      if (failed(encrypted)) return failure();
+      dest = *encrypted;
     }
   }
-  // Ensure that we aren't inserting a cleartext scalar into a ciphertext
-  // tensor. This would result in a type-mismatch error once converted to
-  // OpenFHE code, since we cannot insert a Plaintext type into a Ciphertext
-  // container. This probably indicates a bug earlier in the pipeline.
+  // A cleartext row inserted into a tensor of ciphertexts, for example a row
+  // of zeros that a linear transform writes no value to. The tensor's
+  // elements all are ciphertexts, so the row is trivially encrypted.
   if (auto initOp = dyn_cast_or_null<mgmt::InitOp>(scalar.getDefiningOp())) {
-    return op->emitError() << "expected scalar to be a scalar ciphertext";
+    FailureOr<Value> encrypted =
+        trivialEncryptCleartext(op, initOp, ciphertextTy, rewriter);
+    if (failed(encrypted)) return failure();
+    scalar = *encrypted;
   }
 
   Operation* insertOp;

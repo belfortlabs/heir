@@ -45,3 +45,57 @@ module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [3602879
     return %46 : !secret.secret<tensor<2x1024xf32>>
   }
 }
+
+// -----
+
+// A cleartext row inserted into a tensor of ciphertexts is trivially
+// encrypted.
+
+// CHECK: ![[ct:.*]] = !lwe.lwe_ciphertext
+
+module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [36028797019389953, 35184372121601], P = [36028797019488257], logDefaultScale = 45>, scheme.ckks} {
+  // CHECK: func.func @cleartext_row
+  // CHECK-SAME: (%[[arg0:.*]]: tensor<2x![[ct]]>
+  // CHECK: %[[cst:.*]] = arith.constant dense<0.000000e+00> : tensor<1024xf32>
+  // CHECK: %[[pt:.*]] = lwe.rlwe_encode %[[cst]]
+  // CHECK: %[[pts:.*]] = tensor.from_elements %[[pt]] : tensor<1x
+  // CHECK: %[[row:.*]] = lwe.trivial_encrypt %[[pts]] : tensor<1x!{{.*}}> -> tensor<1x![[ct]]>
+  // CHECK: %[[v1:.*]] = tensor.insert_slice %[[row]] into %[[arg0]][1] [1] [1] : tensor<1x![[ct]]> into tensor<2x![[ct]]>
+  // CHECK: return %[[v1]] : tensor<2x![[ct]]>
+  func.func @cleartext_row(%arg0: !secret.secret<tensor<2x1024xf32>> {mgmt.mgmt = #mgmt.mgmt<level = 1, scale = 45>}) -> (!secret.secret<tensor<2x1024xf32>> {mgmt.mgmt = #mgmt.mgmt<level = 1, scale = 45>}) {
+    %cst = arith.constant dense<0.0> : tensor<1x1024xf32>
+    %0 = mgmt.init %cst {mgmt.mgmt = #mgmt.mgmt<level = 1, scale = 45>} : tensor<1x1024xf32>
+    %1 = secret.generic(%arg0: !secret.secret<tensor<2x1024xf32>>) {
+    ^body(%input0: tensor<2x1024xf32>):
+      %inserted_slice = tensor.insert_slice %0 into %input0[1, 0] [1, 1024] [1, 1] : tensor<1x1024xf32> into tensor<2x1024xf32>
+      secret.yield %inserted_slice : tensor<2x1024xf32>
+    } -> (!secret.secret<tensor<2x1024xf32>> {mgmt.mgmt = #mgmt.mgmt<level = 1, scale = 45>})
+    return %1 : !secret.secret<tensor<2x1024xf32>>
+  }
+}
+
+// -----
+
+// A ciphertext inserted into a cleartext tensor makes the rows of that tensor
+// trivial encryptions.
+
+// CHECK: ![[ct:.*]] = !lwe.lwe_ciphertext
+
+module attributes {ckks.schemeParam = #ckks.scheme_param<logN = 13, Q = [36028797019389953, 35184372121601], P = [36028797019488257], logDefaultScale = 45>, scheme.ckks} {
+  // CHECK: func.func @cleartext_dest
+  // CHECK-SAME: (%[[arg0:.*]]: tensor<1x![[ct]]>
+  // CHECK: %[[pts:.*]] = tensor.from_elements {{.*}} : tensor<2x
+  // CHECK: %[[dest:.*]] = lwe.trivial_encrypt %[[pts]] : tensor<2x!{{.*}}> -> tensor<2x![[ct]]>
+  // CHECK: %[[v1:.*]] = tensor.insert_slice %[[arg0]] into %[[dest]][1] [1] [1] : tensor<1x![[ct]]> into tensor<2x![[ct]]>
+  // CHECK: return %[[v1]] : tensor<2x![[ct]]>
+  func.func @cleartext_dest(%arg0: !secret.secret<tensor<1x1024xf32>> {mgmt.mgmt = #mgmt.mgmt<level = 1, scale = 45>}) -> (!secret.secret<tensor<2x1024xf32>> {mgmt.mgmt = #mgmt.mgmt<level = 1, scale = 45>}) {
+    %cst = arith.constant dense<0.0> : tensor<2x1024xf32>
+    %0 = mgmt.init %cst {mgmt.mgmt = #mgmt.mgmt<level = 1, scale = 45>} : tensor<2x1024xf32>
+    %1 = secret.generic(%arg0: !secret.secret<tensor<1x1024xf32>>) {
+    ^body(%input0: tensor<1x1024xf32>):
+      %inserted_slice = tensor.insert_slice %input0 into %0[1, 0] [1, 1024] [1, 1] : tensor<1x1024xf32> into tensor<2x1024xf32>
+      secret.yield %inserted_slice : tensor<2x1024xf32>
+    } -> (!secret.secret<tensor<2x1024xf32>> {mgmt.mgmt = #mgmt.mgmt<level = 1, scale = 45>})
+    return %1 : !secret.secret<tensor<2x1024xf32>>
+  }
+}

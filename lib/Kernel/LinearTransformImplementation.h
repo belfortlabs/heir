@@ -80,11 +80,19 @@ implementSparseBsgs(const SparseBsgsPlan& plan, const T& input,
       part = nullptr;
     }
 
+    // The computed rows go in first. On ciphertexts, a zero row inserted into
+    // a tensor of ciphertexts is one trivial encryption, while a ciphertext
+    // inserted into a tensor of cleartext rows makes all of those rows
+    // trivial encryptions.
     NodePtr result = emptyOutput;
     for (int64_t o = 0; o < numOut; ++o) {
-      NodePtr row =
-          outputs[o] == nullptr ? NodeTy::splat(0, rowType) : outputs[o];
-      result = NodeTy::insert(row, result, static_cast<size_t>(o));
+      if (outputs[o] == nullptr) continue;
+      result = NodeTy::insert(outputs[o], result, static_cast<size_t>(o));
+    }
+    for (int64_t o = 0; o < numOut; ++o) {
+      if (outputs[o] != nullptr) continue;
+      result = NodeTy::insert(NodeTy::splat(0, rowType), result,
+                              static_cast<size_t>(o));
     }
     return result;
   }

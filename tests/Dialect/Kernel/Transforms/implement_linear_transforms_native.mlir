@@ -24,4 +24,25 @@ module attributes {backend.lattigo, scheme.ckks} {
     > : tensor<2x8xf32>, tensor<4x8xf32> -> tensor<2x8xf32>
     return %0 : tensor<2x8xf32>
   }
+
+  // An output ciphertext that no diagonal writes to is a row of zeros. The
+  // transformed rows are inserted first.
+
+  // CHECK: @zero_rows
+  // CHECK-SAME: (%[[X:.*]]: tensor<1x8xf32>, %[[D:.*]]: tensor<1x8xf32>)
+  // CHECK: %[[A:.*]] = kernel.linear_transform
+  // CHECK: %[[EMPTY:.*]] = tensor.empty() : tensor<3x8xf32>
+  // CHECK: %[[R1:.*]] = tensor.insert_slice %[[A]] into %[[EMPTY]][1, 0]
+  // CHECK: %[[ZERO:.*]] = arith.constant dense<0.000000e+00> : tensor<1x8xf32>
+  // CHECK: %[[R0:.*]] = tensor.insert_slice %[[ZERO]] into %[[R1]][0, 0]
+  // CHECK: %[[R2:.*]] = tensor.insert_slice %[[ZERO]] into %[[R0]][2, 0]
+  // CHECK: return %[[R2]]
+  func.func @zero_rows(%x: tensor<1x8xf32>, %diagonals: tensor<1x8xf32>) -> tensor<3x8xf32> {
+    %0 = kernel.block_linear_transform %x, %diagonals <
+      output_ciphertexts = [1],
+      input_ciphertexts = [0],
+      shifts = [0]
+    > : tensor<1x8xf32>, tensor<1x8xf32> -> tensor<3x8xf32>
+    return %0 : tensor<3x8xf32>
+  }
 }
