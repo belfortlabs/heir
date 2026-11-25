@@ -2666,10 +2666,13 @@ struct ConvertBootstrap : public ConversionBase<mgmt::BootstrapOp> {
   LogicalResult matchAndRewrite(
       mgmt::BootstrapOp op, OpAdaptor adaptor,
       ContextAwareConversionPatternRewriter& rewriter) const final {
-    LayoutAttr layout = getLayoutAttr(adaptor.getInput());
-    if (!layout) {
+    // The result has the layout of the input, of whichever kind it is.
+    auto layoutLookup =
+        getTypeConverter()->getContextualAttr(adaptor.getInput());
+    if (failed(layoutLookup)) {
       return op.emitOpError("could not find layout for input");
     }
+    Attribute layout = layoutLookup.value();
     Type newType = getTypeConverter()->convertType(op.getType(), layout);
     if (!newType) {
       return failure();
@@ -2703,8 +2706,8 @@ struct ConvertToCiphertextSemantics
     // Values in strided layouts have their own patterns, which replace every
     // layout-specific pattern below.
     if (tensor_ext::usesStridedLayouts(module)) {
-      patterns.add<ConvertAnyAddingMaterializedAttr, ConvertFunc,
-                   ConvertSecretGeneric>(typeConverter, context);
+      patterns.add<ConvertAnyAddingMaterializedAttr, ConvertBootstrap,
+                   ConvertFunc, ConvertSecretGeneric>(typeConverter, context);
       populateStridedLayoutPatterns(patterns, typeConverter, context,
                                     maxDiagonals);
     } else {
