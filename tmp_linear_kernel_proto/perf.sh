@@ -1,7 +1,7 @@
 # usage: perf.sh <model> <slots> <seconds before sampling>
 cd ~/sky_workdir
 m=$1; N=$2; W=$3
-bazel run --config=remote --output_filter='^$' --noshow_progress --ui_event_filters=-info,-warning,-stdout,-stderr --run_under="timeout 240" //tools:heir-opt -- "--mlir-to-plaintext-backend=plaintext-size=$N linear-kernel=true" ~/sky_workdir/tmp_linear_kernel_proto/corpus/michiel_$m.mlir -o /dev/null > ~/perfrun.log 2>&1 &
+bazel run --config=remote --output_filter='^$' --noshow_progress --ui_event_filters=-info,-warning,-stdout,-stderr --run_under="timeout 240" //tools:heir-opt -- "--mlir-to-plaintext-backend=plaintext-size=$N" ~/sky_workdir/tmp_linear_kernel_proto/corpus/michiel_$m.mlir -o /dev/null > ~/perfrun.log 2>&1 &
 sleep $W
 pid=$(pgrep -n -x heir-opt)
 echo "pid=$pid rss=$(ps -o rss= -p $pid)"

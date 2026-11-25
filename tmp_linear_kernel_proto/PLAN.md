@@ -454,7 +454,8 @@ Open after WP6:
   layout choice that avoids the conversion would be much cheaper.
 - Packing loops are still emitted inline per transform. Lowering a full-size
   model to an object file takes 15-30 minutes in the check harness.
-- No numeric check was run at 32,768 slots; all 38 models compile there.
+- Numeric check at 32,768 slots: run on the WP7 code on 2026-11-25, all 38
+  models match the reference (same domain variants as at 16,384).
 - `linalg-fuse-linear-ops` and `compare-to-sign-rewrite` still have the upstream
   defects listed under WP5.
 
@@ -468,6 +469,79 @@ Open after WP6:
 - Existing Lattigo and OpenFHE e2e tests pass through the new path (unrolled
   sparse BSGS where no native transform exists).
 - Close or park google/heir PRs 3536 and 3546.
+
+#### WP7 status (2026-11-25)
+
+Done, except the GitHub step (the two PRs are untouched).
+
+**Default.** The `linear-kernel` pipeline option is gone. Every arithmetic
+pipeline runs `strided-layout-propagation` with `skip-unsupported`, then
+`layout-propagation` and `layout-optimization`:
+
+- `strided-layout-propagation` analyses the module completely before it changes
+  anything. If every operation on a secret value is linear in one secret tensor
+  or elementwise, it assigns strided layouts. Otherwise it leaves the module as
+  it was.
+- The relation-based passes return at once on a module whose function arguments
+  carry strided layouts.
+- Programs with secret scalars, loops over secret values, rotations, or products
+  of two secret tensors (dot, bicyclic and tricyclic matmul) therefore still
+  take the old path. Elementwise now means the `Elementwise` op trait; before,
+  any single-result operation with operands of one shape was accepted.
+
+**What the scheme pipelines needed.**
+
+- Scheme pipelines unroll the block linear transform. The rolled form reads
+  rotation amounts from a table inside a loop, and ciphertext management and
+  rotation key collection need static amounts. Only the plaintext backend keeps
+  the rolled form.
+- Diagonal packing is emitted as a private helper function
+  (`<func>__pack_diagonals_<n>`, role `client.pack`), like the helpers of
+  `tensor_ext.assign_layout`. Inline loops were not hoisted out of the secret
+  region, which the BFV noise analysis asserts on. The call is hoisted, and
+  `split-preprocessing` moves it into the preprocessing function.
+- Generated index arithmetic uses `divsi`/`remsi`; the Lattigo and OpenFHE
+  emitters have no `divui`/`remui`.
+- `mgmt` canonicalization called `getTargetConfig` on modules without a backend,
+  which reports an error. New helper `hasBackend`. This is a latent bug on main
+  and can go there separately.
+- The e2e harnesses of five convolution tests, `halevi_shoup_matvec` and the
+  OpenFHE MNIST test no longer take an encryption of zero.
+
+**Removed** (about 9,900 lines, 600 added):
+
+- `lib/Utils/Layout/Convolution.{h,cpp}` with its tests and debug tools.
+- The conv, matvec and vecmat visits of `layout-propagation`, the conv-specific
+  pad case, and the matmul fallback that named a kernel without a conversion
+  pattern. These operations are now an error in that pass that points to
+  `strided-layout-propagation`.
+- `ConvertLinalgMatvecLayout`, `PreserveLinalgMatvecAsLinearTransform` and the
+  four conv patterns of `convert-to-ciphertext-semantics`, and its
+  `unroll-kernels` option.
+- Kernel names `MatvecNaive`, `MatvecDiagonal`, `VecmatDiagonal`,
+  `MatmulDiagonal`; the matvec and conv1d hoisters, the matvec cost cases and
+  `FoldMatvecInputConversionIntoPlaintext` of `layout-optimization`;
+  `hoistConversionThroughMatvec` and four layout predicates without callers.
+- The patterns that rewrote average pools and dilated convolutions as dense
+  convolutions, and the `densify-convolutions` option added in WP6.
+- 37 lit tests of the removed patterns. Six others were adapted, and the
+  doctests of the three passes were rewritten.
+
+**Kept on purpose.** `implementHaleviShoup` and the squat-diagonal layout
+relation in `lib/Kernel` and `lib/Utils/Layout` have no caller in the compiler
+any more. They are thin wrappers over `implementRotateAndReduce`, which the
+bicyclic kernels use, and the rotation cost tests are written against them.
+`tensor_ext.rotate_and_reduce`, `kernel.linear_transform` and the bicyclic and
+tricyclic matmul kernels are still in use.
+
+**Results.**
+
+- Full suite: 1,055 of 1,055 pass (1,091 before the deletions). All Lattigo and
+  OpenFHE e2e tests with a matvec, convolution or pool now run through the
+  strided path, Lattigo through its native linear transform.
+- Corpus at 16,384 slots: all 38 models compile through the default pipeline
+  (5-199 s, at most 2.4 GB) and all 38 match the reference, with the same domain
+  variants as in WP6. Eleven small models match at 256 slots.
 
 ## 4. Risks
 

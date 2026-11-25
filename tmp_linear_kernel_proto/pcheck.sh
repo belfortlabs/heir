@@ -6,7 +6,7 @@ cd ~/sky_workdir
 N=$1; J=$2; shift 2
 W=${CHECK_DIR:-~/check_$N}; mkdir -p $W
 export Q="--config=remote --output_filter=^\$ --noshow_progress --ui_event_filters=-info,-warning,-stdout,-stderr"
-FLAGS="--mlir-to-plaintext-backend=plaintext-size=$N linear-kernel=true"
+FLAGS="--mlir-to-plaintext-backend=plaintext-size=$N"
 # The reference: the same pipeline up to layout propagation, then the tensor
 # program is lowered to loops directly.
 bazel run $Q //tools:heir-opt -- "$FLAGS" --dump-pass-pipeline - < /dev/null > $W/pipeline.txt 2>&1
@@ -18,7 +18,7 @@ print(t + ')' * (t.count('(') - t.count(')')))
 PY
 one() {
   m=$1; N=$2; W=$3
-  FLAGS="--mlir-to-plaintext-backend=plaintext-size=$N linear-kernel=true"
+  FLAGS="--mlir-to-plaintext-backend=plaintext-size=$N"
   OPT="bazel run $Q //tools:heir-opt --"
   REF=$(cat $W/ref_pipeline.txt)
   src=~/sky_workdir/tmp_linear_kernel_proto/corpus/michiel_$m.mlir

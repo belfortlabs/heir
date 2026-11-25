@@ -5,7 +5,7 @@ N=$1; TO=$2; shift 2
 mkdir -p ~/sweep
 for m in "$@"; do
   s=$(date +%s.%N)
-  bazel run --config=remote --output_filter='^$' --noshow_progress --ui_event_filters=-info,-warning,-stdout,-stderr --run_under="timeout $TO" //tools:heir-opt -- "--mlir-to-plaintext-backend=plaintext-size=$N linear-kernel=true" --mlir-timing ~/sky_workdir/tmp_linear_kernel_proto/corpus/michiel_$m.mlir -o ~/sweep/$m.out.mlir > ~/sweep/$m.log 2>&1
+  bazel run --config=remote --output_filter='^$' --noshow_progress --ui_event_filters=-info,-warning,-stdout,-stderr --run_under="timeout $TO" //tools:heir-opt -- "--mlir-to-plaintext-backend=plaintext-size=$N" --mlir-timing ~/sky_workdir/tmp_linear_kernel_proto/corpus/michiel_$m.mlir -o ~/sweep/$m.out.mlir > ~/sweep/$m.log 2>&1
   rc=$?
   e=$(date +%s.%N)
   printf "== %-16s rc=%-3s %6.1fs  out=%s lines\n" $m $rc $(echo "$e - $s" | bc) $(wc -l < ~/sweep/$m.out.mlir 2>/dev/null)

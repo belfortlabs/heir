@@ -6,7 +6,7 @@ N=$1; shift
 W=~/check; mkdir -p $W
 Q="--config=remote --output_filter=^\$ --noshow_progress --ui_event_filters=-info,-warning,-stdout,-stderr"
 OPT="bazel run $Q //tools:heir-opt --"
-FLAGS="--mlir-to-plaintext-backend=plaintext-size=$N linear-kernel=true"
+FLAGS="--mlir-to-plaintext-backend=plaintext-size=$N"
 # The reference: the same pipeline up to layout propagation, then the tensor
 # program is lowered to loops directly.
 $OPT "$FLAGS" --dump-pass-pipeline - < /dev/null > $W/pipeline.txt 2>&1

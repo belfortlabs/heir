@@ -6,7 +6,7 @@ D=~/sweep_$N; mkdir -p $D
 one() {
   m=$1; N=$2; TO=$3; D=$4
   s=$(date +%s.%N)
-  bazel run --config=remote --output_filter='^$' --noshow_progress --ui_event_filters=-info,-warning,-stdout,-stderr --run_under="/usr/bin/time -v timeout $TO" //tools:heir-opt -- "--mlir-to-plaintext-backend=plaintext-size=$N linear-kernel=true" --mlir-timing ~/sky_workdir/tmp_linear_kernel_proto/corpus/michiel_$m.mlir -o $D/$m.out.mlir > $D/$m.log 2>&1
+  bazel run --config=remote --output_filter='^$' --noshow_progress --ui_event_filters=-info,-warning,-stdout,-stderr --run_under="/usr/bin/time -v timeout $TO" //tools:heir-opt -- "--mlir-to-plaintext-backend=plaintext-size=$N" --mlir-timing ~/sky_workdir/tmp_linear_kernel_proto/corpus/michiel_$m.mlir -o $D/$m.out.mlir > $D/$m.log 2>&1
   e=$(date +%s.%N)
   rc=$(grep -o "Exit status: [0-9]*" $D/$m.log | cut -d' ' -f3)
   rss=$(grep "Maximum resident" $D/$m.log | grep -o "[0-9]*$")
